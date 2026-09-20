@@ -1,550 +1,336 @@
-// Package auth 负责账号、密码、会话与两步验证。
-//
-// 安全约定：
-//   - 密码用 bcrypt（cost 12）存储，永不落明文、永不写日志。
-//   - 会话令牌只在生成时返回一次，数据库里只存 SHA-256 哈希。
-//   - 连续登录失败按账号锁定，锁定时间写入数据库（重启不失效）。
+// Package auth owns password hashing, sessions, CSRF and login throttling.
 package auth
 
 import (
-	"context"
+	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
-	"encoding/base32"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
-	"github.com/zizdog/zizpanel/internal/store"
+	"github.com/zizdog/zizvideo/internal/domain"
+	"github.com/zizdog/zizvideo/internal/storage"
 )
 
-// BcryptCost 是密码哈希强度。12 在现代 Mac 上约 200ms，够安全也不影响体验。
-const BcryptCost = 12
+// Iterations is the PBKDF2 work factor. Stored in the hash so it can grow.
+const Iterations = 210000
 
-var (
-	ErrInvalidCredentials = errors.New("用户名或密码错误")
-	ErrAccountLocked      = errors.New("账号已被锁定，请稍后再试")
-	ErrTOTPRequired       = errors.New("需要两步验证码")
-	ErrTOTPInvalid        = errors.New("两步验证码不正确")
-	ErrUserExists         = errors.New("用户已存在")
-	ErrUserNotFound       = errors.New("用户不存在")
-	ErrSessionInvalid     = errors.New("会话无效或已过期")
-	ErrWeakPassword       = errors.New("密码太短，至少 8 位")
-	ErrUsernameInvalid    = errors.New("用户名不合法：3-32 位，只能用字母、数字与 . _ - @")
-	ErrUsernameTaken      = errors.New("该用户名已被占用")
-	ErrUsernameSame       = errors.New("新用户名与当前相同")
-	ErrPasswordRequired   = errors.New("请输入当前密码以确认")
-)
+const hashPrefix = "pbkdf2-sha256"
 
-// User 是一个面板账号。
-type User struct {
-	ID           int64
-	Username     string
-	PasswordHash string
-	TOTPSecret   string
-	TOTPEnabled  bool
-	IsAdmin      bool
-	LastLoginAt  string
-	LastLoginIP  string
-	FailCount    int
-	LockedUntil  string
-	CreatedAt    string
-}
-
-// Manager 提供账号与会话操作。
-type Manager struct {
-	st        *store.Store
-	secret    string
-	sessHours int
-	maxFail   int
-	lockMins  int
-}
-
-// New 创建 Manager。
-func New(st *store.Store, secret string, sessionHours, maxFail, lockMins int) *Manager {
-	if sessionHours <= 0 {
-		sessionHours = 72
+// HashPassword derives a salted PBKDF2-SHA256 hash; plaintext is never stored.
+func HashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
 	}
-	if maxFail <= 0 {
-		maxFail = 5
-	}
-	if lockMins <= 0 {
-		lockMins = 15
-	}
-	return &Manager{st: st, secret: secret, sessHours: sessionHours, maxFail: maxFail, lockMins: lockMins}
-}
-
-// ---------- 账号 ----------
-
-// HasAnyUser 判断是否已经初始化过管理员（用于决定是否展示安装向导）。
-func (m *Manager) HasAnyUser(ctx context.Context) (bool, error) {
-	var n int
-	err := m.st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
-	return n > 0, err
-}
-
-// CreateUser 创建账号。
-func (m *Manager) CreateUser(ctx context.Context, username, password string, isAdmin bool) (*User, error) {
-	username = strings.TrimSpace(username)
-	if len(username) < 2 {
-		return nil, errors.New("用户名至少 2 个字符")
-	}
-	if len(password) < 8 {
-		return nil, ErrWeakPassword
-	}
-	var exists int
-	if err := m.st.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM users WHERE username=?`, username).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if exists > 0 {
-		return nil, ErrUserExists
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), BcryptCost)
-	if err != nil {
-		return nil, fmt.Errorf("密码加密失败: %w", err)
-	}
-	admin := 0
-	if isAdmin {
-		admin = 1
-	}
-	res, err := m.st.DB().ExecContext(ctx,
-		`INSERT INTO users(username,password_hash,is_admin) VALUES(?,?,?)`,
-		username, string(hash), admin)
-	if err != nil {
-		return nil, err
-	}
-	id, _ := res.LastInsertId()
-	return m.UserByID(ctx, id)
-}
-
-// HashPassword 生成 bcrypt 哈希，供 CLI 与测试使用。
-func HashPassword(pwd string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(pwd), BcryptCost)
+	key, err := pbkdf2.Key(sha256.New, password, salt, Iterations, 32)
 	if err != nil {
 		return "", err
 	}
-	return string(b), nil
+	return fmt.Sprintf("%s$%d$%s$%s", hashPrefix, Iterations,
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
-// UserByID 按 ID 取账号。
-func (m *Manager) UserByID(ctx context.Context, id int64) (*User, error) {
-	row := m.st.DB().QueryRowContext(ctx,
-		`SELECT id,username,password_hash,totp_secret,totp_enabled,is_admin,
-		        last_login_at,last_login_ip,fail_count,locked_until,created_at
-		 FROM users WHERE id=?`, id)
-	return scanUser(row)
-}
-
-// UserByName 按用户名取账号。
-func (m *Manager) UserByName(ctx context.Context, name string) (*User, error) {
-	row := m.st.DB().QueryRowContext(ctx,
-		`SELECT id,username,password_hash,totp_secret,totp_enabled,is_admin,
-		        last_login_at,last_login_ip,fail_count,locked_until,created_at
-		 FROM users WHERE username=?`, name)
-	return scanUser(row)
-}
-
-// CountUsers 返回账号数量。
-func (m *Manager) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	err := m.st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
-	return n, err
-}
-
-// ListUsers 返回所有账号（不含哈希）。
-func (m *Manager) ListUsers(ctx context.Context) ([]*User, error) {
-	rows, err := m.st.DB().QueryContext(ctx,
-		`SELECT id,username,password_hash,totp_secret,totp_enabled,is_admin,
-		        last_login_at,last_login_ip,fail_count,locked_until,created_at
-		 FROM users ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*User
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		u.PasswordHash = "" // 绝不下发哈希
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
-type scanner interface{ Scan(dest ...any) error }
-
-func scanUser(s scanner) (*User, error) {
-	var u User
-	var totpEnabled, isAdmin int
-	err := s.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TOTPSecret, &totpEnabled,
-		&isAdmin, &u.LastLoginAt, &u.LastLoginIP, &u.FailCount, &u.LockedUntil, &u.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrUserNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	u.TOTPEnabled = totpEnabled == 1
-	u.IsAdmin = isAdmin == 1
-	return &u, nil
-}
-
-// ChangePassword 修改密码，并吊销该账号全部会话。
-func (m *Manager) ChangePassword(ctx context.Context, userID int64, oldPwd, newPwd string) error {
-	u, err := m.UserByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if oldPwd != "" {
-		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPwd)) != nil {
-			return ErrInvalidCredentials
-		}
-	}
-	if len(newPwd) < 8 {
-		return ErrWeakPassword
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPwd), BcryptCost)
-	if err != nil {
-		return err
-	}
-	if _, err := m.st.DB().ExecContext(ctx,
-		`UPDATE users SET password_hash=?, updated_at=datetime('now','localtime') WHERE id=?`,
-		string(hash), userID); err != nil {
-		return err
-	}
-	_, _ = m.RevokeAll(ctx, userID)
-	return nil
-}
-
-// RenameUser 修改用户名，返回新名字。
-//
-// 为什么要**校验当前密码**：用户名就是登录凭据的一半，而且审计日志里"谁做了
-// 这件事"记的就是它。一个被劫持的会话不应该能悄悄把账号改成别人认不出来的名字
-// （那会让事后追查对不上人）。改密码都要求旧密码，改名同样要求。
-//
-// 为什么**不吊销会话**：会话表是按 user_id 关联的（见 sessions 表定义），
-// 改名不影响登录态。强制重新登录只会让用户以为出问题了。
-func (m *Manager) RenameUser(ctx context.Context, userID int64, newName, currentPwd string) (string, error) {
-	u, err := m.UserByID(ctx, userID)
-	if err != nil {
-		return "", err
-	}
-	newName = strings.TrimSpace(newName)
-	if newName == u.Username {
-		return "", ErrUsernameSame
-	}
-	if err := ValidateUsername(newName); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(currentPwd) == "" {
-		return "", ErrPasswordRequired
-	}
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(currentPwd)) != nil {
-		return "", ErrInvalidCredentials
-	}
-	// 唯一性先自己查一次，好给出人话；UNIQUE 约束仍会在并发下兜底。
-	var n int
-	if err := m.st.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM users WHERE username = ?`, newName).Scan(&n); err == nil && n > 0 {
-		return "", ErrUsernameTaken
-	}
-	if _, err := m.st.DB().ExecContext(ctx,
-		`UPDATE users SET username=?, updated_at=datetime('now','localtime') WHERE id=?`,
-		newName, userID); err != nil {
-		return "", err
-	}
-	m.auditRename(ctx, u.Username, newName)
-	return newName, nil
-}
-
-// ValidateUsername 校验用户名格式。导出是为了让 web 层能在改名前先做一次同样的校验
-// （少一次"提交了才报错"的往返）。
-func ValidateUsername(name string) error {
-	name = strings.TrimSpace(name)
-	if len(name) < 3 || len(name) > 32 {
-		return ErrUsernameInvalid
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.', r == '_', r == '-', r == '@':
-		default:
-			return ErrUsernameInvalid
-		}
-	}
-	return nil
-}
-
-// auditRename 是给审计留的钩子：auth 包不依赖 web 包，所以这里只是空实现，
-// 真正的审计由 web 层的调用方在成功后写入（见 handleRenameUser）。
-func (m *Manager) auditRename(ctx context.Context, oldName, newName string) {}
-
-// SetPassword 直接重设密码（管理员操作，不校验旧密码）。
-func (m *Manager) SetPassword(ctx context.Context, userID int64, newPwd string) error {
-	if len(newPwd) < 8 {
-		return ErrWeakPassword
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPwd), BcryptCost)
-	if err != nil {
-		return err
-	}
-	_, err = m.st.DB().ExecContext(ctx,
-		`UPDATE users SET password_hash=?, updated_at=datetime('now','localtime') WHERE id=?`,
-		string(hash), userID)
-	_, _ = m.RevokeAll(ctx, userID)
-	return err
-}
-
-// DeleteUser 删除账号；不允许删掉最后一个账号。
-func (m *Manager) DeleteUser(ctx context.Context, userID int64) error {
-	n, err := m.CountUsers(ctx)
-	if err != nil {
-		return err
-	}
-	if n <= 1 {
-		return errors.New("至少要保留一个账号")
-	}
-	_, err = m.st.DB().ExecContext(ctx, `DELETE FROM users WHERE id=?`, userID)
-	return err
-}
-
-// ---------- 登录 ----------
-
-// LoginResult 描述一次登录尝试的结果。
-type LoginResult struct {
-	User      *User
-	Token     string // 仅在成功且不需要 2FA 时返回
-	NeedTOTP  bool
-	ExpiresAt time.Time
-}
-
-// Login 校验密码。若账号开启了 2FA 且未提供 code，返回 NeedTOTP=true。
-func (m *Manager) Login(ctx context.Context, username, password, code, ip, ua string) (*LoginResult, error) {
-	u, err := m.UserByName(ctx, username)
-	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
-			// 用户不存在也走一次 bcrypt，避免通过响应时间枚举用户名
-			_ = bcrypt.CompareHashAndPassword(
-				[]byte("$2y$12$0000000000000000000000000000000000000000000000000000"),
-				[]byte(password))
-			return nil, ErrInvalidCredentials
-		}
-		return nil, err
-	}
-	if locked(u.LockedUntil) {
-		return nil, ErrAccountLocked
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		m.bumpFail(ctx, u)
-		return nil, ErrInvalidCredentials
-	}
-	if u.TOTPEnabled {
-		if code == "" {
-			// 密码已通过，但还差一步。此时绝不能建会话。
-			return &LoginResult{User: u, NeedTOTP: true}, nil
-		}
-		return m.finishLogin(ctx, u, code, ip, ua, true)
-	}
-	return m.finishLogin(ctx, u, "", ip, ua, false)
-}
-
-// CompleteTOTP 用于两步登录的第二步：校验验证码后建会话。
-func (m *Manager) CompleteTOTP(ctx context.Context, userID int64, code, ip, ua string) (*LoginResult, error) {
-	u, err := m.UserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if !u.TOTPEnabled {
-		return nil, ErrTOTPInvalid
-	}
-	if locked(u.LockedUntil) {
-		return nil, ErrAccountLocked
-	}
-	return m.finishLogin(ctx, u, code, ip, ua, true)
-}
-
-// finishLogin 是登录流程的最后一步：校验验证码（如需要）、清失败计数、建会话。
-func (m *Manager) finishLogin(ctx context.Context, u *User, code, ip, ua string, checkTOTP bool) (*LoginResult, error) {
-	if checkTOTP {
-		if !VerifyTOTP(u.TOTPSecret, code) {
-			m.bumpFail(ctx, u)
-			return nil, ErrTOTPInvalid
-		}
-	}
-	_, _ = m.st.DB().ExecContext(ctx,
-		`UPDATE users SET fail_count=0, locked_until='', last_login_at=datetime('now','localtime'),
-		 last_login_ip=? WHERE id=?`, ip, u.ID)
-
-	tok, exp, err := m.NewSession(ctx, u.ID, ip, ua)
-	if err != nil {
-		return nil, err
-	}
-	return &LoginResult{User: u, Token: tok, ExpiresAt: exp}, nil
-}
-
-func (m *Manager) bumpFail(ctx context.Context, u *User) {
-	n := u.FailCount + 1
-	lockedUntil := ""
-	if n >= m.maxFail {
-		lockedUntil = time.Now().Add(time.Duration(m.lockMins) * time.Minute).
-			Format("2006-01-02 15:04:05")
-		n = 0 // 锁定期满后重新计数
-	}
-	_, _ = m.st.DB().ExecContext(ctx,
-		`UPDATE users SET fail_count=?, locked_until=? WHERE id=?`, n, lockedUntil, u.ID)
-}
-
-func locked(until string) bool {
-	if until == "" {
+// VerifyPassword compares a candidate password against a stored hash.
+func VerifyPassword(stored, password string) bool {
+	parts := strings.Split(stored, "$")
+	if len(parts) != 4 || parts[0] != hashPrefix {
 		return false
 	}
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", until, time.Local)
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter <= 0 {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
 	if err != nil {
 		return false
 	}
-	return time.Now().Before(t)
-}
-
-// Unlock 手动解锁账号。
-func (m *Manager) Unlock(ctx context.Context, userID int64) error {
-	_, err := m.st.DB().ExecContext(ctx,
-		`UPDATE users SET fail_count=0, locked_until='' WHERE id=?`, userID)
-	return err
-}
-
-// ---------- 会话 ----------
-
-// NewSession 生成会话令牌。返回的 token 只在这一次出现，数据库存哈希。
-func (m *Manager) NewSession(ctx context.Context, userID int64, ip, ua string) (string, time.Time, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", time.Time{}, err
-	}
-	token := hex.EncodeToString(raw)
-	exp := time.Now().Add(time.Duration(m.sessHours) * time.Hour)
-	if len(ua) > 300 {
-		ua = ua[:300]
-	}
-	_, err := m.st.DB().ExecContext(ctx,
-		`INSERT INTO sessions(token_hash,user_id,ip,user_agent,expires_at)
-		 VALUES(?,?,?,?,?)`,
-		HashToken(token), userID, ip, ua, exp.Format("2006-01-02 15:04:05"))
+	want, err := base64.RawStdEncoding.DecodeString(parts[3])
 	if err != nil {
-		return "", time.Time{}, err
+		return false
 	}
-	return token, exp, nil
+	got, err := pbkdf2.Key(sha256.New, password, salt, iter, len(want))
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// HashToken 对令牌做 SHA-256。令牌本身是高熵随机串，不需要再加盐。
+// HashToken is the at-rest representation of a session token.
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// AuthSession 校验令牌并返回账号。同时刷新 last_seen。
-func (m *Manager) AuthSession(ctx context.Context, token string) (*User, error) {
-	if token == "" {
-		return nil, ErrSessionInvalid
+// LoadSecret reads (or creates) the HMAC secret used to derive CSRF tokens.
+func LoadSecret(dataDir string) ([]byte, error) {
+	if env := os.Getenv("ZV_AUTH_SECRET"); env != "" {
+		return []byte(env), nil
 	}
-	var userID int64
-	var expires string
-	err := m.st.DB().QueryRowContext(ctx,
-		`SELECT user_id, expires_at FROM sessions WHERE token_hash=?`,
-		HashToken(token)).Scan(&userID, &expires)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrSessionInvalid
+	path := filepath.Join(dataDir, "secret.key")
+	if b, err := os.ReadFile(path); err == nil && len(b) >= 16 {
+		return b, nil
 	}
-	if err != nil {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
 		return nil, err
 	}
-	exp, err := time.ParseInLocation("2006-01-02 15:04:05", expires, time.Local)
-	if err != nil || time.Now().After(exp) {
-		_, _ = m.st.DB().ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, HashToken(token))
-		return nil, ErrSessionInvalid
-	}
-	_, _ = m.st.DB().ExecContext(ctx,
-		`UPDATE sessions SET last_seen=datetime('now','localtime') WHERE token_hash=?`, HashToken(token))
-	return m.UserByID(ctx, userID)
-}
-
-// Revoke 登出：删除指定会话。
-func (m *Manager) Revoke(ctx context.Context, token string) error {
-	_, err := m.st.DB().ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, HashToken(token))
-	return err
-}
-
-// RevokeAll 吊销某账号的全部会话（改密码时调用）。
-func (m *Manager) RevokeAll(ctx context.Context, userID int64) (int64, error) {
-	res, err := m.st.DB().ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
-// ListSessions 返回某账号的在线会话（不含令牌）。
-func (m *Manager) ListSessions(ctx context.Context, userID int64) ([]map[string]string, error) {
-	rows, err := m.st.DB().QueryContext(ctx,
-		`SELECT ip,user_agent,created_at,last_seen,expires_at FROM sessions
-		 WHERE user_id=? ORDER BY last_seen DESC`, userID)
-	if err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []map[string]string
-	for rows.Next() {
-		var ip, ua, ca, ls, ea string
-		if err := rows.Scan(&ip, &ua, &ca, &ls, &ea); err != nil {
-			return nil, err
-		}
-		out = append(out, map[string]string{
-			"ip": ip, "user_agent": ua, "created_at": ca,
-			"last_seen": ls, "expires_at": ea,
-		})
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return buf, nil
 }
 
-// ---------- TOTP 两步验证 ----------
+// Manager ties authentication to the store and configuration.
+type Manager struct {
+	DB        *storage.DB
+	Secret    []byte
+	TTL       time.Duration
+	Threshold int
+	Window    time.Duration
+	Limiter   *Limiter
+}
 
-// NewTOTPSecret 生成 base32 密钥（RFC 4648，无填充），兼容 Google Authenticator。
-func NewTOTPSecret() (string, error) {
-	b := make([]byte, 20)
-	if _, err := rand.Read(b); err != nil {
+// NewManager builds a Manager with an in-memory login limiter.
+func NewManager(db *storage.DB, secret []byte, ttl time.Duration, threshold int, window time.Duration) *Manager {
+	return &Manager{
+		DB: db, Secret: secret, TTL: ttl, Threshold: threshold, Window: window,
+		Limiter: NewLimiter(threshold, window),
+	}
+}
+
+// NewToken returns a fresh opaque session token.
+func NewToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b), nil
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// EnableTOTP 在验证码校验通过后开启两步验证。
-func (m *Manager) EnableTOTP(ctx context.Context, userID int64, secret, code string) error {
-	if !VerifyTOTP(secret, code) {
-		return ErrTOTPInvalid
+// Login verifies credentials and opens a session. It returns the user and token.
+func (m *Manager) Login(ip, username, password string) (*domain.User, string, error) {
+	key := ip + "|" + strings.ToLower(username)
+	if wait, ok := m.Limiter.Blocked(key); !ok {
+		return nil, "", &domain.Error{Code: "RATE_LIMITED",
+			Message: fmt.Sprintf("尝试过于频繁，请 %d 秒后再试", int(wait.Seconds())+1), Status: 429}
 	}
-	_, err := m.st.DB().ExecContext(ctx,
-		`UPDATE users SET totp_secret=?, totp_enabled=1, updated_at=datetime('now','localtime')
-		 WHERE id=?`, secret, userID)
-	return err
-}
+	// Exponential slowdown: slows brute force without locking honest typos out.
+	if d := m.Limiter.Delay(key); d > 0 {
+		time.Sleep(d)
+	}
 
-// DisableTOTP 关闭两步验证，需要当前密码确认。
-func (m *Manager) DisableTOTP(ctx context.Context, userID int64, password string) error {
-	u, err := m.UserByID(ctx, userID)
+	u, err := m.DB.GetUserByUsername(username)
 	if err != nil {
-		return err
+		// Burn comparable work so a missing account is not faster to probe.
+		_, _ = pbkdf2.Key(sha256.New, password, []byte("zizvideo-dummy-salt"), Iterations, 32)
+		m.Limiter.Fail(key)
+		return nil, "", domain.ErrUnauthorized
 	}
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return ErrInvalidCredentials
+	if u.Status != domain.StatusActive {
+		m.Limiter.Fail(key)
+		return nil, "", domain.ErrUnauthorized
 	}
-	_, err = m.st.DB().ExecContext(ctx,
-		`UPDATE users SET totp_secret='', totp_enabled=0 WHERE id=?`, userID)
-	return err
+	if st, err := m.DB.GetLoginState(username); err == nil && st.LockedUntil != "" {
+		if until := domain.ParseTime(st.LockedUntil); until.After(time.Now()) {
+			m.Limiter.Fail(key)
+			return nil, "", &domain.Error{Code: "AUTH_LOCKED",
+				Message: "账号已临时锁定，请稍后再试", Status: 429}
+		}
+	}
+	if !VerifyPassword(u.PasswordHash, password) {
+		_ = m.DB.RegisterLoginFailure(u.ID, m.Threshold, m.Window)
+		m.Limiter.Fail(key)
+		if st, err := m.DB.GetLoginState(username); err == nil && st.LockedUntil != "" {
+			return nil, "", &domain.Error{Code: "AUTH_LOCKED",
+				Message: "失败次数过多，账号已临时锁定", Status: 429}
+		}
+		return nil, "", domain.ErrUnauthorized
+	}
+
+	token, err := NewToken()
+	if err != nil {
+		return nil, "", err
+	}
+	expires := time.Now().Add(m.TTL)
+	if err := m.DB.CreateSession(domain.NewID("ses"), u.ID, HashToken(token), expires); err != nil {
+		return nil, "", err
+	}
+	if err := m.DB.ClearLoginFailures(u.ID); err != nil {
+		return nil, "", err
+	}
+	m.Limiter.Success(key)
+	return u, token, nil
 }
+
+// Logout revokes a session token.
+func (m *Manager) Logout(token string) {
+	_ = m.DB.DeleteSession(HashToken(token))
+}
+
+// Authenticate resolves a token to a live, enabled user. Role is re-read from
+// the database on every request so disabling an account is immediate.
+func (m *Manager) Authenticate(token string) (*domain.User, error) {
+	if token == "" {
+		return nil, domain.ErrUnauthorized
+	}
+	u, _, err := m.DB.SessionUser(HashToken(token))
+	if err != nil {
+		return nil, domain.ErrUnauthorized
+	}
+	return u, nil
+}
+
+// IssueSession opens a session for an already-authenticated user (first-run setup).
+func (m *Manager) IssueSession(userID string) (string, error) {
+	token, err := NewToken()
+	if err != nil {
+		return "", err
+	}
+	if err := m.DB.CreateSession(domain.NewID("ses"), userID, HashToken(token),
+		time.Now().Add(m.TTL)); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// CSRFFor derives the double-submit token bound to a session token.
+func (m *Manager) CSRFFor(token string) string {
+	mac := hmac.New(sha256.New, m.Secret)
+	mac.Write([]byte("csrf:" + HashToken(token)))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
+}
+
+// CSRFOK compares the X-CSRF-Token header against the derived value.
+//
+// Only the header counts: accepting the cookie value here would defeat the
+// double-submit scheme entirely, since browsers attach cookies automatically.
+func (m *Manager) CSRFOK(header, token string) bool {
+	if header == "" || token == "" {
+		return false
+	}
+	return hmac.Equal([]byte(header), []byte(m.CSRFFor(token)))
+}
+
+// ============================================================================
+//  Login throttling
+// ============================================================================
+
+// Limiter is an in-memory exponential backoff keyed by IP+username.
+type Limiter struct {
+	mu        sync.Mutex
+	entries   map[string]*limitEntry
+	threshold int
+	window    time.Duration
+}
+
+type limitEntry struct {
+	fails    int
+	lastFail time.Time
+}
+
+// NewLimiter builds a Limiter; threshold <= 1 falls back to 5.
+func NewLimiter(threshold int, window time.Duration) *Limiter {
+	if threshold <= 1 {
+		threshold = 5
+	}
+	if window <= 0 {
+		window = 15 * time.Minute
+	}
+	return &Limiter{entries: map[string]*limitEntry{}, threshold: threshold, window: window}
+}
+
+// backoff returns the exponential slowdown applied to the next attempt.
+func backoff(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	d := 200 * time.Millisecond * time.Duration(1<<uint(min(n-1, 4)))
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
+// Blocked reports whether the key is hard-locked and how long it stays locked.
+// Below the threshold it stays open and only Delay applies.
+func (l *Limiter) Blocked(key string) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok {
+		return 0, true
+	}
+	if time.Since(e.lastFail) > l.window {
+		delete(l.entries, key)
+		return 0, true
+	}
+	if e.fails >= l.threshold {
+		return l.window - time.Since(e.lastFail), false
+	}
+	return 0, true
+}
+
+// Delay is the exponential slowdown for the next attempt.
+func (l *Limiter) Delay(key string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || time.Since(e.lastFail) > l.window {
+		return 0
+	}
+	return backoff(e.fails)
+}
+
+// Fail records one failed attempt.
+func (l *Limiter) Fail(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || time.Since(e.lastFail) > l.window {
+		e = &limitEntry{}
+		l.entries[key] = e
+	}
+	e.fails++
+	e.lastFail = time.Now()
+	if len(l.entries) > 4096 {
+		for k, v := range l.entries {
+			if time.Since(v.lastFail) > l.window {
+				delete(l.entries, k)
+			}
+		}
+	}
+}
+
+// Success clears the key's failure history.
+func (l *Limiter) Success(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.entries, key)
+}
+
+// Failures exposes the current counter (tests and diagnostics only).
+func (l *Limiter) Failures(key string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.entries[key]; ok {
+		return e.fails
+	}
+	return 0
+}
+
+var _ = errors.Is
