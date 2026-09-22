@@ -184,7 +184,8 @@ make fmt         # gofmt
 ```bash
 make release     # 构建 arm64 → 固定证书签名（com.zizvideo.server）→ 写 dist/apps/zizvideo/ + 索引
 make publish     # 传到公网镜像 apps/zizvideo/（走 mini 面板接口，凭据见 ZizVideo-当前状态.md）
-make verify      # 只复验线上：索引 latest / sha256 / --version
+make verify      # 只复验线上（快：索引 ↔ 本地发布件比 sha256/大小 + 线上 HEAD，不下整包）
+make verify DEEP=1   # 需要字节级复验时：整包下载复算 sha256 + 跑 --version
 ```
 
 - **同版本绝不许换字节重传**：要改就 bump `VERSION`（例如 `0.1.2-mvp → 0.1.3-mvp`）。

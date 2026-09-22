@@ -41,6 +41,10 @@ for arg in "$@"; do
 done
 
 ok()   { printf '  ✓ %s\n' "$*"; }
+# 分段计时：发布慢在哪一段，用数字说话（用户 2026-09-22 要求提速）
+T0=$(date +%s)
+phase() { local now; now=$(date +%s); printf '  ⏱ %s：%ss（累计 %ss）\n' "$1" "$((now-TLAST))" "$((now-T0))"; TLAST=$now; }
+TLAST=$T0
 info() { printf '==> %s\n' "$*"; }
 die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 
@@ -144,9 +148,19 @@ PY
       fi
     fi
   else
+    # 零传输也要证明版本号对：直接跑**本地那份**发布件（与线上是同一份字节，已比过 sha256）
+    local localbin="$VERDIR/zizvideo_${VERSION}_darwin_arm64"
+    if [ -x "$localbin" ] && [ "$(uname -m)" = "arm64" ]; then
+      local got; got="$("$localbin" --version 2>/dev/null | head -1)"
+      case "$got" in
+        *"${VERSION}"*) ok "本地发布件 --version 含 ${VERSION}（${got}）" ;;
+        *) die "本地发布件 --version 输出 \"$got\" 不含 ${VERSION}" ;;
+      esac
+    fi
     info "（未做字节级复验；要整包下载复算：make verify DEEP=1）"
   fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
+  phase "复验"
 }
 
 if [ "$VERIFY_ONLY" = "1" ]; then
@@ -168,6 +182,7 @@ curl -fsSk -b "$JAR" -c "$JAR" -H 'Content-Type: application/json' \
   "$MINI_URL/api/v1/login" >/dev/null || die "mini 面板登录失败"
 [ -n "$(csrf)" ] || die "登录后没拿到 zp_csrf（面板版本太旧？）"
 ok "已登录 mini 面板（会话 cookie + CSRF 就绪）"
+phase "登录"
 
 api() { # api <method> <path> [curl args...]
   local method="$1" path="$2"; shift 2
@@ -243,10 +258,11 @@ if [ -f install-zizvideo.sh ]; then
   queue_upload "$APP_DIR" "$PWD/install-zizvideo.sh" "install-zizvideo.sh"
 fi
 if [ -f .release-key/codesign/zp-codesign.crt ]; then
-  # 必须显式给 filename：curl 默认用源文件基名，临时文件带 PID（xxx.crt.22824），
-  # 线上就会多出个垃圾名，而安装器只认 zizvideo-codesign.crt（0.1.2 发版时踩到）。
-  cp .release-key/codesign/zp-codesign.crt /tmp/zizvideo-codesign.crt.$$
-  queue_upload "$APP_DIR" "/tmp/zizvideo-codesign.crt.$$" "zizvideo-codesign.crt"
+  # 必须显式给 filename：curl 默认用源文件基名，带 PID 的临时名（xxx.crt.22824）会被传成垃圾名，
+  # 而安装器只认 zizvideo-codesign.crt（0.1.2 发版时踩到）。
+  # 放受管临时目录（cleanup trap 负责删），**不能在大小核对之前删** —— 核对要 stat 它。
+  crtdir="$(mktmp)"; cp .release-key/codesign/zp-codesign.crt "$crtdir/zizvideo-codesign.crt"
+  queue_upload "$APP_DIR" "$crtdir/zizvideo-codesign.crt" "zizvideo-codesign.crt"
 fi
 
 up_fail=0
@@ -258,7 +274,6 @@ while [ "$idx" -lt "${#UP_JOBS[@]}" ]; do
   fi
   idx=$((idx + 1))
 done
-rm -f /tmp/zizvideo-codesign.crt.$$ 2>/dev/null || true
 [ "$up_fail" = "1" ] && die "有文件上传失败（上面已列出；索引未更新，面板不会显示新版本）"
 
 # 面板回的落盘大小必须与本地一致（上传截断/写错目录都会在这里现形）
@@ -279,12 +294,14 @@ for local, name, resp in zip(files, names, resps):
     print("  ✓ %s（%d B）" % (name, want))
 PY
 for r in "${UP_ALL_RESP[@]}"; do rm -f "$r"; done
+phase "上传产物（并行）"
 
 # 顶层索引是"latest 指针"，**最后传**：绝不让它指向还没上传完的产物。
 info "上传顶层索引到 $APP_DIR/"
 api POST /api/v1/files/upload -F "dir=$APP_DIR" -F "on_conflict=overwrite" \
   -F "files=@$APPDIR/manifest.json" >/dev/null || die "上传顶层索引失败"
 ok "manifest.json（版本真源：latest=${VERSION}）"
+phase "上传顶层索引"
 
 MIRROR_BASE="$MIRROR_BASE" verify_remote
 echo

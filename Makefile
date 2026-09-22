@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.1.4-mvp
+VERSION   ?= 0.1.5-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 DIST      ?= dist
 APPDIR    ?= $(DIST)/apps/zizvideo
@@ -12,6 +12,9 @@ SIGN_IDENT ?= com.zizvideo.server
 CODESIGN   ?= tools/codesign-release.sh
 CODESIGN_CERT ?= .release-key/codesign/zp-codesign.crt
 LDFLAGS   := -X github.com/zizdog/zizvideo/internal/api.Version=$(VERSION)
+# 只给发布件瘦身：-s -w 去掉符号表/DWARF（实测 17.2MB → 11.5MB，少传 33% 字节）。
+# 本地 build 不加，保留调试符号。
+RELEASE_LDFLAGS := -s -w $(LDFLAGS)
 
 # 国内网络下 proxy.golang.org 常不可达
 export GOPROXY ?= https://goproxy.cn,direct
@@ -83,7 +86,7 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 	for arch in $(ARCHS); do \
 	  echo "==> 构建 darwin/$$arch"; \
 	  GOOS=darwin GOARCH=$$arch CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false \
-	    -ldflags "$(LDFLAGS)" -o "$(VERDIR)/zizvideo_$(VERSION)_darwin_$$arch" ./cmd/server; \
+	    -ldflags "$(RELEASE_LDFLAGS)" -o "$(VERDIR)/zizvideo_$(VERSION)_darwin_$$arch" ./cmd/server; \
 	  chmod 0755 "$(VERDIR)/zizvideo_$(VERSION)_darwin_$$arch"; \
 	  if [ -f $(CODESIGN_CERT) ]; then \
 	    bash $(CODESIGN) "$(VERDIR)/zizvideo_$(VERSION)_darwin_$$arch" $(SIGN_IDENT); \
