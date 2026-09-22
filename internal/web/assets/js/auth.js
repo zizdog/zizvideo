@@ -66,7 +66,14 @@ export function mountLogin(view, onSuccess) {
   // 「注册」入口只在管理员开着注册时出现（判据 = 公开的 setup/status.allow_register）。
   const registerEntry = el("div", { class: "muted small-note", hidden: true, dataset: { role: "register-entry" } });
   form.append(registerEntry);
+  // 当前版本（用户 2026-09-22 要求）：同一次 setup/status 顺带给出，读不到就不显示，不编。
+  const versionLine = el("div", { class: "muted small-note", hidden: true, dataset: { role: "app-version" } });
+  form.append(versionLine);
   api.setupStatus().then((status) => {
+    if (status && status.version) {
+      versionLine.textContent = "zizvideo " + status.version;
+      versionLine.hidden = false;
+    }
     if (!(status && status.allow_register && !status.needs_setup)) return;
     registerEntry.append(el("span", { text: "还没有账号？" }),
       el("a", { class: "link", href: "#/register", text: "注册" }));

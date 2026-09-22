@@ -9,6 +9,7 @@ import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
 import { mountWatchLater } from "./js/watch-later.js";
+import { mountAbout } from "./js/about.js";
 import { mountMe } from "./js/me.js";
 
 const headerEl = document.getElementById("header");
@@ -74,6 +75,11 @@ function route() {
   if (path === "/watch-later") {
     // 从「我的」进来，所以底栏高亮「我的」，而不是收藏。
     show((view) => withNav(view, "me", () => mountWatchLater(view)), false);
+    return;
+  }
+  if (path === "/about") {
+    // 从「我的」进来，底栏高亮「我的」。
+    show((view) => withNav(view, "me", () => mountAbout(view)), false);
     return;
   }
   if (path === "/me") {

@@ -276,8 +276,9 @@ func TestSetupStatusReportsFirstRun(t *testing.T) {
 		t.Fatalf("状态 %d", res.StatusCode)
 	}
 	var st struct {
-		NeedsSetup    bool `json:"needs_setup"`
-		AllowRegister bool `json:"allow_register"`
+		NeedsSetup    bool   `json:"needs_setup"`
+		AllowRegister bool   `json:"allow_register"`
+		Version       string `json:"version"`
 	}
 	decodeInto(t, env.Data, &st)
 	if !st.NeedsSetup {
@@ -285,6 +286,10 @@ func TestSetupStatusReportsFirstRun(t *testing.T) {
 	}
 	if st.AllowRegister {
 		t.Fatal("注册开关默认必须为关")
+	}
+	// 登录页与「我的-关于」要在没登录时就能显示版本，所以这个公开字段必须带版本号。
+	if st.Version != api.Version {
+		t.Fatalf("setup/status.version = %q, 期望 %q", st.Version, api.Version)
 	}
 	e.setupAdmin()
 	_, env, _ = e.do(http.MethodGet, "/api/v1/setup/status", nil)

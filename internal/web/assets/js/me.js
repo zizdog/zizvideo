@@ -42,6 +42,10 @@ export function mountMe(view, options) {
   if (user.role === "admin") {
     settings.append(el("a", { class: "btn small", href: "#/admin", text: "管理后台" }));
   }
+  // 「关于」给所有角色（用户 2026-09-22 要求）：那里显示当前版本。
+  settings.append(el("a", {
+    class: "btn small", href: "#/about", text: "关于", dataset: { role: "me-about" },
+  }));
 
   const logout = el("button", {
     class: "btn danger", type: "button", text: "退出登录", dataset: { role: "logout" },

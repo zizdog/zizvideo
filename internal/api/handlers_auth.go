@@ -59,6 +59,8 @@ func (s *Server) HandleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, map[string]any{
 		"needs_setup":    n == 0,
 		"allow_register": s.registerSwitch().On(),
+		// 版本号走公开接口：登录页（还没登录）与「我的-关于」都要显示它（用户 2026-09-22 要求）。
+		"version": Version,
 	}, nil)
 }
 
