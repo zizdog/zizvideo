@@ -9,6 +9,7 @@ import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
 import { mountWatchLater, mountWatchLaterPlay } from "./js/watch-later.js";
+import { mountRecordPlay } from "./js/cards.js";
 import { mountMe } from "./js/me.js";
 
 const headerEl = document.getElementById("header");
@@ -82,6 +83,15 @@ function route() {
     // 点卡片播放：复用首页播放器（它自己挂底栏，navKey=me），这里不能再包 withNav。
     const id = decodeURIComponent(path.slice("/later/".length));
     show((view) => mountWatchLaterPlay(view, id), false);
+    return;
+  }
+  // 点赞/收藏/历史 的卡片点开：同一套"把记录列表当播放列表"的实现
+  if (path.startsWith("/play/")) {
+    const rest = path.slice("/play/".length);
+    const cut = rest.indexOf("/");
+    const kind = cut < 0 ? rest : rest.slice(0, cut);
+    const id = cut < 0 ? "" : decodeURIComponent(rest.slice(cut + 1));
+    show((view) => mountRecordPlay(view, decodeURIComponent(kind), id), false);
     return;
   }
   if (path === "/watch-later") { location.replace("#/later"); return; } // 旧书签
