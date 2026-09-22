@@ -10,3 +10,6 @@ package-lock.json
 .panel-credential.local
 # 交接文档含凭据线索：只存本机
 ZizVideo-当前状态.md
+
+# 门禁指纹标记（tools/check-stamp.sh 写；必须被忽略，否则会把自已写进指纹）
+.zv-check-stamp

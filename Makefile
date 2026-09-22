@@ -16,7 +16,7 @@ LDFLAGS   := -X github.com/zizdog/zizvideo/internal/api.Version=$(VERSION)
 # 国内网络下 proxy.golang.org 常不可达
 export GOPROXY ?= https://goproxy.cn,direct
 
-.PHONY: help check test vet fmt build run fixtures release index publish verify version
+.PHONY: help check check-run test test-serial vet fmt build run fixtures release index publish verify version
 
 help: ## 列出目标
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -24,7 +24,19 @@ help: ## 列出目标
 version: ## 打印本仓库版本号
 	@echo $(VERSION)
 
-check: ## 日常门禁：版本一致 + 前端 JS 真解析 + go vet + 单测
+# check 是硬门禁，但**同一棵树**重复跑它没有新信息（发版时会连跑好几次）。
+# 判据是工作树内容指纹（tools/check-stamp.sh）：改一个字节就失效、必须重跑；
+# 提交前后内容不变则指纹不变，所以"提交完再发版"不会白跑一遍。
+check: ## 日常门禁：版本一致 + 前端 JS 真解析 + go vet + 单测（同一棵树跑过就跳过）
+	@if out="$$(bash tools/check-stamp.sh verify 2>&1)"; then \
+	   echo "==> 跳过 make check：$$out"; \
+	   echo "    （改一个字节就会重跑；要强制：ZV_FORCE_CHECK=1 make check）"; \
+	 else \
+	   $(MAKE) --no-print-directory check-run || exit 1; \
+	   bash tools/check-stamp.sh write; \
+	 fi
+
+check-run: ## 真正跑一遍门禁（不做指纹跳过）
 	@echo "==> 版本号一致（Makefile vs internal/api/api.go）"
 	@src=$$(sed -n 's/.*var Version = "\(.*\)".*/\1/p' internal/api/api.go | head -1); \
 	 if [ "$$src" != "$(VERSION)" ]; then \
@@ -38,7 +50,11 @@ check: ## 日常门禁：版本一致 + 前端 JS 真解析 + go vet + 单测
 	@$(MAKE) --no-print-directory test
 	@echo "检查通过 ✅"
 
-test: ## 单元测试（不碰真机系统状态）
+# 不重复算同一件事：重包按测试名单分片并行 + **不关 go 测试缓存**（见 tools/test-fast.sh）
+test: ## 单元测试（重包分片并行、启用 go 缓存；不碰真机系统状态）
+	@bash tools/test-fast.sh
+
+test-serial: ## 老写法（串行 + 禁缓存），排查可疑缓存时用
 	$(GO) test ./... -count=1
 
 vet: ## 静态检查
