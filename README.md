@@ -6,7 +6,23 @@
 Go 单二进制 + 内嵌原生 ESM 前端（无构建步骤）+ SQLite（纯 Go 驱动，无 CGO）。
 从 govideo 改名而来；旧数据目录 `~/Library/Application Support/govideo` 需手工迁移（改名不会自动搬）。
 
-## 快速开始
+## 一键安装（不装面板也能用，走公网镜像）
+
+```bash
+curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | bash
+```
+
+一条命令装好：脚本从镜像读 `apps/zizvideo/manifest.json` 拿最新版、校验 sha256 与签名，
+装成**系统级 LaunchDaemon**（开机即起、不需要任何人登录）。装完打开 <http://127.0.0.1:7766> 初始化管理员即可。
+
+- ⚠️ **不要写成 `| sudo bash`**：脚本会自己按需 sudo（写 `/Library/LaunchDaemons`、导入证书时提示），
+  以 root 身份整个跑会被它直接拒绝。
+- 升级 `--upgrade`、卸载 `--uninstall`、连数据一起删 `--purge`（二次确认）。完整参数见「独立部署」。
+- 与**面板托管互斥**（同一个端口和数据目录）：机器上已被面板托管时它会拒绝并告诉你两条出路。
+
+## 从源码跑（开发/本机）
+
+来源：`make build` 产出的 `dist/zizvideo` 就是同一个二进制，只是没走安装器：
 
 ```bash
 export GOPROXY=https://goproxy.cn,direct
@@ -26,19 +42,32 @@ cp config.example.json config.json   # 按需改 media_allow_roots / 端口
 
 ## 独立部署
 
-不装面板也能跑，命令行一条：
+不装面板也能跑，命令行一条（**不要加 sudo**，脚本自己按需 sudo）：
 
 ```bash
 curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | bash
 ```
 
 - 默认 **system 模式**：装系统级 LaunchDaemon，开机即起、**不需要任何人登录**。
-- 写 `/Library/LaunchDaemons` 并 bootstrap 系统域，这一步**会提示 sudo**。
+- 写 `/Library/LaunchDaemons` 并 bootstrap 系统域，这一步**脚本会提示 sudo**（只提权那几步）。
 - 无头 Mac 必须用默认模式；`--user` 模式只在有人登录后运行。
 - 装到 `~/.local/bin/zizvideo`，日志在 `~/Library/Logs/zizvideo.out.log|err.log`。
 - 数据目录 `~/Library/Application Support/zizvideo`，卸载默认保留。
-- 升级 `--upgrade`；卸载 `--uninstall`；连数据删 `--purge`（需二次确认）。
-- 与面板托管**互斥**：装了面板就不要再独立装，反之亦然。
+- 与面板托管**互斥**：机器上已被面板托管时，脚本会拒绝并给出两条出路（先用面板，或先在面板卸载再独立装）。
+
+常用参数（`bash install-zizvideo.sh --help` 看全）：
+
+| 参数 | 作用 |
+|---|---|
+| （空） | 安装；默认 `--system` |
+| `--user` | 用户级 LaunchAgent，只在有人登录后运行（没有 sudo 时用） |
+| `--upgrade` / `--uninstall` / `--purge` | 升级 / 卸载（保留数据）/ 卸载并删数据（需二次确认） |
+| `--dry-run` | 只打印将要做什么，不写任何系统状态 |
+| `--mirror <base>` | 换镜像基址（默认 `https://mirror.zizdog.com:8888`） |
+| `--listen <host:port>` | 改监听地址（默认 `127.0.0.1:7766`） |
+| `--version` / `--help` | 打印安装器版本 / 用法 |
+
+脚本读的是镜像上的应用级索引 `apps/zizvideo/manifest.json`，所以**升级不需要改命令**，重跑一次即可。
 
 **外置盘权限**：读 `~/Movies` 不用授权。读 `/Volumes/*` 要在
 「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里给该二进制授权一次；
