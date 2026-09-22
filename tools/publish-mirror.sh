@@ -165,6 +165,18 @@ if [ -n "$EXISTING" ] && [ "$ALLOW_EXISTING" != "1" ]; then
   die "镜像上已存在 apps/zizvideo/${VERSION}（${EXISTING}）。同版本不许换字节：请 bump VERSION 重发，或明确加 --allow-existing-version"
 fi
 
+# 面板的上传接口**不会自动建目录**（实测：目标目录不存在 → 400「文件不存在」），
+# 所以每个新版本必须先 mkdir；`--allow-existing-version` 重传时目录已存在，属正常不算错。
+info "确保版本目录存在 $APP_DIR/$VERSION/"
+mkdir_body="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$APP_DIR/$VERSION")"
+if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$mkdir_body" >/dev/null 2>&1; then
+  ok "已创建 $VERSION/"
+elif [ "$ALLOW_EXISTING" = "1" ]; then
+  ok "$VERSION/ 已存在（--allow-existing-version）"
+else
+  die "创建版本目录失败：$APP_DIR/$VERSION（面板接口不建目录，先确认权限/路径）"
+fi
+
 info "上传产物到 $APP_DIR/$VERSION/"
 for f in "$VERDIR"/*; do
   name="$(basename "$f")"
@@ -184,9 +196,12 @@ if [ -f install-zizvideo.sh ]; then
   ok "install-zizvideo.sh"
 fi
 if [ -f .release-key/codesign/zp-codesign.crt ]; then
+  # 必须显式给 filename：curl 默认用源文件基名，临时文件带 PID（xxx.crt.22824），
+  # 线上就会多出个垃圾名，而安装器只认 zizvideo-codesign.crt（0.1.2 发版时踩到）。
   cp .release-key/codesign/zp-codesign.crt /tmp/zizvideo-codesign.crt.$$
   api POST /api/v1/files/upload -F "dir=$APP_DIR" -F "on_conflict=overwrite" \
-    -F "files=@/tmp/zizvideo-codesign.crt.$$" >/dev/null || { rm -f /tmp/zizvideo-codesign.crt.$$; die "上传证书失败"; }
+    -F "files=@/tmp/zizvideo-codesign.crt.$$;filename=zizvideo-codesign.crt" >/dev/null \
+    || { rm -f /tmp/zizvideo-codesign.crt.$$; die "上传证书失败"; }
   rm -f /tmp/zizvideo-codesign.crt.$$
   ok "zizvideo-codesign.crt（安装器用；文件名必须是这个）"
 fi
