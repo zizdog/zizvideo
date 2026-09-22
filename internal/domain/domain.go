@@ -131,16 +131,18 @@ type SeriesEpisode struct {
 
 // ScanTask is a persisted scan job's state.
 type ScanTask struct {
-	ID         string `json:"id"`
-	LibraryID  string `json:"library_id"`
-	Kind       string `json:"kind"`
-	Status     string `json:"status"`
-	Total      int    `json:"total"`
-	Scanned    int    `json:"scanned"`
-	Updated    int    `json:"updated"`
-	Failed     int    `json:"failed"`
-	Missing    int    `json:"missing"`
-	Suspected  int    `json:"suspected"`
+	ID        string `json:"id"`
+	LibraryID string `json:"library_id"`
+	Kind      string `json:"kind"`
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	Scanned   int    `json:"scanned"`
+	Updated   int    `json:"updated"`
+	Failed    int    `json:"failed"`
+	Missing   int    `json:"missing"`
+	Suspected int    `json:"suspected"`
+	// Renamed = 识别到 N 个改名/移动（旧行改指新路径，观看进度与收藏都保留）。
+	Renamed    int    `json:"renamed"`
 	Error      string `json:"error"`
 	StartedAt  string `json:"started_at"`
 	FinishedAt string `json:"finished_at"`

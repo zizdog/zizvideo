@@ -287,6 +287,99 @@ func TestScanRootMissingInterruptsAndKeepsRows(t *testing.T) {
 	}
 }
 
+// 门禁（用户 2026-09-22 要求）：改名/移动要识别成"同一个文件换了名字"，
+// 不新增行、不留僵尸记录，**id 不变**（观看进度、收藏、稍后再看、剧场成员都挂在 id 上，
+// 所以它们全部自动保留）。
+func TestScanRecognizesRenameAndKeepsIdentity(t *testing.T) {
+	env := newScanEnv(t)
+	env.write(t, "old-name.mp4", "content-A")
+	env.write(t, "keep.mp4", "content-BB")
+	env.run(t)
+	before := env.media(t)
+	if len(before) != 2 {
+		t.Fatalf("前置扫描 = %d 条, 期望 2", len(before))
+	}
+	var oldID string
+	for _, m := range before {
+		if m.Title == "old-name" {
+			oldID = m.ID
+		}
+	}
+	if oldID == "" {
+		t.Fatal("没找到 old-name 那条")
+	}
+
+	if err := os.Rename(filepath.Join(env.root, "old-name.mp4"),
+		filepath.Join(env.root, "新名字.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	task := env.run(t)
+	if task.Renamed != 1 {
+		t.Fatalf("renamed = %d, 期望 1（missing=%d suspected=%d）", task.Renamed, task.Missing, task.Suspected)
+	}
+	if task.Missing != 0 || task.Suspected != 0 {
+		t.Fatalf("改名不该报缺失/疑似: missing=%d suspected=%d", task.Missing, task.Suspected)
+	}
+
+	after := env.media(t)
+	if len(after) != 2 {
+		t.Fatalf("改名不该新增行: 现存 %d 条", len(after))
+	}
+	found := false
+	for _, m := range after {
+		if m.ID != oldID {
+			continue
+		}
+		found = true
+		if filepath.Base(m.Path) != "新名字.mp4" {
+			t.Fatalf("旧行没改指新路径: %s", m.Path)
+		}
+		if m.Title != "新名字" {
+			t.Fatalf("标题没跟着改: %q", m.Title)
+		}
+		if m.MissingSince != "" {
+			t.Fatalf("迁移后不该是缺失状态: %q", m.MissingSince)
+		}
+	}
+	if !found {
+		t.Fatalf("改名后旧 id %s 不见了（被当成新增行了）", oldID)
+	}
+}
+
+// 门禁：有歧义就**不猜**。两条缺行与两个新文件的 (size,mtime) 完全相同时一行都不迁，
+// 退回原来的"新增 + 标记缺失"，让用户自己判断。
+func TestScanRenameAmbiguityIsSkipped(t *testing.T) {
+	env := newScanEnv(t)
+	env.write(t, "a.mp4", "same-bytes")
+	env.write(t, "b.mp4", "same-bytes")
+	stamp := time.Unix(1700000000, 0)
+	for _, n := range []string{"a.mp4", "b.mp4"} {
+		if err := os.Chtimes(filepath.Join(env.root, n), stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(env.media(t)) != 0 {
+		t.Fatal("前置条件错误：还没扫描过")
+	}
+	env.run(t)
+	if got := len(env.media(t)); got != 2 {
+		t.Fatalf("前置扫描 = %d 条, 期望 2", got)
+	}
+
+	for _, n := range []string{"a.mp4", "b.mp4"} {
+		if err := os.Rename(filepath.Join(env.root, n), filepath.Join(env.root, "new-"+n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := env.run(t)
+	if task.Renamed != 0 {
+		t.Fatalf("有歧义时不许迁移, renamed=%d", task.Renamed)
+	}
+	if got := len(env.media(t)); got != 4 {
+		t.Fatalf("歧义时应退回原行为（新增 2 行 + 旧 2 行标缺失）, 现存 %d 条", got)
+	}
+}
+
 func TestTwoPhaseDeletionMarksThenDeletes(t *testing.T) {
 	env := newScanEnv(t)
 	// One file disappears out of 200 rows: far below both thresholds.

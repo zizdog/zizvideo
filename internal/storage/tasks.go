@@ -8,12 +8,12 @@ import (
 )
 
 const taskCols = `id, library_id, kind, status, total, scanned, updated, failed, missing,
-	suspected, error, COALESCE(started_at,''), COALESCE(finished_at,''), updated_at`
+	suspected, renamed, error, COALESCE(started_at,''), COALESCE(finished_at,''), updated_at`
 
 func scanTask(s interface{ Scan(...any) error }) (*domain.ScanTask, error) {
 	var t domain.ScanTask
 	if err := s.Scan(&t.ID, &t.LibraryID, &t.Kind, &t.Status, &t.Total, &t.Scanned, &t.Updated,
-		&t.Failed, &t.Missing, &t.Suspected, &t.Error, &t.StartedAt, &t.FinishedAt,
+		&t.Failed, &t.Missing, &t.Suspected, &t.Renamed, &t.Error, &t.StartedAt, &t.FinishedAt,
 		&t.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -52,11 +52,11 @@ func (db *DB) UpdateScanTaskProgress(id string, total, scanned, updated, failed 
 }
 
 // FinishScanTask closes a task with its terminal status.
-func (db *DB) FinishScanTask(id, status, errMsg string, missing, suspected int) error {
+func (db *DB) FinishScanTask(id, status, errMsg string, missing, suspected, renamed int) error {
 	now := domain.NowString()
 	_, err := db.Exec(`UPDATE scan_tasks SET status = ?, error = ?, missing = ?, suspected = ?,
-		finished_at = ?, updated_at = ? WHERE id = ?`,
-		status, truncate(errMsg, 500), missing, suspected, now, now, id)
+		renamed = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+		status, truncate(errMsg, 500), missing, suspected, renamed, now, now, id)
 	return err
 }
 

@@ -289,13 +289,19 @@ function mountLibraries(root) {
         const failed = Number(task.failed) || 0;
         const missing = Number(task.missing) || 0;
         const suspected = Number(task.suspected) || 0;
+        const renamed = Number(task.renamed) || 0;
         let text = "已扫描 " + scanned + "/" + total + "，失败 " + failed;
+        if (renamed) text += "，识别到改名 " + renamed + " 个";
         if (missing || suspected) text += "，疑似丢失 " + (suspected || missing);
         line.textContent = text;
         if (task.status === "success" || task.status === "failed" || task.status === "interrupted") {
           clearInterval(timer);
           const label = task.status === "success" ? "扫描完成" : task.status === "failed" ? "扫描失败" : "扫描已中断";
           let final = label + "，已扫描 " + scanned + "/" + total + "，失败 " + failed;
+          // 改名被识别出来是好事，要说出来（否则用户只看到"疑似丢失"，以为文件丢了）。
+          if (renamed > 0) {
+            final += "；识别到 " + renamed + " 个改名/移动（已改指新路径，观看进度与收藏保留）";
+          }
           // 疑似丢失超阈值时扫描**不会**删记录（防止外接盘没挂载就清库），必须说出来，
           // 否则用户只看到"扫描完成"，以为没生效（用户 2026-09-22 报障）。
           if (suspected > 0) {

@@ -141,6 +141,15 @@ func (db *DB) ApplyDeletions(ids []string) error {
 	return tx.Commit()
 }
 
+// RepointMediaPath 把一行改指到新路径（改名/移动识别）：**保留 id**，所以观看进度、
+// 收藏、稍后再看、剧场成员关系全部跟着走；顺手清掉可能存在的 missing_since。
+func (db *DB) RepointMediaPath(id, newPath, title string) error {
+	_, err := db.Exec(`UPDATE media SET path = ?, normalized_path = ?, title = ?,
+		missing_since = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+		newPath, newPath, title, domain.NowString(), id)
+	return err
+}
+
 // PurgeMissingMedia 软删某个库里所有"文件已不在"的记录（missing_since 非空）。
 // 只删数据库记录，**绝不动磁盘文件**；返回真实删除行数供界面如实显示。
 // 存在的理由：整库改名/移动后缺失比例会超过扫描的自动删除阈值（默认 10%），

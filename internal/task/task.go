@@ -131,7 +131,7 @@ func (m *Manager) StartScan(libraryID, kind string) (*domain.ScanTask, error) {
 		defer func() {
 			if r := recover(); r != nil {
 				m.log.Error("扫描协程崩溃", "task_id", t.ID, "library_id", libraryID)
-				_ = m.db.FinishScanTask(t.ID, domain.TaskFailed, "扫描协程异常退出", 0, 0)
+				_ = m.db.FinishScanTask(t.ID, domain.TaskFailed, "扫描协程异常退出", 0, 0, 0)
 			}
 			m.mu.Lock()
 			delete(m.active, libraryID)

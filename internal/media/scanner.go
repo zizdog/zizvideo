@@ -51,12 +51,12 @@ func (s *Scanner) Run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	if res.interrupted {
 		status = domain.TaskInterrupted
 	}
-	if err := s.DB.FinishScanTask(task.ID, status, res.errMsg, res.missing, res.suspected); err != nil {
+	if err := s.DB.FinishScanTask(task.ID, status, res.errMsg, res.missing, res.suspected, res.renamed); err != nil {
 		s.Log.Error("写入任务终态失败", "task_id", task.ID, "library_id", lib.ID, "error", err.Error())
 	}
 	s.Log.Info("扫描结束", "task_id", task.ID, "library_id", lib.ID, "status", status,
 		"total", res.total, "scanned", res.scanned, "failed", res.failed,
-		"missing", res.missing, "suspected", res.suspected)
+		"missing", res.missing, "suspected", res.suspected, "renamed", res.renamed)
 }
 
 type scanResult struct {
@@ -65,6 +65,7 @@ type scanResult struct {
 	failed      int
 	missing     int
 	suspected   int
+	renamed     int
 	interrupted bool
 	errMsg      string
 }
@@ -111,6 +112,10 @@ func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 		res.errMsg = "读取现有媒体失败"
 		return res
 	}
+
+	// 改名/移动识别（用户 2026-09-22 要求）：先于对账做，这样"文件换了名字"不会
+	// 变成"新增一行 + 留一条僵尸记录"，观看进度/收藏/剧场成员都跟着旧行保留。
+	res.renamed = s.migrateRenamed(lib, entries, states)
 
 	var processed, updated, failed int64
 	stop := make(chan struct{})
@@ -252,6 +257,66 @@ func ignored(name string, rules []string) bool {
 // IgnoredName exposes the ignore-rule match so the event watcher and the
 // scanner skip exactly the same directories (不许第二套判据).
 func IgnoredName(name string, rules []string) bool { return ignored(name, rules) }
+
+// migrateRenamed 识别"同一个文件换了名字/换了目录"：磁盘上出现一个数据库里没有的新文件，
+// 而数据库里恰好有一条"这次没在磁盘上看到"的行，两者 **size+mtime 完全一致** ⇒ 判定为改名，
+// 把旧行改指到新路径（保留 id ⇒ 观看进度、收藏、稍后再看、剧场成员全部保留）。
+//
+// 只在**一对一唯一匹配**时迁移：同一 (size,mtime) 有多条缺行或多个新文件时一律不动。
+// 理由：重命名不改变 size/mtime，但复制粘贴可能撞上同样的组合，有歧义就必须"不猜"
+// （宁可留一条缺失记录让用户点清理，也不能把 A 的进度接到 B 上）。
+// 迁移成功后同步更新 states，processFile 会把它当成"已存在的行"按 size+mtime 跳过重探。
+func (s *Scanner) migrateRenamed(lib *domain.Library, entries []fileEntry,
+	states map[string]storage.MediaState) int {
+	type key struct {
+		size    int64
+		mtimeNS int64
+	}
+	onDisk := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		onDisk[e.Path] = true
+	}
+	newFiles := map[key][]fileEntry{}
+	for _, e := range entries {
+		if _, ok := states[e.Path]; ok {
+			continue // 数据库里已有这一行，不是新文件
+		}
+		k := key{e.Size, e.MtimeNS}
+		newFiles[k] = append(newFiles[k], e)
+	}
+	if len(newFiles) == 0 {
+		return 0
+	}
+	missingRows := map[key][]string{}
+	for path, st := range states {
+		if onDisk[path] {
+			continue
+		}
+		k := key{st.Size, st.MtimeNS}
+		missingRows[k] = append(missingRows[k], path)
+	}
+
+	migrated := 0
+	for k, files := range newFiles {
+		olds := missingRows[k]
+		if len(files) != 1 || len(olds) != 1 {
+			continue // 有歧义：不动，交给"缺失 + 清理"那条路
+		}
+		oldPath, entry := olds[0], files[0]
+		st := states[oldPath]
+		title := strings.TrimSuffix(filepath.Base(entry.Path), filepath.Ext(entry.Path))
+		if err := s.DB.RepointMediaPath(st.ID, entry.Path, title); err != nil {
+			s.Log.Warn("改名迁移失败", "library_id", lib.ID, "media_id", st.ID, "error", err.Error())
+			continue
+		}
+		delete(states, oldPath)
+		states[entry.Path] = st
+		migrated++
+		s.Log.Info("识别到改名/移动", "library_id", lib.ID, "media_id", st.ID,
+			"from", oldPath, "to", entry.Path)
+	}
+	return migrated
+}
 
 // processFile probes one file (with backoff retries) and upserts its row.
 func (s *Scanner) processFile(ctx context.Context, lib *domain.Library, e fileEntry, prev storage.MediaState) bool {

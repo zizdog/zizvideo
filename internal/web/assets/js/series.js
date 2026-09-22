@@ -7,6 +7,10 @@ import { el, clear, banner, setBanner, fmtDuration, asArray } from "./dom.js";
 
 const PROGRESS_EVERY_MS = 5000;
 const COMPLETE_TAIL_MS = 1500;
+// 剧场播放手势（用户 2026-09-22 要求，与首页对齐）：单击暂停 + 上/下划切集。
+const SP_WHEEL_STEP = 40;
+const SP_TOUCH_STEP = 50;
+const SP_STEP_LOCK_MS = 350;
 
 /* ---------- 剧场列表 ---------- */
 
@@ -167,6 +171,23 @@ export function mountSeriesPlay(view, seriesID) {
     const target = event.target;
     const tag = target && target.tagName ? target.tagName : "";
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (target && target.isContentEditable)) return;
+    if (event.key === " " && tag === "BUTTON") return;
+    // 上下键/空格与首页一致：切上/下一集、暂停继续（左右键仍是快进快退）。
+    if (event.key === "ArrowDown" || event.key === "PageDown") {
+      event.preventDefault();
+      stepEpisode(1);
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "PageUp") {
+      event.preventDefault();
+      stepEpisode(-1);
+      return;
+    }
+    if (event.key === " " || event.key === "Spacebar") {
+      event.preventDefault();
+      togglePlay();
+      return;
+    }
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     seekBy(event.key === "ArrowRight" ? 1 : -1);
@@ -281,6 +302,86 @@ export function mountSeriesPlay(view, seriesID) {
       el("div", { class: "center-title", text: "这一集放不了" }),
       el("div", { class: "center-sub", text: (current() || {}).title || "" })));
   });
+
+  /* ---------- 剧场播放手势（单击暂停 + 上/下划切集，与首页一致） ---------- */
+
+  // 中央 ▶/⏸ 提示，300ms 后淡出（.center-flash 的样式与首页共用）。
+  let flashEl = null;
+  let flashTimer = 0;
+  function flash(text) {
+    if (!flashEl) {
+      flashEl = el("div", { class: "center-flash", dataset: { role: "sp-flash" } });
+      playBox.append(flashEl);
+    }
+    flashEl.textContent = text;
+    flashEl.classList.remove("fade");
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { if (flashEl) flashEl.classList.add("fade"); }, 300);
+  }
+
+  function togglePlay() {
+    if (!current() || !video.getAttribute("src")) return;
+    if (video.paused) {
+      const result = video.play();
+      if (result && typeof result.catch === "function") result.catch(() => { centerBtn.hidden = false; });
+      flash("▶");
+    } else {
+      video.pause();
+      flash("⏸");
+    }
+  }
+
+  // 切集：到头就给一句实话，不静默什么都不做。
+  function stepEpisode(direction) {
+    const target = state.index + direction;
+    if (target < 0) { showToast("已经是第一集"); return; }
+    if (target >= state.items.length) { showToast("已经是最后一集"); return; }
+    state.autoNext = false;
+    playIndex(target, true);
+  }
+
+  let spWheelAcc = 0;
+  let spTouchY = null;
+  let spStepLockUntil = 0;
+  function takeStep(direction) {
+    if (Date.now() < spStepLockUntil) return; // 一次滑动只切一集
+    spStepLockUntil = Date.now() + SP_STEP_LOCK_MS;
+    stepEpisode(direction);
+  }
+
+  function onWheel(event) {
+    // 选集列表要能正常滚动：那里不抢滚轮。
+    if (event.target && event.target.closest && event.target.closest(".ep-list")) return;
+    event.preventDefault();
+    spWheelAcc += event.deltaY;
+    if (Math.abs(spWheelAcc) < SP_WHEEL_STEP) return;
+    const direction = spWheelAcc > 0 ? 1 : -1;
+    spWheelAcc = 0;
+    takeStep(direction);
+  }
+
+  function onTouchStart(event) {
+    if (event.touches.length !== 1) { spTouchY = null; return; }
+    if (event.target && event.target.closest && event.target.closest(".ep-list")) { spTouchY = null; return; }
+    spTouchY = event.touches[0].clientY;
+  }
+
+  function onTouchEnd(event) {
+    if (spTouchY === null) return;
+    const touch = event.changedTouches && event.changedTouches[0];
+    if (!touch) { spTouchY = null; return; }
+    const delta = spTouchY - touch.clientY;
+    spTouchY = null;
+    // 轻点不在这里处理：浏览器随后还会派发 click，交给 video 的 click 处理器，
+    // 否则一次轻点会被暂停再播放（等于没反应）。
+    if (Math.abs(delta) < SP_TOUCH_STEP) return;
+    takeStep(delta > 0 ? 1 : -1);
+  }
+
+  video.addEventListener("click", togglePlay);
+  playBox.addEventListener("wheel", onWheel, { passive: false });
+  playBox.addEventListener("touchstart", onTouchStart, { passive: true });
+  playBox.addEventListener("touchend", onTouchEnd, { passive: true });
 
   prev.addEventListener("click", () => { state.autoNext = false; playIndex(state.index - 1, true); });
   next.addEventListener("click", () => { state.autoNext = false; playIndex(state.index + 1, true); });

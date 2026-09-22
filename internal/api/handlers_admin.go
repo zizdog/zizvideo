@@ -343,7 +343,7 @@ func (s *Server) runDeleteDuplicateFiles(taskID string, items []domain.Media) {
 		status = domain.TaskFailed
 		errMsg = fmt.Sprintf("已删 %d，失败 %d：%s", deleted, failed, strings.Join(problems, "；"))
 	}
-	if err := s.DB.FinishScanTask(taskID, status, errMsg, 0, 0); err != nil {
+	if err := s.DB.FinishScanTask(taskID, status, errMsg, 0, 0, 0); err != nil {
 		s.Log.Error("结束去重任务失败", "task_id", taskID, "error", err.Error())
 	}
 }
