@@ -28,8 +28,10 @@ export function loopEffective(settings) {
 }
 
 // createFeedSettingsForm 只画控件并回调 onChange(partial)；状态与请求由调用方持有。
+// lockAutoplay=true（剧场）：自动连播写死开启且**不可设置**，只留"左右键跳转秒数"。
 export function createFeedSettingsForm(options) {
   const opts = options || {};
+  const lockAutoplay = !!opts.lockAutoplay;
   const auto = el("input", { type: "checkbox" });
   const loop = el("input", { type: "checkbox" });
   const seek = el("input", { type: "number", min: "1", max: "120", step: "1" });
@@ -37,7 +39,11 @@ export function createFeedSettingsForm(options) {
   const autoRow = el("label", { class: "set-row" }, auto, el("span", { text: "自动播放下一个" }));
   const loopRow = el("label", { class: "set-row" }, loop, el("span", { text: "循环播放" }));
   const seekRow = el("label", { class: "set-row" }, el("span", { text: "左右键跳转" }), seek, el("span", { text: "秒" }));
-  const form = el("div", { class: "set-form" }, autoRow, loopRow, seekRow, note);
+  const form = el("div", { class: "set-form" },
+    lockAutoplay ? null : autoRow,
+    lockAutoplay ? null : loopRow,
+    seekRow,
+    lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note);
 
   function emit(partial) {
     if (opts.onChange) opts.onChange(partial);

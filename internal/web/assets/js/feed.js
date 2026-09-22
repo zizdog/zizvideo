@@ -64,38 +64,61 @@ function isInteractive(target) {
   return !!target.closest("button, input, .bar-wrap, .set-panel, .lib-chip");
 }
 
-export function mountFeed(view) {
+// 剧场标题："第 3 集 · 片名"；首页没有 episode_label，就是片名。
+function titleOf(item, index) {
+  const title = item.title || ("#" + item.id);
+  const label = item.episode_label || "";
+  return label ? (label + " · " + title) : title;
+}
+
+// mountFeed 是全站唯一的播放器（用户 2026-09-22 明确要求："剧场直接利用首页，不许两套"）。
+// options.playlist = { title, items } 时进入**播放列表模式**（剧场）：
+//   · 数据由调用方给（不取随机游标、没有选库）；顺序播、自动连播且不可设置；
+//   · 播完最后一集**停止**（首页是无限播放，且一轮内不重复 —— 那是游标逻辑，不在这里）；
+//   · 右下图标栏与手势、进度上报、收藏/喜欢/稍后再看/删除全部与首页**同一份代码**；
+//   · 只多一个「选集」入口（剧场要选集，首页没有）。
+export function mountFeed(view, options = {}) {
+  const playlist = options.playlist || null;
   const feed = el("div", { class: "feed" });
   const track = el("div", { class: "track" });
   const chip = el("div", { class: "feed-chip hidden" });
   const toast = el("div", { class: "toast hidden" });
-  // 选库入口（P1）：库列表只来自 GET /me/libraries，不再从当前视频反推
-  const pickerBtn = el("button", {
+  // 选库入口（P1）：库列表只来自 GET /me/libraries，不再从当前视频反推。
+  // 播放列表模式（剧场）没有"切库"概念，所以这两个节点不建。
+  const pickerBtn = playlist ? null : el("button", {
     class: "lib-chip hidden", type: "button", text: "选库",
     style: { position: "absolute", zIndex: "8", top: "44px", left: "12px" },
   });
-  const picker = el("div", {
+  const picker = playlist ? null : el("div", {
     class: "set-panel hidden",
     style: { left: "12px", right: "auto", top: "80px" },
   });
-  picker.addEventListener("click", (event) => event.stopPropagation());
-  pickerBtn.addEventListener("click", (event) => {
-    event.stopPropagation();
-    picker.classList.toggle("hidden");
-  });
-  feed.append(track, chip, pickerBtn, picker);
+  if (picker && pickerBtn) {
+    picker.addEventListener("click", (event) => event.stopPropagation());
+    pickerBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      picker.classList.toggle("hidden");
+    });
+    feed.append(track, chip, pickerBtn, picker);
+  } else {
+    feed.append(track, chip);
+  }
   view.append(feed, toast);
   // 底栏挂载点（条目 10）：只加容器与入口，不改播放/进度逻辑
-  view.append(mountNav("feed"));
+  view.append(mountNav(playlist ? "series" : "feed"));
 
   const gate = createGestureGate();
   const state = {
-    items: [], shells: [], built: new Map(),
-    active: -1, hasMore: true, loading: false,
-    soundOn: readSoundPref(),
+    items: playlist ? playlist.items.slice() : [],
+    shells: [], built: new Map(),
+    active: -1,
+    // 首页靠游标无限翻页；播放列表模式一次给全，没有"更多页"（goTo 到末尾就 clamp）
+    hasMore: !playlist, loading: false,
+    soundOn: readSoundPref(), // 与首页共用同一个偏好（localStorage 同一个键）
     scope: "", scopeName: "", nextCursor: "",
-    libraries: [], librariesLoaded: false,
-    settings: normalizeFeedSettings(),
+    libraries: [], librariesLoaded: !!playlist,
+    // 剧场：自动连播写死开启、循环写死关闭（用户："自动连播且无法设置"）
+    settings: normalizeFeedSettings(playlist ? { autoplay_next: true, loop_play: false } : undefined),
     infoCard: null, emptyCard: null,
   };
   let toastTimer = 0;
@@ -171,7 +194,8 @@ export function mountFeed(view) {
     shell.append(layer);
     const entry = {
       index, item, layer, video: null, fill: null, elapsed: null, total: null,
-      fav: null, like: null, later: null, hint: null, soundHint: null, playBtn: null, flash: null,
+      fav: null, like: null, later: null, eps: null, epsPanel: null,
+      hint: null, soundHint: null, playBtn: null, flash: null,
       bubble: null, bar: null, barWrap: null, sound: null, gear: null, panel: null,
       settingsForm: null, seekRatio: 0,
       seeking: false, flashTimer: 0, hintTimer: 0,
@@ -195,6 +219,19 @@ export function mountFeed(view) {
     if (entry.del) {
       entry.del.addEventListener("click", (event) => { event.stopPropagation(); askDelete(entry); });
     }
+    // 剧场才有的「选集」（首页没有剧集概念）。图标栏其余部分完全一致。
+    entry.eps = playlist
+      ? el("button", { class: "icon-btn", type: "button", title: "选集", text: "☰" })
+      : null;
+    if (entry.eps) {
+      entry.eps.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!entry.epsPanel) entry.layer.append(buildEpisodePanel(entry));
+        const open = entry.epsPanel.classList.contains("hidden");
+        closePanels();
+        if (open) entry.epsPanel.classList.remove("hidden");
+      });
+    }
 
     entry.fill = el("span", { class: "bar-fill" });
     entry.elapsed = el("span", { text: "0:00" });
@@ -206,17 +243,18 @@ export function mountFeed(view) {
 
     layer.append(el("div", { class: "overlay" },
       el("div", { class: "ov-top" },
-        el("div", { class: "ov-title", text: item.title || ("#" + item.id) })),
+        el("div", { class: "ov-title", text: titleOf(item, index) })),
       entry.barWrap,
       el("div", { class: "times" }, entry.elapsed, entry.total)
     ));
 
-    // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除）
+    // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
+    // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
-      entry.fav, entry.like, entry.later, soundButton(entry), gearButton(entry), entry.del));
+      entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del));
 
-    // 左上角"来自 <库名>"（点击切范围）
-    layer.append(libraryCorner(item));
+    // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
+    if (!playlist) layer.append(libraryCorner(item));
 
     if (!isPlayable(item)) {
       // 文件不在了（改名/移动/掉盘）时如实说，不再打"状态：ready"——那句话自相矛盾（用户报障）。
@@ -419,6 +457,16 @@ export function mountFeed(view) {
 
   function onEnded(entry) {
     flushProgress(entry.index, false);
+    if (playlist) {
+      // 剧场：自动连播（不可设置）；播完最后一集停止并说明，绝不循环回第一集。
+      if (entry.index + 1 < state.items.length) {
+        goTo(entry.index + 1);
+        return;
+      }
+      showPlayButton(entry);
+      showToast("已播完最后一集");
+      return;
+    }
     if (state.settings.autoplay_next && (entry.index + 1 < state.items.length || state.hasMore)) {
       goTo(entry.index + 1); // 连播：自动下一个
       return;
@@ -538,17 +586,43 @@ export function mountFeed(view) {
   }
 
   function buildPanel(entry) {
-    entry.settingsForm = createFeedSettingsForm({ settings: state.settings, onChange: saveSettings });
+    entry.settingsForm = createFeedSettingsForm({
+      settings: state.settings,
+      onChange: saveSettings,
+      // 剧场：自动连播写死开启且**不可设置**（用户要求），只留"跳转秒数"。
+      lockAutoplay: !!playlist,
+    });
     entry.panel = el("div", { class: "set-panel hidden" }, entry.settingsForm.node);
     entry.panel.addEventListener("click", (event) => event.stopPropagation());
     return entry.panel;
   }
 
+  // 剧场「选集」面板：样式与剧场列表里的选集一致（.ep-list/.ep-item），点一集就跳过去。
+  function buildEpisodePanel(entry) {
+    const panel = el("div", { class: "set-panel hidden" });
+    const list = el("div", { class: "ep-list" });
+    state.items.forEach((item, i) => {
+      list.append(el("button", {
+        class: "ep-item" + (i === entry.index ? " on" : ""), type: "button",
+        dataset: { role: "ep-item", index: String(i) },
+        onclick: () => { panel.classList.add("hidden"); goTo(i); },
+      },
+        el("span", { class: "ep-no", text: item.episode_label || ("第 " + (i + 1) + " 集") }),
+        el("span", { class: "ep-title", text: item.title || ("#" + item.id) }),
+        el("span", { class: "ep-pct muted", text: fmtDuration(item.duration_ms) })));
+    });
+    panel.append(el("div", { class: "panel-title", text: (playlist.title || "剧场") + " · 选集" }), list);
+    panel.addEventListener("click", (event) => event.stopPropagation());
+    entry.epsPanel = panel;
+    return panel;
+  }
+
   function closePanels() {
     for (const entry of state.built.values()) {
       if (entry.panel) entry.panel.classList.add("hidden");
+      if (entry.epsPanel) entry.epsPanel.classList.add("hidden");
     }
-    picker.classList.add("hidden");
+    if (picker) picker.classList.add("hidden");
   }
 
   function gearButton(entry) {
@@ -737,7 +811,9 @@ export function mountFeed(view) {
       state.settings = normalizeFeedSettings(meta.settings);
       applySettings();
     }
-    for (const item of list) {
+    // 快照遍历：调用方可能把 state.items 自己传进来（播放列表模式），
+    // 一边遍历一边 push 会无限循环把页面卡死（实测踩过，CDP 才定位到）。
+    for (const item of Array.from(list || [])) {
       const index = state.items.length;
       const shell = el("article", { class: "card", dataset: { index: String(index), id: String(item.id) } });
       shell.style.top = (index * 100) + "%";
@@ -776,6 +852,7 @@ export function mountFeed(view) {
   }
 
   async function loadMore() {
+    if (playlist) return false; // 剧场：数据是一次性给的，没有翻页
     if (state.loading || !state.hasMore) return false;
     state.loading = true;
     setLoading(true);
@@ -847,13 +924,14 @@ export function mountFeed(view) {
   }
 
   async function loadLibraries() {
+    if (playlist) return; // 剧场没有切库
     try {
       state.libraries = asArray(await api.myLibraries());
     } catch (err) {
       state.libraries = [];
     }
     state.librariesLoaded = true;
-    pickerBtn.classList.toggle("hidden", state.libraries.length <= 1);
+    if (pickerBtn) pickerBtn.classList.toggle("hidden", state.libraries.length <= 1);
     renderPicker();
     if (state.emptyCard && state.libraries.length === 0) {
       state.emptyCard.textContent = "没有可访问的媒体库，请联系管理员";
@@ -972,8 +1050,14 @@ export function mountFeed(view) {
   window.addEventListener("pagehide", onPageHide);
   document.addEventListener("visibilitychange", onVisibility);
 
-  loadLibraries();
-  loadMore();
+  if (playlist) {
+    // 剧场：数据一次给全（剧集数量有限），不取游标、不翻页、不选库。
+    appendItems(state.items.slice(), { has_more: false });
+    if (playlist.note) setTimeout(() => showToast(playlist.note), 800);
+  } else {
+    loadLibraries();
+    loadMore();
+  }
 
   return function cleanup() {
     clearInterval(progressTimer);

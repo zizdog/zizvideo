@@ -264,35 +264,40 @@ func TestFeedSeekSecondsDefaultPersistAndOutOfRange(t *testing.T) {
 	}
 }
 
-// 门禁：左右键跳转不许只写一半 —— 两个播放器都要接 ArrowLeft/ArrowRight，
-// 且前后端共用 seek_seconds 字段名（字段名收在共享设置模块里）。
-func TestSeekKeysWiredInBothPlayersAndBackend(t *testing.T) {
-	for _, name := range []string{
-		filepath.Join("..", "web", "assets", "js", "feed.js"),
-		filepath.Join("..", "web", "assets", "js", "series.js"),
-	} {
-		raw, err := os.ReadFile(name)
+// 门禁（用户 2026-09-22 明确要求"剧场直接利用首页，不许两套"）：
+// 全站只有 feed.js 一份播放器 —— 左右键、seek_seconds、手势闸门都在那里；
+// series.js 必须**委托**给 mountFeed 的播放列表模式，自己不许再出现视频元素/手势。
+func TestSinglePlayerAndSeriesDelegatesToIt(t *testing.T) {
+	read := func(name string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join("..", "web", "assets", "js", name))
 		if err != nil {
 			t.Fatalf("读取 %s 失败: %v", name, err)
 		}
-		body := string(raw)
-		for _, token := range []string{"ArrowLeft", "ArrowRight"} {
-			if !strings.Contains(body, token) {
-				t.Fatalf("%s 缺少 %q —— 左右键跳转只写了一半", name, token)
-			}
+		return string(raw)
+	}
+
+	feed := read("feed.js")
+	// seek_seconds 这个字段名收在共享设置模块里（play-settings.js），feed 只调用它。
+	for _, token := range []string{"ArrowLeft", "ArrowRight", "createGestureGate", "playlist"} {
+		if !strings.Contains(feed, token) {
+			t.Fatalf("feed.js 缺少 %q —— 唯一那份播放器应当自己带齐", token)
 		}
 	}
-	for _, name := range []string{
-		filepath.Join("..", "web", "assets", "js", "play-settings.js"),
-		filepath.Join("..", "web", "assets", "js", "series.js"),
-	} {
-		raw, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("读取 %s 失败: %v", name, err)
+
+	series := read("series.js")
+	if !strings.Contains(series, "mountFeed(") || !strings.Contains(series, "playlist") {
+		t.Fatal("series.js 必须把播放交给 mountFeed 的 playlist 模式（不许自己实现一套）")
+	}
+	// 第二套播放器的特征：自己建 video / 自己读手势 / 自己上报进度。
+	for _, banned := range []string{"document.createElement(\"video\")", "el(\"video\"", "createGestureGate", "video.play()"} {
+		if strings.Contains(series, banned) {
+			t.Fatalf("series.js 又出现了第二套播放器（%q）—— 必须复用首页", banned)
 		}
-		if !strings.Contains(string(raw), "seek_seconds") {
-			t.Fatalf("%s 缺少 %q —— 左右键跳转秒数与后端字段名脱节", name, "seek_seconds")
-		}
+	}
+
+	if !strings.Contains(read("play-settings.js"), "seek_seconds") {
+		t.Fatal("play-settings.js 缺少 seek_seconds —— 左右键跳转秒数与后端字段名脱节")
 	}
 	raw, err := os.ReadFile("handlers_feed.go")
 	if err != nil {

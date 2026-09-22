@@ -65,7 +65,9 @@ function route() {
   }
   if (path.startsWith("/series/")) {
     const id = decodeURIComponent(path.slice("/series/".length));
-    show((view) => withNav(view, "series", () => mountSeriesPlay(view, id)), false);
+    // 播放页复用首页播放器，底栏由 mountFeed 自己挂（active="series"），
+    // 这里不能再包 withNav，否则会出现两条底栏。
+    show((view) => mountSeriesPlay(view, id), false);
     return;
   }
   if (path === "/favorites") {
