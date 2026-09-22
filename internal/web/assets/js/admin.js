@@ -198,16 +198,23 @@ function mountLibraries(root) {
       const known = new Set(groups.map((g) => g.id));
       for (const group of groups) {
         const members = list.filter((library) => library.group_id === group.id);
-        body.append(groupHeaderRow(group, members));
+        const rows = [];
         if (!members.length) {
-          body.append(emptyRow(8, "这个分组还没有媒体库 —— 用右侧「分组」下拉把库归进来"));
+          rows.push(emptyRow(8, "这个分组还没有媒体库 —— 用右侧「分组」下拉把库归进来"));
         }
-        for (const library of members) body.append(libraryRow(library));
+        for (const library of members) rows.push(libraryRow(library));
+        const head = groupHeaderRow(group, members);
+        body.append(head);
+        for (const row of rows) body.append(row);
+        wireGroupToggle(head, rows, group.id);
       }
       const rest = list.filter((library) => !library.group_id || !known.has(library.group_id));
       if (rest.length) {
-        body.append(sectionHeaderRow("未分组", rest.length, []));
-        for (const library of rest) body.append(libraryRow(library));
+        const rows = rest.map((library) => libraryRow(library));
+        const head = sectionHeaderRow("未分组", rest.length, []);
+        body.append(head);
+        for (const row of rows) body.append(row);
+        wireGroupToggle(head, rows, "__ungrouped__");
       }
       // 库里引用了不存在的分组（理论上不该发生）会被算进"未分组"，不需要额外提示。
     } catch (err) {
@@ -216,13 +223,44 @@ function mountLibraries(root) {
     await loadBackfill();
   }
 
-  // sectionHeaderRow 是一行跨列的区块标题：组名 + 库数 + 该组的操作按钮。
+  // sectionHeaderRow 是一行跨列的区块标题：折叠箭头 + 组名 + 库数 + 该组的操作按钮。
+  // 折叠状态记在 localStorage（用户 2026-09-22：分组要能折叠显示），刷新后保持。
+  const COLLAPSE_KEY = "zv_admin_collapsed_groups";
+  function loadCollapsed() {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]")); } catch (err) { return new Set(); }
+  }
+  function saveCollapsed(set) {
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(Array.from(set))); } catch (err) { /* 隐私模式忽略 */ }
+  }
+  const collapsedGroups = loadCollapsed();
+
+  function wireGroupToggle(headerRow, rows, key) {
+    const caret = headerRow.querySelector('[data-role="group-toggle"]');
+    if (!caret) return;
+    const apply = () => {
+      const on = collapsedGroups.has(key);
+      caret.textContent = on ? "▸" : "▾";
+      caret.title = on ? "展开这一组" : "折叠这一组";
+      for (const row of rows) row.hidden = on;
+    };
+    caret.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (collapsedGroups.has(key)) collapsedGroups.delete(key); else collapsedGroups.add(key);
+      saveCollapsed(collapsedGroups);
+      apply();
+    });
+    apply();
+  }
+
   function sectionHeaderRow(title, count, actions) {
     return el("tr", null, el("td", {
       colspan: "8",
       style: { background: "var(--panel)", fontWeight: "620" },
       dataset: { role: "group-row", group: title },
     }, el("div", { class: "row" },
+      el("button", { class: "btn small", type: "button", text: "▾",
+        dataset: { role: "group-toggle" }, style: { minWidth: "28px" } }),
       el("span", { text: title }),
       el("span", { class: "muted small-note", text: count + " 个库" }),
       el("div", { class: "spacer" }),

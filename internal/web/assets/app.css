@@ -188,14 +188,16 @@ body {
 }
 
 /* ---------- admin ---------- */
-.admin { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+/* 用户 2026-09-22：后台内容多，必须**整页滚动**（标签/提示也一起滚走），
+   不要内层小盒子滚 —— 内层滚动会把列表挤成一条，几乎没法操作。 */
+.admin { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; }
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .tab {
   font: inherit; padding: 6px 12px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--line); background: var(--panel); color: var(--fg);
 }
 .tab.on { background: var(--accent); border-color: var(--accent); color: #04121f; }
-.admin-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.admin-body { flex: 0 0 auto; min-height: 0; overflow: visible; display: flex; flex-direction: column; gap: 12px; }
 .table-scroll { overflow-x: auto; }
 .grid {
   width: 100%; border-collapse: collapse; font-size: 13px;
