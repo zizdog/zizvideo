@@ -37,8 +37,8 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, domain.New("VALIDATION_USERNAME", "用户名需 3-32 位字母数字或 _-.", 400))
 		return
 	}
-	if len(req.Password) < 8 {
-		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 8 位", 400))
+	if len(req.Password) < 6 {
+		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 6 位", 400))
 		return
 	}
 	if req.Role == "" {
@@ -127,8 +127,8 @@ func (s *Server) HandlePatchUser(w http.ResponseWriter, r *http.Request) {
 
 	patch := storage.UserPatch{DisplayName: req.DisplayName, Role: req.Role, Status: req.Status}
 	if req.Password != nil {
-		if len(*req.Password) < 8 {
-			s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 8 位", 400))
+		if len(*req.Password) < 6 {
+			s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 6 位", 400))
 			return
 		}
 		hash, err := auth.HashPassword(*req.Password)

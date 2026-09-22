@@ -27,7 +27,7 @@ func (s *Server) audit(r *http.Request, action, object string, ok bool, detail s
 }
 
 func validUsername(name string) bool {
-	if len(name) < 3 || len(name) > 32 {
+	if len(name) < 2 || len(name) > 32 {
 		return false
 	}
 	for _, c := range name {
@@ -81,8 +81,8 @@ func (s *Server) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, domain.New("VALIDATION_USERNAME", "用户名需 3-32 位字母数字或 _-.", 400))
 		return
 	}
-	if len(req.Password) < 8 {
-		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 8 位", 400))
+	if len(req.Password) < 6 {
+		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 6 位", 400))
 		return
 	}
 	setupMu.Lock()

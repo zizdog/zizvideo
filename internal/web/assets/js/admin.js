@@ -103,10 +103,13 @@ function mountLibraries(root) {
   let groups = [];
   const groupNameInput = input({ placeholder: "新分组名，例如 短剧 / 电影", required: true });
   const groupAdd = el("button", { class: "btn primary", type: "button", text: "新建分组" });
-  const groupForm = el("form", { class: "panel" },
+  const groupFormInner = el("form", null,
     el("div", { class: "row" }, field("媒体库分组", groupNameInput), groupAdd),
     el("div", { class: "muted small-note",
       text: "一个库最多属于一个分组；分组用于归类显示、整组操作与整组授权。删除分组只解绑，不会删库。" }));
+  const groupForm = el("details", { class: "panel collapsible", dataset: { role: "group-form" } },
+    el("summary", { text: "新建分组" }),
+    el("div", { class: "collapsible-body" }, groupFormInner));
 
   function renderHint() {
     let text = "允许根：" + (allowed.length ? allowed.slice(0, 3).join("、") : "无");
@@ -127,7 +130,9 @@ function mountLibraries(root) {
     renderHint();
   }
 
-  const form = el("form", { class: "panel" },
+  // 默认折叠（用户 2026-09-22：上半部分占满页面，下面的列表没法操作）；
+  // 横幅 note 移出折叠区，否则提交结果/报错会被藏起来。
+  const form = el("form", null,
     el("div", { class: "row" }, field("名称", nameInput),
       field("根目录", el("div", { class: "row" }, pathInput, pick))),
     rootsHint,
@@ -135,12 +140,16 @@ function mountLibraries(root) {
       el("label", { class: "check" }, recursive, el("span", { text: "递归扫描" })),
       el("label", { class: "check" }, enabled, el("span", { text: "启用" }))),
     field("忽略规则", ignoreInput),
-    el("div", { class: "actions" }, submit, cancel),
-    note);
+    el("div", { class: "actions" }, submit, cancel));
+  // ⚠️ 折叠必须是 <details> 在外、表单在里：<summary> 放进 <form> 里不会折叠（本轮踩到）。
+  const formBox = el("details", { class: "panel collapsible", dataset: { role: "library-form" } },
+    el("summary", { text: "新建媒体库" }),
+    el("div", { class: "collapsible-body" }, form));
 
   function setEditing(library) {
     editing = library;
     if (library) {
+      formBox.open = true; // 编辑时展开表单，否则用户看不到输入框
       nameInput.value = library.name || "";
       pathInput.value = library.root_path || "";
       recursive.checked = !!library.recursive;
@@ -399,7 +408,7 @@ function mountLibraries(root) {
       groupAdd.disabled = false;
     }
   });
-  groupForm.addEventListener("submit", (event) => event.preventDefault());
+  groupFormInner.addEventListener("submit", (event) => event.preventDefault());
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -439,7 +448,7 @@ function mountLibraries(root) {
     }
   });
   const uploadTop = button("上传视频", () => uploadToLibrary(refresh));
-  root.append(form, groupForm, defaultHint, el("div", { class: "row" }, uploadTop, backfill, backfillInfo), table);
+  root.append(note, formBox, groupForm, defaultHint, el("div", { class: "row" }, uploadTop, backfill, backfillInfo), table);
   loadRoots().then(refresh);
 
   return () => {
@@ -764,7 +773,7 @@ function mountUsers(root) {
   const note = banner();
   const { table, body } = gridOf(["用户名", "显示名", "角色", "状态", "最后登录", "操作"]);
   const username = input({ placeholder: "用户名", required: true });
-  const password = input({ type: "password", placeholder: "口令", required: true });
+  const password = input({ type: "password", placeholder: "口令（至少 6 位）", required: true });
   const display = input({ placeholder: "显示名" });
   const role = selectFrom([{ value: "user", label: "user" }, { value: "admin", label: "admin" }]);
   const submit = el("button", { class: "btn primary", type: "submit", text: "新建用户" });
@@ -804,7 +813,7 @@ function mountUsers(root) {
       try { await api.updateUser(user.id, payload); await refresh(); }
       catch (err) { setBanner(note, err && err.message ? err.message : "操作失败"); }
     }
-    const newPassword = el("input", { class: "input tiny", type: "password", placeholder: "新口令" });
+    const newPassword = el("input", { class: "input tiny", type: "password", placeholder: "新口令（至少 6 位）" });
     const confirm = button("确定", async () => {
       if (!newPassword.value) return;
       await patch({ password: newPassword.value });

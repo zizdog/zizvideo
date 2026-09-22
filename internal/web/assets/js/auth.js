@@ -82,9 +82,9 @@ export function mountLogin(view, onSuccess) {
 }
 
 export function mountRegister(view, onSuccess) {
-  const username = input({ type: "text", autocomplete: "username", placeholder: "用户名（3-32 位字母数字或 _-.）", required: true });
+  const username = input({ type: "text", autocomplete: "username", placeholder: "用户名（2-32 位字母数字或 _-.）", required: true });
   const displayName = input({ type: "text", autocomplete: "nickname", placeholder: "显示名（可选）" });
-  const password = input({ type: "password", autocomplete: "new-password", placeholder: "口令（至少 8 位）", required: true });
+  const password = input({ type: "password", autocomplete: "new-password", placeholder: "口令（至少 6 位）", required: true });
   const confirm = input({ type: "password", autocomplete: "new-password", placeholder: "再输一次口令", required: true });
   const note = banner();
   const submit = el("button", { class: "btn primary", type: "submit", text: "注册并登录" });
@@ -101,7 +101,7 @@ export function mountRegister(view, onSuccess) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setBanner(note, "");
-    if (password.value.length < 8) { setBanner(note, "口令至少 8 位"); return; }
+    if (password.value.length < 6) { setBanner(note, "口令至少 6 位"); return; }
     if (password.value !== confirm.value) { setBanner(note, "两次输入的口令不一致"); return; }
     submit.disabled = true;
     try {
@@ -131,7 +131,7 @@ export function mountRegister(view, onSuccess) {
 
 export function mountSetup(view, onSuccess) {
   const username = input({ type: "text", autocomplete: "username", placeholder: "用户名", required: true });
-  const password = input({ type: "password", autocomplete: "new-password", placeholder: "口令", required: true });
+  const password = input({ type: "password", autocomplete: "new-password", placeholder: "口令（至少 6 位）", required: true });
   const confirm = input({ type: "password", autocomplete: "new-password", placeholder: "再输一次口令", required: true });
   const note = banner();
   const submit = el("button", { class: "btn primary", type: "submit", text: "创建管理员" });
@@ -146,6 +146,7 @@ export function mountSetup(view, onSuccess) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setBanner(note, "");
+    if (password.value.length < 6) { setBanner(note, "口令至少 6 位"); return; }
     if (password.value !== confirm.value) { setBanner(note, "两次输入的口令不一致"); return; }
     submit.disabled = true;
     try {

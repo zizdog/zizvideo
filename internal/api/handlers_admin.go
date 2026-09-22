@@ -95,8 +95,8 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, domain.New("VALIDATION_USERNAME", "用户名需 3-32 位字母数字或 _-.", 400))
 		return
 	}
-	if len(req.Password) < 8 {
-		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 8 位", 400))
+	if len(req.Password) < 6 {
+		s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 6 位", 400))
 		return
 	}
 	if _, err := s.DB.GetUserByUsername(req.Username); err == nil {

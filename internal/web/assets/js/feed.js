@@ -105,7 +105,7 @@ export function mountFeed(view, options = {}) {
   }
   view.append(feed, toast);
   // 底栏挂载点（条目 10）：只加容器与入口，不改播放/进度逻辑
-  view.append(mountNav(playlist ? "series" : "feed"));
+  view.append(mountNav(playlist ? (playlist.navKey || "series") : "feed"));
 
   const gate = createGestureGate();
   const state = {
@@ -1051,8 +1051,13 @@ export function mountFeed(view, options = {}) {
   document.addEventListener("visibilitychange", onVisibility);
 
   if (playlist) {
-    // 剧场：数据一次给全（剧集数量有限），不取游标、不翻页、不选库。
+    // 剧场/稍后再看：数据一次给全，不取游标、不翻页、不选库。
     appendItems(state.items.slice(), { has_more: false });
+    // 指定从某条开始（点卡片进来时用）；找不到就仍从第一条开始。
+    if (playlist.startId) {
+      const start = state.items.findIndex((item) => String(item.id) === String(playlist.startId));
+      if (start > 0) setActive(start, false);
+    }
     if (playlist.note) setTimeout(() => showToast(playlist.note), 800);
   } else {
     loadLibraries();

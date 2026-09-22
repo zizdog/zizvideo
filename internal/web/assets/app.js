@@ -8,8 +8,7 @@ import { mountAdmin } from "./js/admin.js";
 import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
-import { mountWatchLater } from "./js/watch-later.js";
-import { mountAbout } from "./js/about.js";
+import { mountWatchLater, mountWatchLaterPlay } from "./js/watch-later.js";
 import { mountMe } from "./js/me.js";
 
 const headerEl = document.getElementById("header");
@@ -74,16 +73,18 @@ function route() {
     show((view) => withNav(view, "favorites", () => mountFavorites(view)), false);
     return;
   }
-  if (path === "/watch-later") {
-    // 从「我的」进来，所以底栏高亮「我的」，而不是收藏。
+  if (path === "/later") {
+    // 从「我的」进来，底栏高亮「我的」。
     show((view) => withNav(view, "me", () => mountWatchLater(view)), false);
     return;
   }
-  if (path === "/about") {
-    // 从「我的」进来，底栏高亮「我的」。
-    show((view) => withNav(view, "me", () => mountAbout(view)), false);
+  if (path.startsWith("/later/")) {
+    // 点卡片播放：复用首页播放器（它自己挂底栏，navKey=me），这里不能再包 withNav。
+    const id = decodeURIComponent(path.slice("/later/".length));
+    show((view) => mountWatchLaterPlay(view, id), false);
     return;
   }
+  if (path === "/watch-later") { location.replace("#/later"); return; } // 旧书签
   if (path === "/me") {
     show((view) => withNav(view, "me", () => mountMe(view, { onLogout })), false);
     return;
