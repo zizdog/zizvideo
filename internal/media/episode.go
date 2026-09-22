@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // 补丁 R1：从文件名推导季/集号。识别不到一律返回空，绝不用年份/分辨率/编码数字冒充集号。
@@ -26,7 +27,9 @@ var (
 	reEpisode = regexp.MustCompile(`(?i)(?:^|[^0-9a-z])e(?:p)?(\d{1,4})(?:[^0-9]|$)`)
 	// 3) 第xx集 / 第xx話 / 第xx话（阿拉伯或中文数字，允许字间空格）
 	reChineseEpisode = regexp.MustCompile(`第\s*([0-9零一二三四五六七八九十百两\s]{1,12}?)\s*[集话話]`)
-	// 4) 尾部独立数字
+	// 4) 数字 + 集/话/話（无"第"，如 剧名03集）。注意"全24集/共24集"是总集数，另判。
+	reEpisodeSuffix = regexp.MustCompile(`(\d{1,4})\s*[集话話]`)
+	// 5) 尾部独立数字
 	reDigitRun = regexp.MustCompile(`\d+`)
 	// 编码前缀：x.264 / h.265 / hvc1 之类的数字不是集号
 	reCodecPrefix = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:x|h|avc|hevc|hvc|av1|aac|dts|ac3|eac3)[\s._-]*$`)
@@ -56,9 +59,20 @@ func ParseEpisode(name string) (EpisodeNumbers, bool) {
 			return EpisodeNumbers{Episode: episode}, true
 		}
 	}
+	// SP 是"特别篇"语义，不是正片集号（用户 2026-09-22 确认保留原规则）：
+	// `-SP01-` 这类名字一律 未识别，推荐改名成 第01集 / E01 / -01-。
 	if m := reChineseEpisode.FindStringSubmatch(stem); m != nil {
 		if episode, ok := parseNumberToken(m[1]); ok {
 			return EpisodeNumbers{Episode: episode}, true
+		}
+	}
+	// 数字 + 集/话/話（无"第"）；"全24集/共24集"是总集数，不许当集号。
+	if loc := reEpisodeSuffix.FindStringSubmatchIndex(stem); loc != nil {
+		prev, _ := utf8.DecodeLastRuneInString(stem[:loc[2]])
+		if prev != '全' && prev != '共' {
+			if episode, err := strconv.Atoi(stem[loc[2]:loc[3]]); err == nil {
+				return EpisodeNumbers{Episode: episode}, true
+			}
 		}
 	}
 	if episode, ok := trailingNumber(stem); ok {
@@ -78,6 +92,15 @@ func trailingNumber(stem string) (int, bool) {
 		}
 		if end < len(stem) && isASCIILetter(stem[end]) {
 			continue // 1080p / 720p 的一部分
+		}
+		// 数字被夹在中文词里（"传108将"、"水浒108将"、"三国24名将"）是标题的一部分，
+		// 不是集号 —— 用户 2026-09-22 的真实片名就因此被当成第 108 集（假集号）。
+		if start > 0 && end < len(stem) {
+			prev, _ := utf8.DecodeLastRuneInString(stem[:start])
+			next, _ := utf8.DecodeRuneInString(stem[end:])
+			if isCJK(prev) && isCJK(next) {
+				continue
+			}
 		}
 		value, err := strconv.Atoi(stem[start:end])
 		if err != nil {
@@ -103,6 +126,22 @@ func isYear(v int) bool {
 
 func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// isCJK 判断字符是不是中文/日文正文（汉字、假名）：数字两侧都是 CJK 时，
+// 它属于标题措辞（"传108将"），不是集号。
+func isCJK(r rune) bool {
+	switch {
+	case r >= 0x3040 && r <= 0x30ff: // 平假名 / 片假名
+		return true
+	case r >= 0x3400 && r <= 0x4dbf: // 汉字扩展 A
+		return true
+	case r >= 0x4e00 && r <= 0x9fff: // 汉字基本区
+		return true
+	case r >= 0xf900 && r <= 0xfaff: // 兼容汉字
+		return true
+	}
+	return false
 }
 
 // parseNumberToken reads an Arabic or Chinese numeral used in 第xx集.
