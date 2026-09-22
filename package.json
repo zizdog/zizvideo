@@ -1,0 +1,8 @@
+{
+  "name": "zizvideo",
+  "private": true,
+  "description": "zizvideo 前端语法门禁用（acorn 真 ES 解析器）",
+  "devDependencies": {
+    "acorn": "^8.14.0"
+  }
+}

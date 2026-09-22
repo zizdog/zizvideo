@@ -1,7 +1,12 @@
 dist/
 fixtures/
+node_modules/
+package-lock.json
 *.db
 *.db-wal
 *.db-shm
-# 发布私钥（绝不进仓库；归档副本里保留在原处）
+# 发布私钥与凭据（绝不进仓库）
 .release-key/
+.panel-credential.local
+# 交接文档含凭据线索：只存本机
+ZizVideo-当前状态.md

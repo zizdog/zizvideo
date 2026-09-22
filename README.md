@@ -140,11 +140,29 @@ zizvideo roots remove "$HOME/Movies"       --config config.json
 
 ```bash
 export GOPROXY=https://goproxy.cn,direct
-make test        # go test ./...
+npm install      # 只装 acorn：前端 JS 语法门禁（缺了 make check 会失败）
+make check       # 版本一致 + 前端真解析 + go vet + go test
+make test        # 只跑单测
 make fmt         # gofmt
 ```
 
 测试全部使用临时目录 + 临时数据库，不会读写真实媒体目录。
+
+## 发布新版本（维护者）
+
+版本真源是 `Makefile` 的 `VERSION` 与 `internal/api/api.go` 的 `Version`（两处必须一致）。
+
+```bash
+make release     # 构建 arm64 → 固定证书签名（com.zizvideo.server）→ 写 dist/apps/zizvideo/ + 索引
+make publish     # 传到公网镜像 apps/zizvideo/（走 mini 面板接口，凭据见 ZizVideo-当前状态.md）
+make verify      # 只复验线上：索引 latest / sha256 / --version
+```
+
+- **同版本绝不许换字节重传**：要改就 bump `VERSION`（例如 `0.1.2-mvp → 0.1.3-mvp`）。
+- 公网镜像 `https://mirror.zizdog.com:8888/apps/zizvideo/` 上的 `manifest.json` 是**面板认可的版本真源**：
+  发布完面板后台会出现「可更新」，由使用者在面板里手动更新。
+- 本项目是独立仓库；与 ZizPanel（面板）的对接只有两个运行接口，见 `CONTRACT.md`。
+  面板仓库：`https://github.com/zizdog/zizpanel`（本机 `/Users/zizdog/Documents/DeepSeek/zizpanel`）。
 门禁覆盖：Range 206/416/多段回退、路径穿越与符号链接越界、CSRF、越权与禁用即时生效、
 允许根增删的持久化与回读（被拒时配置文件字节不变）、有库在用拒绝删除、
 目录浏览器只回目录、扫描前越界拒绝且不遍历、扫描忽略/增量/两阶段删除/interrupted、
