@@ -30,12 +30,14 @@ VERIFY_ONLY=0
 ALLOW_EXISTING=0
 SELF_TEST=0
 DEEP="${VERIFY_DEEP:-0}"
+PRUNE="${PRUNE:-1}"
 for arg in "$@"; do
   case "$arg" in
     --verify-only) VERIFY_ONLY=1 ;;
     --allow-existing-version) ALLOW_EXISTING=1 ;;
     --self-test) SELF_TEST=1 ;;
     --deep) DEEP=1 ;;
+    --no-prune) PRUNE=0 ;;
     *) echo "!! 未知参数：$arg"; exit 2 ;;
   esac
 done
@@ -161,6 +163,61 @@ PY
   fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
   phase "复验"
+}
+
+# prune_old_versions：发布成功后清理镜像上的旧版本目录，**只保留当前版本**（用户 2026-09-22 要求）。
+# 安全约束（这里是递归删除，必须保守）：
+#   · 只在**新版本已经复验通过之后**才调用（绝不先删后传）；
+#   · 只删名字严格匹配 <数字.数字.数字>-mvp 的**目录**，且路径必须在 $APP_DIR 下；
+#   · 顶层文件（manifest.json / 安装器 / 证书）一律不碰；
+#   · 删完**回读目录**核对，残留就如实报错，不假装成功。
+prune_old_versions() {
+  info "清理镜像旧版本（只保留 ${VERSION}）"
+  local listing
+  listing="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR" 2>/dev/null || true)"
+  [ -n "$listing" ] || die "清理失败：列不出 $APP_DIR（面板接口异常）"
+  local olds
+  olds="$(printf '%s' "$listing" | VERSION="$VERSION" APP_DIR="$APP_DIR" python3 -c '
+import json, os, re, sys
+ver, app = os.environ["VERSION"], os.environ["APP_DIR"].rstrip("/")
+pat = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-mvp$")
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+for e in (data.get("data") or {}).get("entries") or []:
+    name = str(e.get("name") or "")
+    path = str(e.get("path") or (app + "/" + name))
+    if not e.get("is_dir") or name == ver or not pat.match(name):
+        continue
+    if not path.startswith(app + "/") or ".." in path:
+        continue
+    print(path)
+')"
+  if [ -z "$olds" ]; then
+    ok "没有需要清理的旧版本（镜像上只有 ${VERSION}）"
+    return 0
+  fi
+  echo "  将删除：$(printf '%s' "$olds" | tr '\n' ' ')"
+  local body
+  body="$(printf '%s' "$olds" | python3 -c 'import json,sys; print(json.dumps({"paths":[l for l in sys.stdin.read().split("\n") if l], "recursive": True}))')"
+  api POST /api/v1/files/delete -H 'Content-Type: application/json' -d "$body" >/dev/null \
+    || die "删除旧版本失败（面板接口拒绝；旧版本仍在，不影响新版本使用）"
+  local after
+  after="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR" 2>/dev/null || true)"
+  printf '%s' "$after" | VERSION="$VERSION" python3 -c '
+import json, os, re, sys
+ver = os.environ["VERSION"]
+pat = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-mvp$")
+data = json.load(sys.stdin)
+left = [str(e.get("name")) for e in (data.get("data") or {}).get("entries") or []
+        if e.get("is_dir") and pat.match(str(e.get("name") or ""))]
+bad = [n for n in left if n != ver]
+if bad:
+    raise SystemExit("!! 回读发现旧版本仍在：" + ", ".join(bad))
+print("  ✓ 回读确认：版本目录只剩 %s/" % ver)
+' || die "清理后回读不符（见上）"
+  phase "清理旧版本"
 }
 
 if [ "$VERIFY_ONLY" = "1" ]; then
@@ -304,5 +361,10 @@ ok "manifest.json（版本真源：latest=${VERSION}）"
 phase "上传顶层索引"
 
 MIRROR_BASE="$MIRROR_BASE" verify_remote
+if [ "$PRUNE" = "1" ]; then
+  prune_old_versions
+else
+  info "（--no-prune：保留镜像上的旧版本，便于回滚）"
+fi
 echo
 info "→ 可测：面板「应用市场 → zizvideo」现在应显示「可更新 v${VERSION}」，你手动点更新即可。"
