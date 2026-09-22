@@ -39,6 +39,8 @@ export const RECORD_LISTS = {
 };
 
 // videoCard：16:9 封面 + 角标（时长/已看完/看到几分）+ 观看进度条 + 两行标题。
+// options 可覆盖：href（链接目标）、badge（角标文本）、leading（封面左上角节点，如勾选框）、
+// meta（标题下的补充行，管理端"去重预览"要用：媒体库/大小/路径…）。
 export function videoCard(item, options) {
   const opts = options || {};
   const list = opts.list || null;
@@ -50,18 +52,59 @@ export function videoCard(item, options) {
   if (progress.completed) badge = "已看完";
   else if (list && list.badge === "progress" && position > 0) badge = fmtDuration(position) + "/" + fmtDuration(duration);
   else badge = fmtDuration(duration);
-  const href = list ? ("#/play/" + encodeURIComponent(list.key) + "/" + encodeURIComponent(item.id)) : "#/feed";
+  if (typeof opts.badge === "string" && opts.badge) badge = opts.badge;
+  const href = opts.href || (list ? ("#/play/" + encodeURIComponent(list.key) + "/" + encodeURIComponent(item.id)) : "#/feed");
   const cover = item.cover_url
     ? el("img", { src: item.cover_url, alt: "", loading: "lazy" })
     : el("div", { class: "no-cover", text: "无封面" });
-  return el("a", {
-    class: "video-card", href, dataset: { role: "video-card", id: String(item.id) },
+  // 封面+标题放进链接；勾选框（leading）挂在**链接外面**（同一张卡片的兄弟节点）。
+  // 为什么不能让勾选框当 <a> 的子元素：点它会连带触发链接跳转；而 preventDefault 又会
+  // 把"切换选中"这个默认动作一起取消 —— 实测"勾选框点不动"就是这么来的。
+  const link = el("a", {
+    class: "video-open", href,
     title: item.title || ("#" + item.id),
   },
     el("div", { class: "video-cover" }, cover,
       el("span", { class: "video-badge", text: badge }),
       pct > 0 && !progress.completed ? el("span", { class: "video-progress", style: { width: pct + "%" } }) : null),
     el("div", { class: "video-title", text: item.title || ("#" + item.id) }));
+  const card = el("div", {
+    class: "video-card", dataset: { role: "video-card", id: String(item.id) },
+  }, link);
+  if (opts.leading) card.append(el("span", { class: "video-lead" }, opts.leading));
+  // meta 行（媒体库/大小/路径…，管理端"去重预览"用）收在一个容器里，便于样式化
+  if (opts.meta && opts.meta.length) {
+    const box = el("div", { class: "video-meta" });
+    for (const line of opts.meta) box.append(line instanceof Node ? line : el("div", { text: String(line) }));
+    card.append(box);
+  }
+  return card;
+}
+
+// mountSinglePlay：单条视频预览（管理端"去重"要对比两个疑似重复的视频）。
+// 仍然复用唯一那份播放器 —— 只是播放列表里只有一条。
+export function mountSinglePlay(view, mediaId) {
+  const box = el("div", { class: "page" });
+  view.append(box);
+  let cleanup = null;
+  let cancelled = false;
+  api.media(mediaId).then((item) => {
+    if (cancelled) return;
+    if (!item || !item.id) {
+      box.append(el("div", { class: "card info", text: "找不到这个视频" }));
+      return;
+    }
+    cleanup = mountFeed(box, {
+      playlist: { title: item.title || "预览", items: [item], startId: item.id, navKey: "me" },
+    });
+  }).catch((err) => {
+    if (cancelled) return;
+    box.append(el("div", { class: "card info", text: err && err.message ? err.message : "加载失败" }));
+  });
+  return function cleanupSinglePlay() {
+    cancelled = true;
+    if (cleanup) cleanup();
+  };
 }
 
 // videoGrid：一组视频 → 卡片网格（四个列表共用同一套 DOM 与样式）。

@@ -5,6 +5,7 @@ import { el, clear, banner, setBanner, field, input, fmtDuration, fmtBytes, fmtD
 import { openDirectoryPicker } from "./roots.js";
 import { uploadToLibrary } from "./uploads.js";
 import { mountSeriesTab } from "./admin-series.js";
+import { videoCard } from "./cards.js";
 
 function button(label, onclick, extraClass) {
   return el("button", {
@@ -1017,30 +1018,47 @@ function mountDuplicates(root) {
   const summary = el("div", { class: "muted" });
   const progress = el("div", { class: "muted" });
   const confirmInput = input({ placeholder: "输入「删除文件」才可删文件" });
-  const { table, body } = gridOf(["选", "标题", "媒体库", "路径", "时长", "大小", "加入时间", "文件"]);
+  const groupsBox = el("div", { dataset: { role: "dup-groups" } });
   const selected = new Set();
+  const picks = () => Array.from(groupsBox.querySelectorAll('[data-role="dup-pick"]'));
 
+  // 每组一张面板 + 一组**可预览**的卡片：封面点开就是播放（用户 2026-09-22：
+  // "去重要有疑似重复视频的预览，没有预览怎么操作"）。卡片组件与观看面同一份（cards.js）。
   function render(list) {
-    clear(body);
+    clear(groupsBox);
     selected.clear();
     const groups = asArray(list);
-    if (!groups.length) { body.append(emptyRow(8, "没有疑似重复")); return; }
-    for (const group of groups) {
+    if (!groups.length) { groupsBox.append(el("div", { class: "muted", text: "没有疑似重复" })); return; }
+    groups.forEach((group, index) => {
       const members = asArray(group && group.members);
-      body.append(el("tr", null, el("td", { colspan: "8",
-        text: "疑似重复组：大小 " + fmtBytes(group.size_bytes) + "、时长 " + fmtDuration(group.duration_ms) +
-          "（" + members.length + " 个）" })));
+      const grid = el("div", { class: "video-grid", dataset: { role: "dup-grid" } });
       for (const member of members) {
-        const check = el("input", { type: "checkbox" });
+        const check = el("input", {
+          type: "checkbox", title: "勾选后可用下方按钮删记录/删文件",
+          dataset: { role: "dup-pick", id: String(member.id) },
+        });
         check.addEventListener("change", () => {
           if (check.checked) selected.add(member.id); else selected.delete(member.id);
         });
-        body.append(el("tr", null, el("td", null, check), cell(member.title || "-"),
-          cell(member.library_name || member.library_id), cell(member.path),
-          cell(fmtDuration(member.duration_ms)), cell(fmtBytes(member.size_bytes)),
-          cell(fmtDate(member.created_at)), cell(member.file_exists ? "在" : "不在")));
+        grid.append(videoCard(member, {
+          href: "#/one/" + encodeURIComponent(member.id), // 点封面 = 预览播放这条
+          badge: fmtBytes(member.size_bytes),
+          leading: check,
+          meta: [
+            (member.library_name || member.library_id || "") + " · " + (member.file_exists ? "文件在" : "文件不在"),
+            fmtDuration(member.duration_ms) + " · " + fmtDate(member.created_at),
+            el("div", { class: "path", text: member.path || "" }),
+          ],
+        }));
       }
-    }
+      groupsBox.append(el("div", {
+        class: "panel", dataset: { role: "dup-group", index: String(index) },
+      },
+        el("div", { class: "panel-title",
+          text: "疑似重复 " + members.length + " 个 · " + fmtBytes(group.size_bytes) + " · " + fmtDuration(group.duration_ms) }),
+        el("div", { class: "muted small-note", text: "大小+时长相同只是疑似，不代表内容相同 —— 点封面即可预览播放再决定。" }),
+        grid));
+    });
   }
 
   async function load() {
@@ -1111,10 +1129,17 @@ function mountDuplicates(root) {
     }
   }, "danger");
 
+  const pickAll = button("全选", () => {
+    for (const box of picks()) { box.checked = true; selected.add(box.dataset.id); }
+  });
+  const pickNone = button("清空选择", () => {
+    for (const box of picks()) { box.checked = false; }
+    selected.clear();
+  });
   root.append(note, el("div", { class: "panel" },
     el("div", { class: "row" }, detect, summary),
-    el("div", { class: "muted small-note", text: "判据：大小 + 时长相同 ⇒ 疑似重复，不代表内容相同。" }),
-    el("div", { class: "row" }, delRecords, confirmInput, delFiles), progress), table);
+    el("div", { class: "muted small-note", text: "判据：大小 + 时长相同 ⇒ 疑似重复，不代表内容相同；点封面可预览。" }),
+    el("div", { class: "row" }, pickAll, pickNone, delRecords, confirmInput, delFiles), progress), groupsBox);
   load();
 
   return () => { for (const timer of timers) clearInterval(timer); };

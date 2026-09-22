@@ -9,7 +9,7 @@ import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
 import { mountWatchLater, mountWatchLaterPlay } from "./js/watch-later.js";
-import { mountRecordPlay } from "./js/cards.js";
+import { mountRecordPlay, mountSinglePlay } from "./js/cards.js";
 import { mountMe } from "./js/me.js";
 
 const headerEl = document.getElementById("header");
@@ -83,6 +83,12 @@ function route() {
     // 点卡片播放：复用首页播放器（它自己挂底栏，navKey=me），这里不能再包 withNav。
     const id = decodeURIComponent(path.slice("/later/".length));
     show((view) => mountWatchLaterPlay(view, id), false);
+    return;
+  }
+  // 单条预览（后台"去重"页点封面）：仍然用唯一那份播放器，列表里只有一条
+  if (path.startsWith("/one/")) {
+    const id = decodeURIComponent(path.slice("/one/".length));
+    show((view) => mountSinglePlay(view, id), false);
     return;
   }
   // 点赞/收藏/历史 的卡片点开：同一套"把记录列表当播放列表"的实现
