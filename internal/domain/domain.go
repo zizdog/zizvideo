@@ -56,9 +56,11 @@ type Library struct {
 	Enabled            bool     `json:"enabled"`
 	IgnoreRules        []string `json:"ignore_rules"`
 	DefaultForNewUsers bool     `json:"default_for_new_users"`
-	MountID            string   `json:"-"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
+	// GroupID 为空 = 未分组（一个库最多属于一个组，用户 2026-09-22）。
+	GroupID   string `json:"group_id"`
+	MountID   string `json:"-"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // Codecs holds the stream codec names we act on.

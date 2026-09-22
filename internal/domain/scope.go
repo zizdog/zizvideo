@@ -18,8 +18,11 @@ func (sc LibraryScope) Allows(libraryID string) bool {
 // Empty 报告范围是否什么都看不到。
 func (sc LibraryScope) Empty() bool { return !sc.All && len(sc.IDs) == 0 }
 
-// LibraryBrief 是用户端的库形状：只有 id/name，root_path 绝不外泄（E.2 #4）。
+// LibraryBrief 是用户端的库形状：只有 id/name（+ 组名），root_path 绝不外泄（E.2 #4）。
 type LibraryBrief struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// GroupID/GroupName 为空 = 未分组；观看端据此按组显示（用户 2026-09-22）。
+	GroupID   string `json:"group_id"`
+	GroupName string `json:"group_name"`
 }

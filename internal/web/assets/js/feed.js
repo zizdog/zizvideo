@@ -806,13 +806,38 @@ export function mountFeed(view) {
       type: "button", text: "全部库" });
     all.addEventListener("click", () => { closePanels(); switchScope("", ""); });
     picker.append(all);
-    for (const lib of state.libraries) {
-      const name = lib.name || lib.id;
-      const row = el("button", { class: "lib-chip" + (state.scope === lib.id ? " all" : ""),
-        type: "button", text: name });
-      row.addEventListener("click", () => { closePanels(); switchScope(lib.id, name); });
-      picker.append(row);
+    // 按分组显示（用户 2026-09-22）：库多了以后一堆 chip 分不清，先出组名再出库。
+    for (const entry of groupLibraries(state.libraries)) {
+      if (entry.name) {
+        picker.append(el("div", {
+          class: "muted small-note", text: entry.name, dataset: { role: "lib-group" },
+        }));
+      }
+      for (const lib of entry.items) {
+        const name = lib.name || lib.id;
+        const row = el("button", { class: "lib-chip" + (state.scope === lib.id ? " all" : ""),
+          type: "button", text: name });
+        row.addEventListener("click", () => { closePanels(); switchScope(lib.id, name); });
+        picker.append(row);
+      }
     }
+  }
+
+  // groupLibraries 把可访问库按分组整理（保持后端顺序，未分组排最后）。
+  function groupLibraries(list) {
+    const out = [];
+    const index = new Map();
+    for (const lib of asArray(list)) {
+      const key = lib.group_id || "";
+      let entry = index.get(key);
+      if (!entry) {
+        entry = { key, name: lib.group_name || "", items: [] };
+        index.set(key, entry);
+        out.push(entry);
+      }
+      entry.items.push(lib);
+    }
+    return out.sort((a, b) => (a.key ? 0 : 1) - (b.key ? 0 : 1));
   }
 
   async function loadLibraries() {

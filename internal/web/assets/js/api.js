@@ -107,6 +107,21 @@ export const api = {
   defaultLibraries: () => request("GET", "/api/v1/admin/libraries/defaults"),
   backfillDefaults: () => request("POST", "/api/v1/admin/libraries/defaults/backfill", { confirm: true }),
 
+  // 媒体库分组（用户 2026-09-22）：组只做归类/批量操作/批量授权，鉴权判据仍在后端。
+  libraryGroups: () => request("GET", "/api/v1/admin/library-groups"),
+  createLibraryGroup: (body) => request("POST", "/api/v1/admin/library-groups", body),
+  updateLibraryGroup: (id, body) => request("PATCH", "/api/v1/admin/library-groups/" + encodeURIComponent(id), body),
+  deleteLibraryGroup: (id) => request("DELETE", "/api/v1/admin/library-groups/" + encodeURIComponent(id)),
+  setGroupLibraries: (id, libraryIds) =>
+    request("PUT", "/api/v1/admin/library-groups/" + encodeURIComponent(id) + "/libraries", { library_ids: libraryIds }),
+  libraryGroupAction: (id, action) =>
+    request("POST", "/api/v1/admin/library-groups/" + encodeURIComponent(id) + "/action", { action }),
+  setLibraryGroup: (libraryId, groupId) =>
+    request("PUT", "/api/v1/libraries/" + encodeURIComponent(libraryId) + "/group", { group_id: groupId }),
+  userLibraryGroups: (id) => request("GET", "/api/v1/admin/users/" + encodeURIComponent(id) + "/library-groups"),
+  setUserLibraryGroups: (id, groupIds) =>
+    request("PUT", "/api/v1/admin/users/" + encodeURIComponent(id) + "/library-groups", { group_ids: groupIds }),
+
   libraries: () => request("GET", "/api/v1/libraries"),
   library: (id) => request("GET", "/api/v1/libraries/" + encodeURIComponent(id)),
   createLibrary: (body) => request("POST", "/api/v1/libraries", body),

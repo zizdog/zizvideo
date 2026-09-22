@@ -71,7 +71,7 @@ function isUnder(path, roots) {
 function mountLibraries(root) {
   const note = banner();
   const timers = [];
-  const { table, body } = gridOf(["名称", "根目录", "递归", "启用", "新用户默认可看", "创建时间", "操作"]);
+  const { table, body } = gridOf(["名称", "根目录", "递归", "启用", "分组", "新用户默认可看", "创建时间", "操作"]);
   // 未设置默认库 = 新用户看不到任何内容（fail-closed），常驻提示（B.8）。
   const defaultHint = el("div", {
     class: "banner", hidden: true, dataset: { role: "default-unset-hint" },
@@ -99,6 +99,14 @@ function mountLibraries(root) {
   const submit = el("button", { class: "btn primary", type: "submit", text: "新建" });
   const cancel = el("button", { class: "btn", type: "button", text: "取消", hidden: true });
   let editing = null;
+  // 分组（用户 2026-09-22）：一个库最多一个组；组用于归类显示、整组操作、整组授权。
+  let groups = [];
+  const groupNameInput = input({ placeholder: "新分组名，例如 短剧 / 电影", required: true });
+  const groupAdd = el("button", { class: "btn primary", type: "button", text: "新建分组" });
+  const groupForm = el("form", { class: "panel" },
+    el("div", { class: "row" }, field("媒体库分组", groupNameInput), groupAdd),
+    el("div", { class: "muted small-note",
+      text: "一个库最多属于一个分组；分组用于归类显示、整组操作与整组授权。删除分组只解绑，不会删库。" }));
 
   function renderHint() {
     let text = "允许根：" + (allowed.length ? allowed.slice(0, 3).join("、") : "无");
@@ -170,15 +178,106 @@ function mountLibraries(root) {
   async function refresh() {
     setBanner(note, "");
     try {
-      const result = await api.libraries();
-      const list = result && Array.isArray(result.list) ? result.list : [];
+      const [libResult, groupResult] = await Promise.all([api.libraries(), api.libraryGroups()]);
+      const list = libResult && Array.isArray(libResult.list) ? libResult.list : [];
+      groups = groupResult && Array.isArray(groupResult.list) ? groupResult.list : [];
       clear(body);
-      if (!list.length) body.append(emptyRow(7, "暂无媒体库"));
-      for (const library of list) body.append(libraryRow(library));
+      if (!list.length) body.append(emptyRow(8, "暂无媒体库"));
+      // 按组分区显示：每组一个小标题行（带整组操作），最后是"未分组"。
+      // 组顺序按后端给的 sort_order；库在组内保持原来的创建顺序。
+      const known = new Set(groups.map((g) => g.id));
+      for (const group of groups) {
+        const members = list.filter((library) => library.group_id === group.id);
+        body.append(groupHeaderRow(group, members));
+        if (!members.length) {
+          body.append(emptyRow(8, "这个分组还没有媒体库 —— 用右侧「分组」下拉把库归进来"));
+        }
+        for (const library of members) body.append(libraryRow(library));
+      }
+      const rest = list.filter((library) => !library.group_id || !known.has(library.group_id));
+      if (rest.length) {
+        body.append(sectionHeaderRow("未分组", rest.length, []));
+        for (const library of rest) body.append(libraryRow(library));
+      }
+      // 库里引用了不存在的分组（理论上不该发生）会被算进"未分组"，不需要额外提示。
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "加载失败");
     }
     await loadBackfill();
+  }
+
+  // sectionHeaderRow 是一行跨列的区块标题：组名 + 库数 + 该组的操作按钮。
+  function sectionHeaderRow(title, count, actions) {
+    return el("tr", null, el("td", {
+      colspan: "8",
+      style: { background: "var(--panel)", fontWeight: "620" },
+      dataset: { role: "group-row", group: title },
+    }, el("div", { class: "row" },
+      el("span", { text: title }),
+      el("span", { class: "muted small-note", text: count + " 个库" }),
+      el("div", { class: "spacer" }),
+      el("div", { class: "actions" }, actions))));
+  }
+
+  function groupHeaderRow(group, members) {
+    return sectionHeaderRow(group.name, members.length, [
+      button("启用整组", () => groupAction(group, "enable")),
+      button("停用整组", () => groupAction(group, "disable")),
+      button("扫描整组", () => groupAction(group, "scan")),
+      button("改名", () => renameGroup(group)),
+      button("删除分组", () => removeGroup(group), "danger"),
+    ]);
+  }
+
+  // 整组操作的结果一律以后端计数为准。注意：refresh() 开头会清横幅，
+  // 所以结果必须**在 refresh 之后**写，否则用户点了操作什么提示都看不到（实测踩过）。
+  async function groupAction(group, action) {
+    setBanner(note, "");
+    try {
+      const data = await api.libraryGroupAction(group.id, action);
+      let message;
+      if (action === "scan") {
+        const started = Number(data && data.started) || 0;
+        const total = Number(data && data.total) || 0;
+        const failed = asArray(data && data.failed);
+        message = "「" + group.name + "」整组扫描：已启动 " + started + "/" + total +
+          (failed.length
+            ? "，未启动 " + failed.length + " 个（" + failed.map((f) => (f.name || f.library_id) + "：" + f.error).join("；") + "）"
+            : "");
+      } else {
+        const changed = Number(data && data.changed) || 0;
+        message = "「" + group.name + "」整组" + (action === "enable" ? "启用" : "停用") + "：" + changed + " 个库";
+      }
+      await refresh();
+      setBanner(note, message);
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "操作失败");
+    }
+  }
+
+  async function renameGroup(group) {
+    const next = window.prompt("分组名", group.name || "");
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === group.name) return;
+    try {
+      await api.updateLibraryGroup(group.id, { name: trimmed });
+      await refresh();
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "改名失败");
+    }
+  }
+
+  async function removeGroup(group) {
+    if (!window.confirm("删除分组「" + group.name + "」？组内 " + group.library_count +
+      " 个库会回到未分组，库和文件都保留。")) return;
+    try {
+      const data = await api.deleteLibraryGroup(group.id);
+      await refresh();
+      setBanner(note, "已删除分组，解绑 " + (Number(data && data.unbound_libraries) || 0) + " 个库（库与文件都保留）");
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "删除失败");
+    }
   }
 
   function pollScan(taskId, line) {
@@ -231,6 +330,22 @@ function mountLibraries(root) {
       type: "checkbox", checked: !!library.default_for_new_users,
       dataset: { role: "default-for-new-users", id: library.id },
     });
+    // 归组下拉：未分组 + 全部分组。改动立即提交并回读（失败就提示，不改本地状态装成功）。
+    const groupSelect = selectFrom([{ value: "", label: "未分组" }].concat(
+      groups.map((g) => ({ value: g.id, label: g.name }))));
+    groupSelect.value = library.group_id || "";
+    groupSelect.dataset.role = "library-group";
+    groupSelect.addEventListener("change", async () => {
+      setBanner(note, "");
+      groupSelect.disabled = true;
+      try {
+        await api.setLibraryGroup(library.id, groupSelect.value);
+        await refresh();
+      } catch (err) {
+        setBanner(note, err && err.message ? err.message : "归组失败");
+        groupSelect.disabled = false;
+      }
+    });
     isDefault.addEventListener("change", async () => {
       setBanner(note, "");
       isDefault.disabled = true;
@@ -245,9 +360,28 @@ function mountLibraries(root) {
       }
     });
     return rowOf([library.name, library.root_path, library.recursive ? "是" : "否",
-      library.enabled ? "是" : "否", el("label", { class: "check" }, isDefault),
+      library.enabled ? "是" : "否", groupSelect, el("label", { class: "check" }, isDefault),
       fmtDate(library.created_at), holder]);
   }
+
+  // 新建分组：失败（重名/空名）如实提示，不假装成功。
+  groupAdd.addEventListener("click", async () => {
+    const name = groupNameInput.value.trim();
+    if (!name) { setBanner(note, "请填分组名"); return; }
+    setBanner(note, "");
+    groupAdd.disabled = true;
+    try {
+      await api.createLibraryGroup({ name });
+      groupNameInput.value = "";
+      await refresh();
+      setBanner(note, "已创建分组「" + name + "」");
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "建组失败");
+    } finally {
+      groupAdd.disabled = false;
+    }
+  });
+  groupForm.addEventListener("submit", (event) => event.preventDefault());
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -287,7 +421,7 @@ function mountLibraries(root) {
     }
   });
   const uploadTop = button("上传视频", () => uploadToLibrary(refresh));
-  root.append(form, defaultHint, el("div", { class: "row" }, uploadTop, backfill, backfillInfo), table);
+  root.append(form, groupForm, defaultHint, el("div", { class: "row" }, uploadTop, backfill, backfillInfo), table);
   loadRoots().then(refresh);
 
   return () => {
@@ -473,19 +607,22 @@ function openUserLibrariesDrawer(user, onSaved) {
   document.body.append(overlay);
 
   const checks = new Map();
+  const groupChecks = new Map();
   const listBox = el("div", { class: "panel" });
+  const groupsBox = el("div", { class: "panel" });
   const state = el("div", { class: "muted small-note", dataset: { role: "user-libraries-state" } });
   const save = el("button", { class: "btn primary", type: "button", text: "保存", dataset: { role: "save-user-libraries" } });
   const selectAll = el("button", { class: "btn small", type: "button", text: "全选" });
   const selectNone = el("button", { class: "btn small", type: "button", text: "全不选" });
   let libraries = [];
+  let groups = [];
 
-  function paint(grants) {
+  function paint(grants, groupGrants) {
     const sources = new Map();
     for (const grant of asArray(grants)) sources.set(grant.library_id, grant.source);
     clear(listBox);
     checks.clear();
-    if (!libraries.length) { listBox.append(el("div", { class: "muted", text: "暂无媒体库" })); return; }
+    if (!libraries.length) { listBox.append(el("div", { class: "muted", text: "暂无媒体库" })); }
     for (const library of libraries) {
       const check = el("input", { type: "checkbox", checked: sources.has(library.id) });
       const tag = sources.has(library.id)
@@ -493,6 +630,22 @@ function openUserLibrariesDrawer(user, onSaved) {
       checks.set(library.id, check);
       listBox.append(el("label", { class: "check" }, check,
         el("span", { text: (library.name || library.id) + tag })));
+    }
+
+    // 组授权：勾一个组 = 该组当下及以后加入的库都可见（与上面的直授是并集）。
+    const granted = new Set(asArray(groupGrants).map((g) => g.group_id));
+    clear(groupsBox);
+    groupChecks.clear();
+    groupsBox.append(el("div", { class: "panel-title", text: "按分组授权（与上面的逐库授权是并集）" }));
+    if (!groups.length) {
+      groupsBox.append(el("div", { class: "muted", text: "还没有分组，可在「媒体库」页新建" }));
+      return;
+    }
+    for (const group of groups) {
+      const check = el("input", { type: "checkbox", checked: granted.has(group.id) });
+      groupChecks.set(group.id, check);
+      groupsBox.append(el("label", { class: "check" }, check,
+        el("span", { text: (group.name || group.id) + "（" + (Number(group.library_count) || 0) + " 个库）" })));
     }
   }
 
@@ -503,9 +656,14 @@ function openUserLibrariesDrawer(user, onSaved) {
     try {
       const result = await api.libraries();
       libraries = asArray(result && result.list);
-      const view = await api.userLibraries(user.id);
-      paint(view && view.grants);
-      state.textContent = "已回读 " + asArray(view && view.library_ids).length + " 个库";
+      const groupResult = await api.libraryGroups();
+      groups = asArray(groupResult && groupResult.list);
+      const [view, groupView] = await Promise.all([
+        api.userLibraries(user.id), api.userLibraryGroups(user.id),
+      ]);
+      paint(view && view.grants, groupView && groupView.grants);
+      state.textContent = "已回读 " + asArray(view && view.library_ids).length + " 个直授库、" +
+        asArray(groupView && groupView.group_ids).length + " 个授权组";
     } catch (err) {
       state.textContent = "";
       setBanner(note, err && err.message ? err.message : "读取失败");
@@ -518,19 +676,29 @@ function openUserLibrariesDrawer(user, onSaved) {
     state.textContent = "保存中…";
     const ids = [];
     for (const [id, check] of checks) if (check.checked) ids.push(id);
+    const groupIds = [];
+    for (const [id, check] of groupChecks) if (check.checked) groupIds.push(id);
     try {
       const view = await api.setUserLibraries(user.id, ids);
-      paint(view && view.grants);
-      state.textContent = "已保存，回读 " + asArray(view && view.library_ids).length + " 个库";
+      const groupView = await api.setUserLibraryGroups(user.id, groupIds);
+      paint(view && view.grants, groupView && groupView.grants);
+      state.textContent = "已保存，回读 " + asArray(view && view.library_ids).length + " 个直授库、" +
+        asArray(groupView && groupView.group_ids).length + " 个授权组";
       if (onSaved) onSaved();
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "保存失败");
     } finally { save.disabled = false; }
   });
 
-  selectAll.addEventListener("click", () => { for (const check of checks.values()) check.checked = true; });
-  selectNone.addEventListener("click", () => { for (const check of checks.values()) check.checked = false; });
-  body.append(listBox, el("div", { class: "actions" }, selectAll, selectNone, save), state);
+  selectAll.addEventListener("click", () => {
+    for (const check of checks.values()) check.checked = true;
+    for (const check of groupChecks.values()) check.checked = true;
+  });
+  selectNone.addEventListener("click", () => {
+    for (const check of checks.values()) check.checked = false;
+    for (const check of groupChecks.values()) check.checked = false;
+  });
+  body.append(listBox, groupsBox, el("div", { class: "actions" }, selectAll, selectNone, save), state);
   load();
 }
 

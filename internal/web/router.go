@@ -46,6 +46,18 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", s.RequireAdmin(s.HandleStartScan))
 	mux.HandleFunc("GET /api/v1/scan-tasks/{id}", s.RequireAdmin(s.HandleGetScanTask))
 
+	// 媒体库分组（用户 2026-09-22）：归类显示 + 批量操作 + 批量授权。
+	// 组本身不是鉴权判据 —— 可见性仍由 storage.UserLibraryIDs 的"直授 ∪ 组授"决定。
+	mux.HandleFunc("GET /api/v1/admin/library-groups", s.RequireAdmin(s.HandleListLibraryGroups))
+	mux.HandleFunc("POST /api/v1/admin/library-groups", s.RequireAdmin(s.HandleCreateLibraryGroup))
+	mux.HandleFunc("PATCH /api/v1/admin/library-groups/{id}", s.RequireAdmin(s.HandlePatchLibraryGroup))
+	mux.HandleFunc("DELETE /api/v1/admin/library-groups/{id}", s.RequireAdmin(s.HandleDeleteLibraryGroup))
+	mux.HandleFunc("PUT /api/v1/admin/library-groups/{id}/libraries", s.RequireAdmin(s.HandlePutGroupLibraries))
+	mux.HandleFunc("POST /api/v1/admin/library-groups/{id}/action", s.RequireAdmin(s.HandleLibraryGroupAction))
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/group", s.RequireAdmin(s.HandleSetLibraryGroup))
+	mux.HandleFunc("GET /api/v1/admin/users/{id}/library-groups", s.RequireAdmin(s.HandleGetUserLibraryGroups))
+	mux.HandleFunc("PUT /api/v1/admin/users/{id}/library-groups", s.RequireAdmin(s.HandlePutUserLibraryGroups))
+
 	// 用户端读内容一律走 s.WithLibraryScope（唯一判据）；列表类静默过滤，单条越权 404。
 	mux.HandleFunc("GET /api/v1/media", s.RequireAuth(s.WithLibraryScope(s.HandleListMedia)))
 	mux.HandleFunc("GET /api/v1/media/{id}", s.RequireAuth(s.WithLibraryScope(s.HandleGetMedia)))

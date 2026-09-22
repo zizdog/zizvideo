@@ -9,14 +9,14 @@ import (
 )
 
 const libCols = `id, name, root_path, recursive, enabled, ignore_rules,
-	default_for_new_users, COALESCE(mount_id,''), created_at, updated_at`
+	default_for_new_users, COALESCE(group_id,''), COALESCE(mount_id,''), created_at, updated_at`
 
 func scanLibrary(s interface{ Scan(...any) error }) (*domain.Library, error) {
 	var l domain.Library
 	var recursive, enabled, defaultNew int
 	var rules string
 	if err := s.Scan(&l.ID, &l.Name, &l.RootPath, &recursive, &enabled, &rules,
-		&defaultNew, &l.MountID, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		&defaultNew, &l.GroupID, &l.MountID, &l.CreatedAt, &l.UpdatedAt); err != nil {
 		return nil, err
 	}
 	l.Recursive = recursive != 0
