@@ -37,8 +37,11 @@ type mediaItem struct {
 	Progress      progressBrief `json:"progress"`
 	Favorite      bool          `json:"favorite"`
 	WatchLater    bool          `json:"watch_later"`
-	Reaction      any           `json:"reaction"`
-	CreatedAt     string        `json:"created_at"`
+	// Missing：文件已不在磁盘上（扫描只打了 missing_since，status 仍是 ready）。
+	// 透出来是为了不再谎报"ready"——前端据此显示"文件不在了"而不是"状态：ready"。
+	Missing   bool   `json:"missing"`
+	Reaction  any    `json:"reaction"`
+	CreatedAt string `json:"created_at"`
 }
 
 type progressBrief struct {
@@ -79,6 +82,7 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 			StreamURL: "/api/v1/media/" + m.ID + "/stream",
 			Favorite:  favs[m.ID], CreatedAt: m.CreatedAt,
 			WatchLater: later[m.ID],
+			Missing:    m.MissingSince != "",
 		}
 		if withPath {
 			item.Path = m.Path

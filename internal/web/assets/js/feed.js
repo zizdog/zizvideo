@@ -45,6 +45,7 @@ export function createGestureGate({ quietMs = GESTURE_QUIET } = {}) {
 }
 
 function isPlayable(item) {
+  if (item.missing) return false; // 文件已不在磁盘上：放不了，别装成能放
   if (item.compatibility && item.compatibility.direct === false) return false;
   if (item.status && item.status !== "ready") return false;
   return true;
@@ -218,6 +219,11 @@ export function mountFeed(view) {
     layer.append(libraryCorner(item));
 
     if (!isPlayable(item)) {
+      // 文件不在了（改名/移动/掉盘）时如实说，不再打"状态：ready"——那句话自相矛盾（用户报障）。
+      if (item.missing) {
+        layer.append(centerMessage("文件不在了", "可能已改名或移动；后台「媒体」页可清理这条记录"));
+        return entry;
+      }
       const reason = item.compatibility && item.compatibility.reason
         ? item.compatibility.reason
         : ("这个视频放不了（" + (item.status || "unknown") + "）");

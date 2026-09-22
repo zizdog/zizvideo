@@ -104,6 +104,160 @@ func TestFeedPageVisitsEachItemOncePerCycle(t *testing.T) {
 	}
 }
 
+// 门禁（用户 2026-09-22 报障）：文件已不在磁盘上的行**不许进 feed**。
+// 扫描只打 missing_since、status 仍是 ready，所以必须靠 missing_since 过滤，
+// 否则首页会推荐一条播到就 404 的记录，前端只能显示"这个视频放不了（状态：ready）"。
+func TestFeedExcludesMissingRows(t *testing.T) {
+	db := openFeedDB(t)
+	lib := newLib("lib_m", "M", "/tmp/m")
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	want := seedFeedMedia(t, db, lib.ID, 3)
+
+	// 把其中一条标记为"文件已不在"（不改 status，模拟真实扫描行为）
+	var gone string
+	for id := range want {
+		gone = id
+		break
+	}
+	if err := db.MarkMissing(gone, domain.NowString()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 2)
+	if len(got) != 2 {
+		t.Fatalf("feed = %d 条, 期望 2（缺失那条必须被排除），得到 %v", len(got), got)
+	}
+	for _, id := range got {
+		if id == gone {
+			t.Fatalf("缺失记录 %s 仍然进了 feed", gone)
+		}
+	}
+	n, err := db.CountPlayable(domain.LibraryScope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("CountPlayable = %d, 期望 2", n)
+	}
+	// 记录本身还在（两阶段删除设计：先标记，不急着删）——只是不再被推荐。
+	if _, err := db.getMedia(gone); err != nil {
+		t.Fatalf("缺失记录不该被删掉: %v", err)
+	}
+
+	// 文件回来了（ClearMissing）就该重新进 feed
+	if err := db.ClearMissing(gone); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.CountPlayable(domain.LibraryScope{All: true}); n != 3 {
+		t.Fatalf("文件回来后 CountPlayable = %d, 期望 3", n)
+	}
+}
+
+// 门禁：后台「媒体」页的 missing 筛选必须按 missing_since 判定（status 列里没有 missing 这个值）。
+func TestListMediaMissingFilterUsesMissingSince(t *testing.T) {
+	db := openFeedDB(t)
+	lib := newLib("lib_l", "L", "/tmp/l")
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	seedFeedMedia(t, db, lib.ID, 2)
+	var gone string
+	for id := range mustIDs(t, db, lib.ID) {
+		gone = id
+		break
+	}
+	if err := db.MarkMissing(gone, domain.NowString()); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, total, err := db.ListMedia(domain.LibraryScope{All: true}, MediaFilter{Status: domain.MediaMissing, PerPage: 20, Page: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].ID != gone {
+		t.Fatalf("missing 筛选 = %d 条(total=%d)，期望只有 %s", len(rows), total, gone)
+	}
+	// 其它状态筛选不受影响
+	ready, _, err := db.ListMedia(domain.LibraryScope{All: true}, MediaFilter{Status: domain.MediaReady, PerPage: 20, Page: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ready {
+		if m.ID == gone {
+			t.Fatalf("status=ready 不该包含缺失记录")
+		}
+	}
+}
+
+// 门禁：清理缺失记录只删该库的这些行，绝不碰文件、不碰别的库。
+func TestPurgeMissingMediaOnlyTouchesThatLibrary(t *testing.T) {
+	db := openFeedDB(t)
+	libA := newLib("lib_pa", "PA", "/tmp/pa")
+	libB := newLib("lib_pb", "PB", "/tmp/pb")
+	for _, lib := range []*domain.Library{libA, libB} {
+		if err := db.CreateLibrary(lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedFeedMedia(t, db, libA.ID, 2)
+	seedFeedMedia(t, db, libB.ID, 2)
+	goneA := firstID(t, db, libA.ID)
+	goneB := firstID(t, db, libB.ID)
+	if err := db.MarkMissing(goneA, domain.NowString()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkMissing(goneB, domain.NowString()); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := db.PurgeMissingMedia(libA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("清理条数 = %d, 期望 1", n)
+	}
+	// A 库那条已软删（查不到），B 库那条还在
+	if _, err := db.getMedia(goneA); err == nil {
+		t.Fatalf("A 库缺失记录应已被软删")
+	}
+	if _, err := db.getMedia(goneB); err != nil {
+		t.Fatalf("B 库缺失记录不该被动: %v", err)
+	}
+	// 再清一次必须报 0，不许谎报
+	if n, _ := db.PurgeMissingMedia(libA.ID); n != 0 {
+		t.Fatalf("重复清理 = %d, 期望 0", n)
+	}
+	// 不存在的库直接报错
+	if _, err := db.PurgeMissingMedia("lib_nope"); err == nil {
+		t.Fatal("不存在的媒体库必须报错")
+	}
+}
+
+func mustIDs(t *testing.T, db *DB, libID string) map[string]bool {
+	t.Helper()
+	rows, _, err := db.ListMedia(domain.LibraryScope{All: true}, MediaFilter{LibraryID: libID, PerPage: 50, Page: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, m := range rows {
+		out[m.ID] = true
+	}
+	return out
+}
+
+func firstID(t *testing.T, db *DB, libID string) string {
+	t.Helper()
+	for id := range mustIDs(t, db, libID) {
+		return id
+	}
+	t.Fatalf("库 %s 没有媒体", libID)
+	return ""
+}
+
 // 门禁：library_id 范围只返回该库，全部库范围返回全部。
 func TestFeedPageScopeFiltersLibrary(t *testing.T) {
 	db := openFeedDB(t)

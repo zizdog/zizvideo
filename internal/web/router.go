@@ -44,6 +44,7 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("PATCH /api/v1/libraries/{id}", s.RequireAdmin(s.HandlePatchLibrary))
 	mux.HandleFunc("DELETE /api/v1/libraries/{id}", s.RequireAdmin(s.HandleDeleteLibrary))
 	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", s.RequireAdmin(s.HandleStartScan))
+	mux.HandleFunc("POST /api/v1/libraries/{id}/purge-missing", s.RequireAdmin(s.HandlePurgeMissingMedia))
 	mux.HandleFunc("GET /api/v1/scan-tasks/{id}", s.RequireAdmin(s.HandleGetScanTask))
 
 	// 媒体库分组（用户 2026-09-22）：归类显示 + 批量操作 + 批量授权。

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/zizdog/zizvideo/internal/domain"
@@ -179,6 +180,37 @@ func (s *Server) HandleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "scan.start", "library:"+id, true, "task:"+t.ID)
 	respond(w, http.StatusAccepted, map[string]any{"task_id": t.ID}, nil)
+}
+
+type purgeMissingReq struct {
+	Confirm bool `json:"confirm"`
+}
+
+// HandlePurgeMissingMedia 清理某个库里"文件已不在"的记录（missing_since 非空）。
+// 只删数据库记录，**绝不动磁盘文件**；要求显式 confirm——这是删除，不接受点错一下就发生。
+// 为什么需要它：整库改名/移动会让缺失比例超过扫描的自动删除阈值（默认 10%），
+// 自动路径按设计拒绝删除（防止外接盘没挂载时清库），所以必须给用户一个明确的清理入口。
+func (s *Server) HandlePurgeMissingMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req purgeMissingReq
+	if r.ContentLength > 0 {
+		if err := s.decodeJSON(w, r, &req); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	if !req.Confirm {
+		s.fail(w, r, domain.New("VALIDATION_CONFIRM", "请先确认清理操作", 400))
+		return
+	}
+	n, err := s.DB.PurgeMissingMedia(id)
+	if err != nil {
+		s.audit(r, "media.purge_missing", "library:"+id, false, errCode(err))
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "media.purge_missing", "library:"+id, true, "deleted:"+strconv.FormatInt(n, 10))
+	respond(w, http.StatusOK, map[string]any{"deleted": n}, nil)
 }
 
 // HandleGetScanTask returns live progress for a scan task.

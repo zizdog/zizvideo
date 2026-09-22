@@ -141,6 +141,23 @@ func (db *DB) ApplyDeletions(ids []string) error {
 	return tx.Commit()
 }
 
+// PurgeMissingMedia 软删某个库里所有"文件已不在"的记录（missing_since 非空）。
+// 只删数据库记录，**绝不动磁盘文件**；返回真实删除行数供界面如实显示。
+// 存在的理由：整库改名/移动后缺失比例会超过扫描的自动删除阈值（默认 10%），
+// 自动路径按设计拒绝删除，用户需要一个明确的、自己按下去的清理入口。
+func (db *DB) PurgeMissingMedia(libraryID string) (int64, error) {
+	if _, err := db.GetLibrary(libraryID); err != nil {
+		return 0, err
+	}
+	res, err := db.Exec(`UPDATE media SET deleted_at = ?, updated_at = ?
+		WHERE library_id = ? AND deleted_at IS NULL AND missing_since IS NOT NULL`,
+		domain.NowString(), domain.NowString(), libraryID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // MediaFilter drives the paged list endpoint.
 type MediaFilter struct {
 	LibraryID string
@@ -170,8 +187,19 @@ func (db *DB) ListMedia(scope domain.LibraryScope, f MediaFilter) ([]domain.Medi
 		args = append(args, like, like)
 	}
 	if f.Status != "" {
-		where += ` AND status = ?`
-		args = append(args, f.Status)
+		// "missing" 不是 status 列的值（扫描只写 missing_since，status 仍是 ready），
+		// 所以这里必须按 missing_since 判定 —— 否则这个筛选永远查不到东西（用户踩过）。
+		// 反过来，筛 "ready" 也要排除这些行：ready 应当意味着"能播"。
+		switch f.Status {
+		case domain.MediaMissing:
+			where += ` AND missing_since IS NOT NULL`
+		case domain.MediaReady:
+			where += ` AND status = ? AND missing_since IS NULL`
+			args = append(args, f.Status)
+		default:
+			where += ` AND status = ?`
+			args = append(args, f.Status)
+		}
 	}
 	var total int
 	if err := db.QueryRow(`SELECT COUNT(1) FROM media WHERE `+where, args...).Scan(&total); err != nil {

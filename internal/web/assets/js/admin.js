@@ -287,12 +287,24 @@ function mountLibraries(root) {
         const scanned = Number(task.scanned) || 0;
         const total = Number(task.total) || 0;
         const failed = Number(task.failed) || 0;
-        line.textContent = "已扫描 " + scanned + "/" + total + "，失败 " + failed;
+        const missing = Number(task.missing) || 0;
+        const suspected = Number(task.suspected) || 0;
+        let text = "已扫描 " + scanned + "/" + total + "，失败 " + failed;
+        if (missing || suspected) text += "，疑似丢失 " + (suspected || missing);
+        line.textContent = text;
         if (task.status === "success" || task.status === "failed" || task.status === "interrupted") {
           clearInterval(timer);
           const label = task.status === "success" ? "扫描完成" : task.status === "failed" ? "扫描失败" : "扫描已中断";
-          line.textContent = label + "，已扫描 " + scanned + "/" + total + "，失败 " + failed +
-            (task.error ? "：" + task.error : "");
+          let final = label + "，已扫描 " + scanned + "/" + total + "，失败 " + failed;
+          // 疑似丢失超阈值时扫描**不会**删记录（防止外接盘没挂载就清库），必须说出来，
+          // 否则用户只看到"扫描完成"，以为没生效（用户 2026-09-22 报障）。
+          if (suspected > 0) {
+            final += "；疑似丢失 " + suspected + " 个（超过自动删除阈值，未删除）——可在「媒体」页选库后点「清理缺失记录」";
+          } else if (missing > 0) {
+            final += "；已标记缺失 " + missing + " 个（再扫一次确认后会自动删除）";
+          }
+          if (task.error) final += "：" + task.error;
+          line.textContent = final;
         }
       } catch (err) {
         clearInterval(timer);
@@ -568,10 +580,18 @@ function mountMedia(root) {
       if (!list.length) body.append(emptyRow(7, "没有数据"));
       for (const item of list) {
         const resolution = item.width && item.height ? item.width + "×" + item.height : "-";
+        // missing 要如实显示：status 列在这里仍是 ready（扫描只写 missing_since），
+        // 直接显示 ready 会让人以为"能放"——用户就是这么被误导的。
+        const stateText = item.missing ? "missing（文件不在了）" : item.status;
         body.append(rowOf([item.title, names.get(String(item.library_id)) || item.library_id,
           fmtDuration(item.duration_ms), resolution, item.codecs ? item.codecs.video : "-",
-          item.status, fmtBytes(item.size)]));
+          stateText, fmtBytes(item.size)]));
       }
+      // 清理按钮只在选中具体库时出现（清理是"针对某个库"的动作，不做全局一头雾水的清）。
+      purgeBtn.hidden = !librarySelect.value;
+      purgeInfo.textContent = librarySelect.value
+        ? "清理只删记录、不动文件；清理后这些视频会从首页消失。"
+        : "先在左边选一个媒体库，才能清理它的缺失记录。";
       const current = Number(meta.page) || page;
       info.textContent = "第 " + current + " 页 / 共 " + (Number(meta.total) || 0) + " 条";
       prev.disabled = current <= 1;
@@ -582,11 +602,41 @@ function mountMedia(root) {
   }
 
   const filters = el("div", { class: "row" }, librarySelect, query, statusSelect);
+  // 清理缺失记录（用户 2026-09-22 报障）：整库改名后缺失比例会超过扫描的自动删除阈值，
+  // 自动路径按设计不删，必须给一个明确的、要确认的清理入口。只删记录、不动文件。
+  const purgeBtn = el("button", {
+    class: "btn danger small", type: "button", text: "清理缺失记录", hidden: true,
+    dataset: { role: "purge-missing" },
+    title: "删除这个库里「文件已不在磁盘上」的记录（只删记录，不动文件）",
+  });
+  const purgeInfo = el("div", { class: "muted small-note", dataset: { role: "purge-info" } });
+  purgeBtn.addEventListener("click", async () => {
+    const libID = librarySelect.value;
+    if (!libID) return;
+    const libName = names.get(String(libID)) || libID;
+    if (!window.confirm("清理「" + libName + "」里所有「文件已不在磁盘上」的记录？\n" +
+      "只删数据库记录，不删除任何文件；已被清理的视频会从首页消失（下次扫描若文件回来了会重新入库）。")) return;
+    setBanner(note, "");
+    purgeBtn.disabled = true;
+    try {
+      const data = await api.purgeMissing(libID);
+      const deleted = Number(data && data.deleted) || 0;
+      await refresh();
+      setBanner(note, deleted > 0
+        ? ("已清理 " + deleted + " 条缺失记录（文件未动）")
+        : "没有可清理的缺失记录");
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "清理失败");
+    } finally {
+      purgeBtn.disabled = false;
+    }
+  });
   function onFilter() { page = 1; refresh(); }
   librarySelect.addEventListener("change", onFilter);
   statusSelect.addEventListener("change", onFilter);
   query.addEventListener("change", onFilter);
-  root.append(note, el("div", { class: "panel" }, filters), el("div", { class: "actions" }, prev, next, info), table);
+  root.append(note, el("div", { class: "panel" }, filters, el("div", { class: "row" }, purgeBtn, purgeInfo)),
+    el("div", { class: "actions" }, prev, next, info), table);
   loadLibraries().then(refresh);
 }
 
