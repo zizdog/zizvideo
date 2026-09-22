@@ -24,10 +24,15 @@
 1. **`make check` 必须真绿**（版本一致 + 前端 JS 真解析 + `go vet` + 单测）。
    写法固定：`make check > /tmp/zv-check.log 2>&1; echo "EXIT=$?"`（别用管道，管道会掩盖退出码）。
 2. **本地提交**（`git add -A && git commit`）；推 GitHub 见铁律 4。
-3. **发版**（只在用户点名时）：`make release` → `make publish` → 让用户**在面板后台手动更新**测试。
-   - 面板不需要跟着发版：它读镜像索引的 `latest`，所以 zizvideo 单方面发版即可生效（市场卡片会显示「可更新」）。
-   - **同版本绝不许换字节重传**：产物 sha256 一变，"已装 0.1.2" 与"新装 0.1.2"就不是同一份东西。
-     要改就 `bump VERSION`（`0.1.2-mvp → 0.1.3-mvp`），再 `make release publish`。
+3. **默认只累计，不发版**（用户 2026-09-22 明确："以后只累计更新，不要发布，发布需要我的指令！"）。
+   每一轮的收尾就是：改代码 → `make check` 真绿 → `git commit`（+ 推 GitHub）→ 写回状态文档。
+   **`make release` 与 `make publish` 一律不许自己执行**，必须等用户**明确说出"发布/发版"**（"发新版"这类
+   指令才算数；"改一下/修一下/优化"不算）。这条优先于任何"顺手发一下更快"的推断。
+   - 累积期间**要改就 bump `VERSION`**（`Makefile` + `internal/api/api.go` 两处），让仓库版本号永远
+     指向"尚未发布的新字节"；否则会出现"0.1.7 已发布、工作树里却是另一份 0.1.7"。
+   - 同版本绝不许换字节重传：产物 sha256 一变，"已装 0.1.7" 与"新装 0.1.7"就不是同一份东西。
+   - 用户点名发版后：`make release` → `make publish` → 让用户**在面板后台手动更新**测试
+     （面板读镜像索引的 `latest`，zizvideo 单方面发版即可生效）。**不要替用户升级任何机器。**
    - 换机器/换凭据后先 `bash tools/publish-mirror.sh --self-test`（上传探针即删），别拿真版本试。
 4. **GitHub**：`origin = git@github.com:zizdog/zizvideo.git`（public）。
    **必须走 SSH**（本机 https 到 github:443 经常连不上）；`gh` 已登录 `zizdog`（有 `repo` scope），
