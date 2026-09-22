@@ -83,7 +83,7 @@ export function mountFavorites(view) {
       listBox.append(el("div", { class: "muted", text: current.empty }));
       return;
     }
-    for (const item of items) listBox.append(favRow(current, item));
+    for (const item of items) listBox.append(recordRow(current, item));
   }
 
   clearBtn.addEventListener("click", async () => {
@@ -115,7 +115,9 @@ export function mountFavorites(view) {
   return null;
 }
 
-function favRow(tab, item) {
+// recordRow 是记录类列表共用的一行（收藏/点赞/稍后再看/历史）：
+// 「稍后再看」页复用同一份 DOM，避免两套长得不一样的列表。
+export function recordRow(tab, item) {
   const media = item.media || {};
   const thumb = media.cover_url
     ? el("img", { class: "fav-thumb", src: media.cover_url, alt: "", loading: "lazy" })

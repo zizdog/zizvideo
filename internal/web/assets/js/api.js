@@ -140,6 +140,11 @@ export const api = {
   addFavorite: (id) => request("POST", "/api/v1/me/favorites/" + encodeURIComponent(id), {}),
   removeFavorite: (id) => request("DELETE", "/api/v1/me/favorites/" + encodeURIComponent(id)),
 
+  addWatchLater: (id) => request("POST", "/api/v1/me/watch-later/" + encodeURIComponent(id), {}),
+  removeWatchLater: (id) => request("DELETE", "/api/v1/me/watch-later/" + encodeURIComponent(id)),
+  watchLater: () => request("GET", "/api/v1/me/watch-later"),
+  clearWatchLater: () => request("DELETE", "/api/v1/me/watch-later"),
+
   addReaction: (id, kind) => request("POST", "/api/v1/media/" + encodeURIComponent(id) + "/reactions", { kind }),
   patchReaction: (id, kind) => request("PATCH", "/api/v1/media/" + encodeURIComponent(id) + "/reactions", { kind }),
   removeReaction: (id) => request("DELETE", "/api/v1/media/" + encodeURIComponent(id) + "/reactions"),

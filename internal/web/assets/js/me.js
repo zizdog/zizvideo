@@ -27,6 +27,15 @@ export function mountMe(view, options) {
     libraryLine.lastChild.textContent = n ? (n + " 个") : "未授权任何媒体库";
   }).catch(() => { libraryLine.lastChild.textContent = "未复核"; });
 
+  // 内容入口：「稍后再看」（用户 2026-09-22 要求）。列表页是独立的 #/watch-later，
+  // 所以这里只给入口，不再复制一份列表实现。
+  const content = el("div", { class: "panel", dataset: { role: "me-content" } },
+    el("div", { class: "panel-title", text: "内容" }),
+    el("a", {
+      class: "btn small", href: "#/watch-later", text: "稍后再看",
+      dataset: { role: "me-watch-later" },
+    }));
+
   // 「我的」里不再放播放设置（用户 2026-09-22 要求去掉）：入口只留在首页右上 ⚙。
   const settings = el("div", { class: "panel", dataset: { role: "me-settings" } },
     el("div", { class: "panel-title", text: "设置" }));
@@ -40,6 +49,6 @@ export function mountMe(view, options) {
   });
   view.append(el("div", { class: "page" },
     el("div", { class: "page-head" }, el("h2", { class: "page-title", text: "我的" })),
-    account, settings, el("div", { class: "actions" }, logout)));
+    account, content, settings, el("div", { class: "actions" }, logout)));
   return null;
 }

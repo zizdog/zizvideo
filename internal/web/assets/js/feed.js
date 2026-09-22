@@ -170,7 +170,7 @@ export function mountFeed(view) {
     shell.append(layer);
     const entry = {
       index, item, layer, video: null, fill: null, elapsed: null, total: null,
-      fav: null, like: null, hint: null, soundHint: null, playBtn: null, flash: null,
+      fav: null, like: null, later: null, hint: null, soundHint: null, playBtn: null, flash: null,
       bubble: null, bar: null, barWrap: null, sound: null, gear: null, panel: null,
       settingsForm: null, seekRatio: 0,
       seeking: false, flashTimer: 0, hintTimer: 0,
@@ -180,10 +180,13 @@ export function mountFeed(view) {
 
     entry.fav = el("button", { class: "icon-btn", type: "button", title: "收藏", text: "♥" });
     entry.like = el("button", { class: "icon-btn", type: "button", title: "喜欢", text: "👍" });
+    entry.later = el("button", { class: "icon-btn", type: "button", title: "稍后再看", text: "🕒" });
     entry.fav.classList.toggle("on", !!item.favorite);
     entry.like.classList.toggle("on", item.reaction === "like");
+    entry.later.classList.toggle("on", !!item.watch_later);
     entry.fav.addEventListener("click", () => toggleFavorite(entry));
     entry.like.addEventListener("click", () => toggleLike(entry));
+    entry.later.addEventListener("click", () => toggleWatchLater(entry));
     // 删除入口只给管理员（前台也不放宽权限，接口侧再拦一次）
     entry.del = isAdmin()
       ? el("button", { class: "icon-btn", type: "button", title: "删除这个视频", text: "🗑" })
@@ -207,9 +210,9 @@ export function mountFeed(view) {
       el("div", { class: "times" }, entry.elapsed, entry.total)
     ));
 
-    // 抖音式：操作图标竖排在右下角（收藏/喜欢/声音/设置，管理员多一个删除）
+    // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除）
     layer.append(el("div", { class: "ov-rail" },
-      entry.fav, entry.like, soundButton(entry), gearButton(entry), entry.del));
+      entry.fav, entry.like, entry.later, soundButton(entry), gearButton(entry), entry.del));
 
     // 左上角"来自 <库名>"（点击切范围）
     layer.append(libraryCorner(item));
@@ -600,6 +603,26 @@ export function mountFeed(view) {
     } catch (err) {
       item.favorite = !next;
       entry.fav.classList.toggle("on", !next);
+      showToast(err && err.message ? err.message : "操作失败");
+    }
+  }
+
+  // 稍后再看：与收藏同一套乐观更新（先改本地、失败再回滚并说明）。
+  // 播完不自动移除 —— 与收藏一致，只在用户点图标或去「我的-稍后再看」清除。
+  async function toggleWatchLater(entry) {
+    const item = entry.item;
+    const next = !item.watch_later;
+    item.watch_later = next;
+    entry.later.classList.toggle("on", next);
+    try {
+      const result = next ? await api.addWatchLater(item.id) : await api.removeWatchLater(item.id);
+      if (result && typeof result.watch_later === "boolean" && result.watch_later !== next) {
+        item.watch_later = result.watch_later;
+        entry.later.classList.toggle("on", result.watch_later);
+      }
+    } catch (err) {
+      item.watch_later = !next;
+      entry.later.classList.toggle("on", !next);
       showToast(err && err.message ? err.message : "操作失败");
     }
   }

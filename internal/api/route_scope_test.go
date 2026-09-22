@@ -68,13 +68,14 @@ func firstString(expr string) string {
 
 // 登录但不带库范围：只动自己的数据、不返回媒体内容（ITERATION-2 B.4 尾部说明）。
 var authedUnscopedAllowlist = map[string]bool{
-	"POST /api/v1/auth/logout":    true,
-	"GET /api/v1/auth/me":         true,
-	"GET /api/v1/feed/settings":   true,
-	"PATCH /api/v1/feed/settings": true,
-	"DELETE /api/v1/me/progress":  true,
-	"DELETE /api/v1/me/favorites": true,
-	"DELETE /api/v1/me/likes":     true,
+	"POST /api/v1/auth/logout":      true,
+	"GET /api/v1/auth/me":           true,
+	"GET /api/v1/feed/settings":     true,
+	"PATCH /api/v1/feed/settings":   true,
+	"DELETE /api/v1/me/progress":    true,
+	"DELETE /api/v1/me/favorites":   true,
+	"DELETE /api/v1/me/likes":       true,
+	"DELETE /api/v1/me/watch-later": true,
 }
 
 // 匿名可访问：新增公开接口必须显式登记，否则测试红（防止悄悄公开）。

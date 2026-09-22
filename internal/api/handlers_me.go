@@ -92,6 +92,36 @@ func (s *Server) HandleRemoveFavorite(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, map[string]any{"favorite": false}, nil)
 }
 
+// HandleAddWatchLater 把媒体加入「稍后再看」（幂等）。
+func (s *Server) HandleAddWatchLater(w http.ResponseWriter, r *http.Request) {
+	mediaID := r.PathValue("mediaId")
+	if _, err := s.canAccessMedia(r.Context(), mediaID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	u := UserFrom(r.Context())
+	if err := s.DB.AddWatchLater(u.ID, mediaID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"watch_later": true}, nil)
+}
+
+// HandleRemoveWatchLater 取消「稍后再看」。
+func (s *Server) HandleRemoveWatchLater(w http.ResponseWriter, r *http.Request) {
+	mediaID := r.PathValue("mediaId")
+	if _, err := s.canAccessMedia(r.Context(), mediaID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	u := UserFrom(r.Context())
+	if err := s.DB.RemoveWatchLater(u.ID, mediaID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"watch_later": false}, nil)
+}
+
 type reactionReq struct {
 	Kind string `json:"kind"`
 }
@@ -138,7 +168,7 @@ func (s *Server) HandleDeleteReaction(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-//  收藏页三个 Tab：点赞 / 收藏 / 历史（每个都能清除记录，条数如实回传）
+//  记录列表：点赞 / 收藏 / 稍后再看 / 历史（每个都能清除记录，条数如实回传）
 // ============================================================================
 
 // HandleListFavorites returns the caller's favorites, newest first.
@@ -163,6 +193,30 @@ func (s *Server) HandleListLikes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, http.StatusOK, map[string]any{"list": s.buildItems(rows, r, false)}, nil)
+}
+
+// HandleListWatchLater 返回「稍后再看」列表，最新加入的在前。
+func (s *Server) HandleListWatchLater(w http.ResponseWriter, r *http.Request) {
+	u := UserFrom(r.Context())
+	limit := queryInt(r, "limit", 100, 1, 200)
+	rows, err := s.DB.ListWatchLater(ScopeFrom(r.Context()), u.ID, limit)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"list": s.buildItems(rows, r, false)}, nil)
+}
+
+// HandleClearWatchLater 清空「稍后再看」，条数以后端实际删除为准。
+func (s *Server) HandleClearWatchLater(w http.ResponseWriter, r *http.Request) {
+	u := UserFrom(r.Context())
+	n, err := s.DB.ClearWatchLater(u.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "me.watch_later.clear", "user:"+u.ID, true, "")
+	respond(w, http.StatusOK, map[string]any{"cleared": n}, nil)
 }
 
 // HandleClearFavorites deletes every favorite row and reports the real count.

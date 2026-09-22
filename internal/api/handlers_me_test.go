@@ -17,6 +17,9 @@ func (e *env) seedUserRecords(t *testing.T) {
 		if res, _, raw := e.write(http.MethodPost, "/api/v1/me/favorites/"+id, nil); res.StatusCode != http.StatusOK {
 			t.Fatalf("加收藏失败 %d: %s", res.StatusCode, raw)
 		}
+		if res, _, raw := e.write(http.MethodPost, "/api/v1/me/watch-later/"+id, nil); res.StatusCode != http.StatusOK {
+			t.Fatalf("加稍后再看失败 %d: %s", res.StatusCode, raw)
+		}
 		if res, _, raw := e.write(http.MethodPatch, "/api/v1/me/progress/"+id,
 			map[string]any{"position_ms": 1000, "duration_ms": 5000, "completed": false}); res.StatusCode != http.StatusOK {
 			t.Fatalf("写进度失败 %d: %s", res.StatusCode, raw)
@@ -104,6 +107,75 @@ func TestClearLikesOnlyRemovesLikes(t *testing.T) {
 	}
 }
 
+// 稍后再看：加入/取消都要能被播放页读到（feed 与列表共用 buildItems 的 watch_later），
+// 且清空时不能顺手删掉收藏 —— 两类记录各管各的。
+func TestWatchLaterRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	lib := e.newLibrary("稍后再看库", e.Root)
+	m := e.newMedia(lib.ID, filepath.Join(e.Root, "later.mp4"), []byte("x"))
+
+	// 幂等：同一个视频加两次仍然只有一条。
+	for i := 0; i < 2; i++ {
+		if res, _, raw := e.write(http.MethodPost, "/api/v1/me/watch-later/"+m.ID, nil); res.StatusCode != http.StatusOK {
+			t.Fatalf("加入稍后再看失败 %d: %s", res.StatusCode, raw)
+		}
+	}
+	if n := e.listCount("/api/v1/me/watch-later"); n != 1 {
+		t.Fatalf("稍后再看列表 = %d, 期望 1（重复加入不该重复计数）", n)
+	}
+
+	var detail struct {
+		WatchLater bool `json:"watch_later"`
+	}
+	res, env, raw := e.do(http.MethodGet, "/api/v1/media/"+m.ID, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("读媒体详情失败 %d: %s", res.StatusCode, raw)
+	}
+	decodeInto(t, env.Data, &detail)
+	if !detail.WatchLater {
+		t.Fatalf("加入后媒体详情里的 watch_later 应为 true（播放页图标靠它点亮）")
+	}
+
+	if res, _, raw := e.write(http.MethodDelete, "/api/v1/me/watch-later/"+m.ID, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("取消稍后再看失败 %d: %s", res.StatusCode, raw)
+	}
+	res, env, raw = e.do(http.MethodGet, "/api/v1/media/"+m.ID, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("读媒体详情失败 %d: %s", res.StatusCode, raw)
+	}
+	decodeInto(t, env.Data, &detail)
+	if detail.WatchLater {
+		t.Fatalf("取消后媒体详情里的 watch_later 应为 false")
+	}
+	if n := e.listCount("/api/v1/me/watch-later"); n != 0 {
+		t.Fatalf("取消后稍后再看列表 = %d, 期望 0", n)
+	}
+}
+
+func TestClearWatchLaterKeepsFavorites(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	e.seedUserRecords(t)
+
+	if n := e.listCount("/api/v1/me/watch-later"); n != 2 {
+		t.Fatalf("稍后再看列表 = %d, 期望 2", n)
+	}
+	if n := e.clearCount("/api/v1/me/watch-later"); n != 2 {
+		t.Fatalf("清除稍后再看条数 = %d, 期望 2", n)
+	}
+	if n := e.listCount("/api/v1/me/watch-later"); n != 0 {
+		t.Fatalf("清除后稍后再看 = %d, 期望 0", n)
+	}
+	// 再清一次必须报 0，不能谎报成功。
+	if n := e.clearCount("/api/v1/me/watch-later"); n != 0 {
+		t.Fatalf("重复清除条数 = %d, 期望 0", n)
+	}
+	if n := e.listCount("/api/v1/me/favorites"); n != 2 {
+		t.Fatalf("清稍后再看后收藏 = %d, 期望 2（两类记录不许互相误删）", n)
+	}
+}
+
 func TestClearProgressReportsRealCount(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
@@ -124,14 +196,14 @@ func TestClearRecordsRequiresAuth(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	anon := e.anonClient()
-	for _, path := range []string{"/api/v1/me/favorites", "/api/v1/me/likes", "/api/v1/me/progress"} {
+	for _, path := range []string{"/api/v1/me/favorites", "/api/v1/me/likes", "/api/v1/me/watch-later", "/api/v1/me/progress"} {
 		res, _ := e.callWith(anon, "", http.MethodDelete, path, nil, false)
 		if res.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("未登录 DELETE %s 状态 = %d, 期望 401", path, res.StatusCode)
 		}
 	}
 	// 未登录也不允许偷看别人的记录列表。
-	for _, path := range []string{"/api/v1/me/favorites", "/api/v1/me/likes", "/api/v1/me/progress"} {
+	for _, path := range []string{"/api/v1/me/favorites", "/api/v1/me/likes", "/api/v1/me/watch-later", "/api/v1/me/progress"} {
 		res, _, _ := e.doAs(anon, http.MethodGet, path)
 		if res.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("未登录 GET %s 状态 = %d, 期望 401", path, res.StatusCode)

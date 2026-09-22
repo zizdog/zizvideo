@@ -133,6 +133,38 @@ func (db *DB) Favorites(userID string) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// AddWatchLater idempotently marks a media item as "watch later".
+func (db *DB) AddWatchLater(userID, mediaID string) error {
+	_, err := db.Exec(`INSERT INTO watch_later (user_id, media_id, created_at)
+		VALUES (?,?,?) ON CONFLICT(user_id, media_id) DO NOTHING`,
+		userID, mediaID, domain.NowString())
+	return err
+}
+
+// RemoveWatchLater clears the watch-later mark.
+func (db *DB) RemoveWatchLater(userID, mediaID string) error {
+	_, err := db.Exec(`DELETE FROM watch_later WHERE user_id = ? AND media_id = ?`, userID, mediaID)
+	return err
+}
+
+// WatchLater returns the set of watch-later media ids for a user.
+func (db *DB) WatchLater(userID string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT media_id FROM watch_later WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // SetReaction stores like/dislike for a media item.
 func (db *DB) SetReaction(userID, mediaID, kind string) error {
 	_, err := db.Exec(`INSERT INTO reactions (user_id, media_id, kind, updated_at)
@@ -205,6 +237,11 @@ func (db *DB) ListLikes(scope domain.LibraryScope, userID string, limit int) ([]
 	return db.mediaJoin(scope, "reactions", "t.updated_at", userID, limit, `AND t.kind = 'like' `)
 }
 
+// ListWatchLater returns a user's watch-later media, newest first.
+func (db *DB) ListWatchLater(scope domain.LibraryScope, userID string, limit int) ([]domain.Media, error) {
+	return db.mediaJoin(scope, "watch_later", "t.created_at", userID, limit, "")
+}
+
 // ClearFavorites deletes every favorite row of a user and reports the real count.
 func (db *DB) ClearFavorites(userID string) (int64, error) {
 	res, err := db.Exec(`DELETE FROM favorites WHERE user_id = ?`, userID)
@@ -217,6 +254,15 @@ func (db *DB) ClearFavorites(userID string) (int64, error) {
 // ClearLikes deletes every like row of a user and reports the real count.
 func (db *DB) ClearLikes(userID string) (int64, error) {
 	res, err := db.Exec(`DELETE FROM reactions WHERE user_id = ? AND kind = 'like'`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ClearWatchLater deletes every watch-later row of a user and reports the real count.
+func (db *DB) ClearWatchLater(userID string) (int64, error) {
+	res, err := db.Exec(`DELETE FROM watch_later WHERE user_id = ?`, userID)
 	if err != nil {
 		return 0, err
 	}

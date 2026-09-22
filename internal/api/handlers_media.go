@@ -36,6 +36,7 @@ type mediaItem struct {
 	Compatibility compatibility `json:"compatibility"`
 	Progress      progressBrief `json:"progress"`
 	Favorite      bool          `json:"favorite"`
+	WatchLater    bool          `json:"watch_later"`
 	Reaction      any           `json:"reaction"`
 	CreatedAt     string        `json:"created_at"`
 }
@@ -51,6 +52,7 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 	ua := parseUA(r.Header.Get("User-Agent"))
 	progs := map[string]domain.Progress{}
 	favs := map[string]bool{}
+	later := map[string]bool{}
 	reactions := map[string]string{}
 	if u != nil {
 		if m, err := s.DB.ProgressMap(u.ID); err == nil {
@@ -58,6 +60,9 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 		}
 		if m, err := s.DB.Favorites(u.ID); err == nil {
 			favs = m
+		}
+		if m, err := s.DB.WatchLater(u.ID); err == nil {
+			later = m
 		}
 		if m, err := s.DB.Reactions(u.ID); err == nil {
 			reactions = m
@@ -73,6 +78,7 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 			CoverURL:  "/api/v1/media/" + m.ID + "/cover",
 			StreamURL: "/api/v1/media/" + m.ID + "/stream",
 			Favorite:  favs[m.ID], CreatedAt: m.CreatedAt,
+			WatchLater: later[m.ID],
 		}
 		if withPath {
 			item.Path = m.Path
