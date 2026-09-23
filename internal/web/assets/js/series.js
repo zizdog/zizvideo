@@ -13,53 +13,135 @@ import { el, clear, banner, setBanner, asArray } from "./dom.js";
 
 export function mountSeries(view) {
   const note = banner();
-  const box = el("div", { class: "series-grid", dataset: { role: "series-list" } });
   const count = el("span", { class: "muted small-note", dataset: { role: "series-count" } });
-  const head = el("div", { class: "page-head" },
-    el("h2", { class: "page-title", text: "剧场" }), count);
-  view.append(el("div", { class: "page" }, head, note, box));
+  const tabsNav = el("nav", { class: "tabs", dataset: { role: "series-tabs" } });
+  const body = el("div", { dataset: { role: "series-body" } });
+  view.append(el("div", { class: "page" },
+    el("div", { class: "page-head" }, el("h2", { class: "page-title", text: "剧场" }), count),
+    tabsNav, note, body));
+
+  let list = [];
+  let current = "all";       // all | watching | category
+  let currentLib = "";       // 分类板块里选中的媒体库
 
   async function load() {
-    clear(box);
+    clear(body);
     count.hidden = true;
-    box.append(el("div", { class: "muted", text: "加载中…" }));
-    let list = [];
+    body.append(el("div", { class: "muted", text: "加载中…" }));
     try {
       const data = await api.request("GET", "/api/v1/series");
-      list = data && Array.isArray(data.list) ? data.list : [];
+      list = asArray(data && data.list);
     } catch (err) {
-      clear(box);
+      clear(body);
       setBanner(note, err && err.message ? err.message : "加载失败");
       return;
     }
-    clear(box);
+    renderTabs();
+    render();
+  }
+
+  // 用户 2026-09-23 要求：剧场列表分三块 —— 所有内容 / 观看中 / 分类（按媒体库选项卡）
+  function renderTabs() {
+    clear(tabsNav);
+    const defs = [["all", "所有内容"], ["watching", "观看中"], ["category", "分类"]];
+    for (const [key, label] of defs) {
+      tabsNav.append(el("button", {
+        class: "tab" + (key === current ? " on" : ""), type: "button", text: label,
+        dataset: { role: "series-tab", tab: key },
+        onclick: () => { current = key; renderTabs(); render(); },
+      }));
+    }
+  }
+
+  // 观看中 = 有进度但没看完的剧场（watched_count 由后端按当前用户聚合，前端不做 N+1）
+  function watching() {
+    return list.filter((it) => {
+      const total = Number(it.episode_count) || 0;
+      const seen = Number(it.watched_count) || 0;
+      return seen > 0 && seen < total;
+    });
+  }
+
+  function render() {
+    clear(body);
     if (!list.length) {
       count.hidden = true;
-      box.append(el("div", { class: "muted", text: "还没有剧场" }));
+      body.append(el("div", { class: "muted", text: "还没有剧场" }));
       return;
     }
-    count.textContent = list.length + " 个剧场";
     count.hidden = false;
-    for (const item of list) box.append(seriesPoster(item));
+    if (current === "watching") {
+      const items = watching();
+      count.textContent = items.length + " 个在追";
+      if (!items.length) {
+        body.append(el("div", { class: "muted", text: "还没有在追的剧场" }));
+        return;
+      }
+      body.append(posterGrid(items, { progress: true }));
+      return;
+    }
+    if (current === "category") {
+      const libs = [];
+      for (const it of list) {
+        const id = it.library_id || "";
+        if (!libs.some((l) => l.id === id)) libs.push({ id, name: it.library_name || it.library_id || "未指定媒体库" });
+      }
+      count.textContent = list.length + " 个剧场 · " + libs.length + " 个库";
+      const bar = el("nav", { class: "tabs", dataset: { role: "series-libs" } });
+      if (!currentLib && libs.length) currentLib = libs[0].id;
+      for (const lib of libs) {
+        bar.append(el("button", {
+          class: "tab" + (lib.id === currentLib ? " on" : ""), type: "button", text: lib.name,
+          dataset: { role: "series-lib", id: lib.id },
+          onclick: () => { currentLib = lib.id; render(); },
+        }));
+      }
+      body.append(bar);
+      const items = list.filter((it) => (it.library_id || "") === currentLib);
+      body.append(items.length ? posterGrid(items, {}) : el("div", { class: "muted", text: "这个库里还没有剧场" }));
+      return;
+    }
+    // 所有内容
+    count.textContent = list.length + " 个剧场";
+    body.append(posterGrid(list, {}));
   }
 
   load();
 }
 
+function posterGrid(items, opts) {
+  const grid = el("div", { class: "series-grid" });
+  for (const item of items) grid.append(seriesPoster(item, opts));
+  return grid;
+}
+
 // 抖音式竖版海报卡（用户 2026-09-22）：封面铺满、底部压两行标题、右上角集数徽标。
 // 没封面时不留破图：灰底 + "无封面"。
-function seriesPoster(item) {
+// opts.progress（用户 2026-09-23）：观看中板块要**在海报上直接给播放按钮 + 观看进度**，点一下接着看。
+function seriesPoster(item, opts) {
+  const options = opts || {};
   const cover = item.cover_url
     ? el("img", { src: item.cover_url, alt: "", loading: "lazy" })
     : el("div", { class: "no-cover", text: "无封面" });
-  return el("a", {
+  const total = Number(item.episode_count) || 0;
+  const seen = Number(item.watched_count) || 0;
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((seen / total) * 100))) : 0;
+  const card = el("a", {
     class: "series-poster", href: "#/series/" + encodeURIComponent(item.id),
     dataset: { role: "series-card", id: String(item.id) },
     title: item.title || "-",
   }, cover,
-    el("span", { class: "poster-count", text: (item.episode_count || 0) + " 集" }),
+    el("span", { class: "poster-count", text: total + " 集" }),
+    options.progress ? el("span", { class: "poster-play", text: "▶" }) : null,
+    options.progress && seen > 0
+      ? el("span", { class: "poster-progress" }, el("span", { style: { width: pct + "%" } }))
+      : null,
+    options.progress && seen > 0
+      ? el("span", { class: "poster-seen", text: "看到 " + seen + "/" + total + " 集" })
+      : null,
     el("div", { class: "poster-mask" },
       el("div", { class: "poster-name", text: item.title || "-" })));
+  return card;
 }
 
 /* ---------- 剧场播放页（按序连播） ---------- */

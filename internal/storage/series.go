@@ -563,3 +563,34 @@ func (db *DB) seriesIDsInLibrary(libraryID string, requireNew bool, since string
 	}
 	return out, rows.Err()
 }
+
+// SeriesWatchCounts 按人算"每个剧场已看几集"（一次查询，避免前端 N+1）。
+// 已看 = 该集有进度且没看完（completed=0 且 position_ms>0）；软删的集与其进度都不计。
+// scope 只用来限制"可见的集"，与 ListSeries 的可见性判据一致（S3/S4）。
+func (db *DB) SeriesWatchCounts(scope domain.LibraryScope, userID string) (map[string]int, error) {
+	where := `m.deleted_at IS NULL AND sm.media_id = m.id`
+	args := []any{userID}
+	if w, sargs := scopeWhere(scope, "m.library_id"); w != "" {
+		where += w
+		args = append(args, sargs...)
+	}
+	rows, err := db.Query(`SELECT sm.series_id, COUNT(1) FROM series_media sm
+		JOIN media m ON `+where+`
+		JOIN watch_progress wp ON wp.media_id = sm.media_id AND wp.user_id = ?
+		  AND wp.completed = 0 AND wp.position_ms > 0
+		GROUP BY sm.series_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}

@@ -68,9 +68,30 @@ func (s *Server) HandleListSeries(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// 观看中/进度比例要用：一次聚合查询拿到"每个剧场已看几集"（按当前用户，避免前端 N+1）
+	watched := map[string]int{}
+	if u := UserFrom(r.Context()); u != nil {
+		if m, err := s.DB.SeriesWatchCounts(scope, u.ID); err == nil {
+			watched = m
+		}
+	}
+	// 分类板块要显示媒体库名字：只对**调用方可见**的库给名字（与 library_id 同一套可见性判据）
+	names := map[string]string{}
+	if libs, err := s.DB.ListLibraries(); err == nil {
+		for _, l := range libs {
+			if scope.Allows(l.ID) {
+				names[l.ID] = l.Name
+			}
+		}
+	}
 	list := make([]map[string]any, 0, len(rows))
 	for _, item := range rows {
-		list = append(list, seriesJSON(item, scope))
+		view := seriesJSON(item, scope)
+		view["watched_count"] = watched[item.ID]
+		if n, ok := names[item.LibraryID]; ok {
+			view["library_name"] = n
+		}
+		list = append(list, view)
 	}
 	respond(w, http.StatusOK, map[string]any{"list": list}, nil)
 }

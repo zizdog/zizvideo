@@ -2,6 +2,8 @@ package api_test
 
 import (
 	"net/http"
+
+	"github.com/zizdog/zizvideo/internal/domain"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +37,17 @@ type seriesDetail struct {
 
 func (e *env) createSeries(title string) seriesBody {
 	e.t.Helper()
-	res, env, raw := e.write(http.MethodPost, "/api/v1/admin/series", map[string]any{"title": title})
+	return e.createSeriesIn(title, "")
+}
+
+// createSeriesIn 建剧场并（可选）挂到某个媒体库 —— 「分类」板块靠 library_name 显示库名。
+func (e *env) createSeriesIn(title, libraryID string) seriesBody {
+	e.t.Helper()
+	payload := map[string]any{"title": title}
+	if libraryID != "" {
+		payload["library_id"] = libraryID
+	}
+	res, env, raw := e.write(http.MethodPost, "/api/v1/admin/series", payload)
 	if res.StatusCode != http.StatusCreated {
 		e.t.Fatalf("新建剧场失败 %d: %s", res.StatusCode, raw)
 	}
@@ -82,6 +94,71 @@ func (e *env) episodes(id string) []string {
 		out = append(out, item.Media.ID)
 	}
 	return out
+}
+
+// TestSeriesWatchedCountBacksWatchingSection 门禁（用户 2026-09-23 要剧场「观看中」板块 +
+// 海报上的观看进度）：列表接口必须按**当前用户**给出 watched_count = 有进度且没看完的集数，
+// 看完的不算、别人的进度不算（前端据此算比例，不做 N+1）。
+func TestSeriesWatchedCountBacksWatchingSection(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	lib := e.newLibrary("追剧库", e.Root)
+	a := e.newMedia(lib.ID, filepath.Join(e.Root, "a.mp4"), []byte("a"))
+	b := e.newMedia(lib.ID, filepath.Join(e.Root, "b.mp4"), []byte("b"))
+	sb := e.createSeriesIn("在追的剧场", lib.ID)
+	e.addSeriesMedia(sb.ID, a.ID, b.ID)
+	admin, err := e.DB.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type listRow struct {
+		ID           string `json:"id"`
+		EpisodeCount int    `json:"episode_count"`
+		WatchedCount int    `json:"watched_count"`
+		LibraryName  string `json:"library_name"`
+	}
+	type listBody struct {
+		List []listRow `json:"list"`
+	}
+	row := func() listRow {
+		t.Helper()
+		res, env, raw := e.do(http.MethodGet, "/api/v1/series", nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("列表 = %d (%s)", res.StatusCode, raw)
+		}
+		var body listBody
+		decodeInto(t, env.Data, &body)
+		for _, r := range body.List {
+			if r.ID == sb.ID {
+				return r
+			}
+		}
+		t.Fatalf("列表里没有这个剧场: %s", raw)
+		return listRow{}
+	}
+
+	if got := row(); got.WatchedCount != 0 {
+		t.Fatalf("没看过时 watched_count 应为 0，实际 %d", got.WatchedCount)
+	}
+	if err := e.DB.UpsertProgress(&domain.Progress{UserID: admin.ID, MediaID: a.ID,
+		PositionMS: 1000, DurationMS: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if got := row(); got.WatchedCount != 1 || got.EpisodeCount != 2 {
+		t.Fatalf("看了第 1 集：watched_count 应为 1（共 2），实际 %+v", got)
+	}
+	if got := row(); got.LibraryName == "" {
+		t.Fatal("分类板块要用媒体库名字，library_name 不能为空")
+	}
+	// 看完的那集不计入"观看中"
+	if err := e.DB.UpsertProgress(&domain.Progress{UserID: admin.ID, MediaID: a.ID,
+		PositionMS: 5000, DurationMS: 5000, Completed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := row(); got.WatchedCount != 0 {
+		t.Fatalf("看完的不该算在追，实际 %d", got.WatchedCount)
+	}
 }
 
 // TestSeriesEpisodesFollowPositionOrder 是"剧场顺序连播"的后端门禁：

@@ -163,25 +163,57 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /** 已经预热过的队列指纹（ids+index）：重复 prepare 不重置缓冲，交接才能"无缝"。 */
+    private var preparedKey = ""
+
+    /**
+     * 预热：只把队列准备好 + prepare()（不播）。网页一开播就调它 ⇒ 退后台交接时不用现拉流，
+     * 不会"卡一下"（用户 2026-09-23 报障）。
+     */
+    fun prepareItems(ids: List<String>, titles: List<String>, index: Int) {
+        if (ids.isEmpty()) return
+        val key = ids.joinToString(",") + "#" + index
+        if (key == preparedKey) return
+        preparedKey = key
+        base = Prefs(this).baseUrl
+        val items = buildItems(ids, titles)
+        val start = index.coerceIn(0, items.size - 1)
+        handler.post {
+            player.setMediaItems(items, start, 0L)
+            player.prepare()
+            player.pause()
+        }
+    }
+
+    private fun buildItems(ids: List<String>, titles: List<String>) = ids.mapIndexed { i, id ->
+        MediaItem.Builder()
+            .setUri("$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
+            .setMediaId(id)
+            .setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(titles.getOrNull(i)?.ifBlank { id } ?: id)
+                    .build(),
+            )
+            .build()
+    }
+
     /** 按给定 id 列表播（stream 地址由 base 拼），从 index 条的 positionMs 开始。 */
     fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) {
         if (ids.isEmpty()) return
         base = Prefs(this).baseUrl // 同上：换服务器后 stream 地址也要跟着走
-        val items = ids.mapIndexed { i, id ->
-            MediaItem.Builder()
-                .setUri("$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
-                .setMediaId(id)
-                .setMediaMetadata(
-                    androidx.media3.common.MediaMetadata.Builder()
-                        .setTitle(titles.getOrNull(i)?.ifBlank { id } ?: id)
-                        .build(),
-                )
-                .build()
-        }
+        val key = ids.joinToString(",") + "#" + index.coerceIn(0, ids.size - 1)
+        val warm = key == preparedKey
+        val items = buildItems(ids, titles)
         val start = index.coerceIn(0, items.size - 1)
         handler.post {
-            player.setMediaItems(items, start, if (positionMs > 0) positionMs else 0L)
-            player.prepare()
+            if (warm && player.mediaItemCount == items.size) {
+                // 已经预热过同一条：只对齐位置就播，省掉重新拉流那一下（"卡一下"就是这个）
+                player.seekTo(start, if (positionMs > 0) positionMs else 0L)
+            } else {
+                player.setMediaItems(items, start, if (positionMs > 0) positionMs else 0L)
+                player.prepare()
+            }
+            preparedKey = key
             player.play()
         }
     }

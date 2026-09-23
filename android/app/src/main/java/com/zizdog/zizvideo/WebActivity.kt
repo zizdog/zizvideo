@@ -66,7 +66,18 @@ class WebActivity : AppCompatActivity() {
     private var mediaFuture: ListenableFuture<MediaController>? = null
 
     /** 网页调这个：它在后台了，把**它当前那份队列 + 正在播的那条 + 位置**整体交出来。 */
+    /** 交接时记下"交出的是哪一条"：回前台时只有同一条才续播（否则位置属于别的剧集，会整集乱跳）。 */
+    private var handedOffId = ""
+
     inner class Bridge {
+        /** 网页一开播就预热（不退后台也调），交接时就不用现拉流。 */
+        @android.webkit.JavascriptInterface
+        fun prepare(payload: String) {
+            val service = PlaybackService.instance ?: return
+            val p = parsePayload(payload) ?: return
+            service.prepareItems(p.ids, p.titles, p.index)
+        }
+
         @android.webkit.JavascriptInterface
         fun handOff(payload: String) {
             val service = PlaybackService.instance ?: return
@@ -88,8 +99,26 @@ class WebActivity : AppCompatActivity() {
                 return
             }
             if (ids.isEmpty()) return
+            handedOffId = ids[index.coerceIn(0, ids.size - 1)]
             runOnUiThread { service.playItems(ids, titles, index, positionMs) }
         }
+    }
+
+    private class Payload(val ids: List<String>, val titles: List<String>, val index: Int, val positionMs: Long)
+
+    private fun parsePayload(payload: String): Payload? = try {
+        val obj = org.json.JSONObject(payload)
+        val arr = obj.optJSONArray("ids") ?: return null
+        val tarr = obj.optJSONArray("titles")
+        val ids = ArrayList<String>()
+        val titles = ArrayList<String>()
+        for (i in 0 until arr.length()) {
+            ids.add(arr.optString(i))
+            titles.add(tarr?.optString(i) ?: "")
+        }
+        if (ids.isEmpty()) null else Payload(ids, titles, obj.optInt("index"), obj.optLong("positionMs"))
+    } catch (e: Exception) {
+        null
     }
 
     /**
@@ -110,8 +139,7 @@ class WebActivity : AppCompatActivity() {
             var t = shell ? shell.querySelector('.ov-title') : null;
             return t ? (t.textContent || '').trim() : '';
           }
-          document.addEventListener('visibilitychange', function () {
-            if (document.visibilityState !== 'hidden') return;
+          function payload() {
             var vs = [].slice.call(document.querySelectorAll('video'));
             var ids = [], titles = [], index = -1, positionMs = 0;
             for (var i = 0; i < vs.length; i++) {
@@ -124,12 +152,23 @@ class WebActivity : AppCompatActivity() {
               ids.push(id);
               titles.push(titleOf(vs[i]));
             }
-            if (index < 0 || !window.ZvAndroid) return;
+            return index < 0 ? null : { ids: ids, titles: titles, index: index, positionMs: positionMs };
+          }
+          // 一开播就预热原生播放器：退后台时不用现拉流，不会"卡一下"
+          document.addEventListener('play', function () {
+            var p = payload();
+            if (!p || !window.ZvAndroid || !window.ZvAndroid.prepare) return;
+            try { ZvAndroid.prepare(JSON.stringify(p)); } catch (e) {}
+          }, true);
+          document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState !== 'hidden') return;
+            var p = payload();
+            if (!p || !window.ZvAndroid) return;
+            try { ZvAndroid.handOff(JSON.stringify(p)); } catch (e) { return; }
+            window.__zvHandedOff = p.ids[p.index];
             try {
-              ZvAndroid.handOff(JSON.stringify({ ids: ids, titles: titles, index: index, positionMs: positionMs }));
-            } catch (e) { return; }
-            window.__zvHandedOff = ids[index];
-            try { vs.forEach(function (v) { v.pause(); }); } catch (e) {}
+              [].slice.call(document.querySelectorAll('video')).forEach(function (v) { v.pause(); });
+            } catch (e) {}
           });
         })();
     """.trimIndent()
@@ -313,6 +352,12 @@ class WebActivity : AppCompatActivity() {
         val cur = service.current() ?: return
         val (mediaId, positionMs) = cur
         service.stopPlayback()
+        // 原生可能已经连播到下一集：那这个位置属于**另一条**，拿它去 seek 当前这条就会"整集乱跳"
+        // （用户 2026-09-23 报障）。所以只在同一条上续播；不同条就保持网页原样，并如实说一句。
+        if (mediaId != handedOffId) {
+            android.widget.Toast.makeText(this, "后台已播到别的剧集，已收回播放", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         // 按"刚交出去的那条"恢复（不是按原生当前条：它可能已经连播到下一条了），位置超长就钳到本条时长里
         val js = "(function(){var want=window.__zvHandedOff||'';var vs=document.querySelectorAll('video');" +
             "var v=null;for(var i=0;i<vs.length;i++){var src=vs[i].getAttribute('src')||'';" +

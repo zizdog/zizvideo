@@ -103,7 +103,8 @@ export function mountFeed(view, options = {}) {
   // 播放列表模式（剧场）没有"切库"概念，所以这两个节点不建。
   const pickerBtn = playlist ? null : el("button", {
     class: "lib-chip hidden", type: "button", text: "选库",
-    style: { position: "absolute", zIndex: "8", top: "44px", left: "12px" },
+    // 原来固定 top:44px；刘海屏上「来自 X」被 env() 推下来后会压住它（用户报障）⇒ 一起躲
+    style: { position: "absolute", zIndex: "8", top: "calc(44px + env(safe-area-inset-top, 0px))", left: "12px" },
   });
   const picker = playlist ? null : el("div", {
     class: "set-panel hidden",
@@ -298,6 +299,7 @@ export function mountFeed(view, options = {}) {
       hidePlayButton(entry);
       if (!state.soundOn) showSoundHint(entry);
     });
+    video.addEventListener("pause", () => { if (!entry.video.ended) showPlayButton(entry); });
     video.addEventListener("ended", () => onEnded(entry));
     video.addEventListener("error", () => showBroken(entry));
     video.addEventListener("click", () => togglePlay(entry));
@@ -376,7 +378,11 @@ export function mountFeed(view, options = {}) {
     if (entry && entry.sound) setIcon(entry.sound, state.soundOn ? "volume" : "mute");
   }
 
+  let soundToastReady = false
   function setSound(on) {
+    const changed = soundToastReady && state.soundOn !== !!on
+    soundToastReady = true
+    if (changed) showToast(on ? "声音已开" : "已静音")
     state.soundOn = !!on;
     writeSoundPref(state.soundOn);
     for (const entry of state.built.values()) {
@@ -440,25 +446,25 @@ export function mountFeed(view, options = {}) {
   function togglePlay(entry) {
     if (entry.destroyed || entry.broken || !entry.video) return;
     if (entry.video.paused) {
+      hidePlayButton(entry);
       const result = entry.video.play();
       if (result && typeof result.catch === "function") result.catch(() => showPlayButton(entry));
-      flash(entry, "▶");
     } else {
+      // 用户 2026-09-23：不要暂停按钮 —— 暂停后**始终**显示"播放"按钮，不再闪 ⏸
       entry.video.pause();
-      flash(entry, "⏸");
+      showPlayButton(entry);
     }
   }
 
+  /** 暂停/播放失败时显示"播放"按钮；可反复出现（不再 latch 成一次性）。 */
   function showPlayButton(entry) {
-    if (entry.playRejected || entry.destroyed || !entry.video || !entry.layer) return;
-    entry.playRejected = true;
+    if (entry.destroyed || !entry.video || !entry.layer || entry.playBtn) return;
     entry.playBtn = el("button", {
       class: "center-btn", type: "button", text: "点击播放",
       onclick: () => {
         hidePlayButton(entry);
-        setSound(true);
         const result = entry.video.play();
-        if (result && typeof result.catch === "function") result.catch(() => {});
+        if (result && typeof result.catch === "function") result.catch(() => showPlayButton(entry));
       },
     });
     entry.layer.append(entry.playBtn);
@@ -613,7 +619,7 @@ export function mountFeed(view, options = {}) {
 
   // 剧场「选集」面板：样式与剧场列表里的选集一致（.ep-list/.ep-item），点一集就跳过去。
   function buildEpisodePanel(entry) {
-    const panel = el("div", { class: "set-panel hidden" });
+    const panel = el("div", { class: "set-panel eps hidden" });
     const list = el("div", { class: "ep-list" });
     state.items.forEach((item, i) => {
       list.append(el("button", {
@@ -688,6 +694,7 @@ export function mountFeed(view, options = {}) {
     const next = !item.favorite;
     item.favorite = next;
     entry.fav.classList.toggle("on", next);
+    showToast(next ? "已收藏" : "已取消收藏"); // 用户 2026-09-23：图标点完要有提示
     try {
       const result = next ? await api.addFavorite(item.id) : await api.removeFavorite(item.id);
       if (result && typeof result.favorite === "boolean" && result.favorite !== next) {
@@ -708,6 +715,7 @@ export function mountFeed(view, options = {}) {
     const next = !item.watch_later;
     item.watch_later = next;
     entry.later.classList.toggle("on", next);
+    showToast(next ? "已加入稍后再看" : "已移出稍后再看");
     try {
       const result = next ? await api.addWatchLater(item.id) : await api.removeWatchLater(item.id);
       if (result && typeof result.watch_later === "boolean" && result.watch_later !== next) {
@@ -726,6 +734,7 @@ export function mountFeed(view, options = {}) {
     const liked = item.reaction === "like";
     item.reaction = liked ? null : "like";
     entry.like.classList.toggle("on", !liked);
+    showToast(liked ? "已取消喜欢" : "已喜欢");
     try {
       if (liked) await api.removeReaction(item.id);
       else await api.addReaction(item.id, "like");

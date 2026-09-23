@@ -36,23 +36,10 @@ export function mountMe(view, options) {
     libraryLine.lastChild.textContent = n ? (n + " 个") : "未授权任何媒体库";
   }).catch(() => { libraryLine.lastChild.textContent = "未复核"; });
 
-  // 内容：「稍后再看」（收藏面板的 Tab： #/favorites/later，点卡片用首页那套播放器连播）
-  const laterNote = el("span", { class: "cell-note" });
-  const content = el("div", { class: "panel", dataset: { role: "me-content" } },
-    el("div", { class: "panel-title", text: "内容" }),
-    el("a", { class: "cell", href: "#/favorites/later", dataset: { role: "me-watch-later" } },
-      el("span", { class: "cell-label", text: "稍后再看" }), laterNote,
-      el("span", { class: "cell-chevron", text: "›" })));
-  api.watchLater().then((data) => {
-    const n = data && Array.isArray(data.list) ? data.list.length : 0;
-    laterNote.textContent = n ? (n + " 个") : "空";
-  }).catch(() => { laterNote.textContent = ""; });
-
-  // 设置：播放设置（用户 2026-09-23 要求把入口从顶栏收进「我的」）+ 管理后台。
-  // 首页右上 ⚙ 仍然在（就近改），两处共用同一份控件与同一个 PATCH。
+  // 用户 2026-09-23：这里**不再放**播放设置（首页右上 ⚙ 有）和稍后再看（收藏面板里有 Tab），
+  // 与收藏板块重合的功能不重复列；以后想清楚了再加别的。
   const settings = el("div", { class: "panel", dataset: { role: "me-settings" } },
-    el("div", { class: "panel-title", text: "设置" }),
-    cell("#/settings", "播放设置", "", "me-play-settings"));
+    el("div", { class: "panel-title", text: "设置" }));
   if (user.role === "admin") settings.append(cell("#/admin", "管理后台", "", "me-admin"));
 
   // 版本号就几个字，直接写在这一页（不再单独一个「关于」页）
@@ -67,7 +54,7 @@ export function mountMe(view, options) {
   });
   view.append(el("div", { class: "page" },
     el("div", { class: "page-head" }, el("h2", { class: "page-title", text: "我的" })),
-    account, content, settings,
+    account, settings,
     el("div", { class: "actions" }, logout), version));
   return null;
 }
