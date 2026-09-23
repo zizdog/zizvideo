@@ -4,7 +4,7 @@
 
 import { el, fmtDuration } from "./dom.js";
 import { api } from "./api.js";
-import { mountFeed } from "./feed.js";
+import { mountFeed, createMediaVideo } from "./feed.js";
 
 // RECORD_LISTS 是"记录类列表"的唯一定义：标签/空文案/加载/清除/底栏高亮，四处共用。
 export const RECORD_LISTS = {
@@ -57,20 +57,22 @@ export function videoCard(item, options) {
   const cover = item.cover_url
     ? el("img", { src: item.cover_url, alt: "", loading: "lazy" })
     : el("div", { class: "no-cover", text: "无封面" });
-  // 封面+标题放进链接；勾选框（leading）挂在**链接外面**（同一张卡片的兄弟节点）。
+  const coverBox = el("div", { class: "video-cover" }, cover,
+    el("span", { class: "video-badge", text: badge }),
+    pct > 0 && !progress.completed ? el("span", { class: "video-progress", style: { width: pct + "%" } }) : null);
+  const titleNode = el("div", { class: "video-title", text: item.title || ("#" + item.id) });
+  // 封面+标题放进可点区域；勾选框（leading）挂在**它外面**（同一张卡片的兄弟节点）。
   // 为什么不能让勾选框当 <a> 的子元素：点它会连带触发链接跳转；而 preventDefault 又会
   // 把"切换选中"这个默认动作一起取消 —— 实测"勾选框点不动"就是这么来的。
-  const link = el("a", {
-    class: "video-open", href,
-    title: item.title || ("#" + item.id),
-  },
-    el("div", { class: "video-cover" }, cover,
-      el("span", { class: "video-badge", text: badge }),
-      pct > 0 && !progress.completed ? el("span", { class: "video-progress", style: { width: pct + "%" } }) : null),
-    el("div", { class: "video-title", text: item.title || ("#" + item.id) }));
+  // playInline=true 时不是链接而是就地播放（管理端"去重"要对着同一屏逐个看，不许跳页放大）。
+  const link = opts.playInline
+    ? el("div", { class: "video-open inline-play", role: "button", tabindex: "0",
+        title: "点封面就地播放，再点收起" }, coverBox, titleNode)
+    : el("a", { class: "video-open", href, title: item.title || ("#" + item.id) }, coverBox, titleNode);
   const card = el("div", {
     class: "video-card", dataset: { role: "video-card", id: String(item.id) },
   }, link);
+  if (opts.playInline && item.missing !== true && item.file_exists !== false) attachInlinePlay(link, coverBox, item);
   if (opts.leading) card.append(el("span", { class: "video-lead" }, opts.leading));
   // meta 行（媒体库/大小/路径…，管理端"去重预览"用）收在一个容器里，便于样式化
   if (opts.meta && opts.meta.length) {
@@ -79,32 +81,6 @@ export function videoCard(item, options) {
     card.append(box);
   }
   return card;
-}
-
-// mountSinglePlay：单条视频预览（管理端"去重"要对比两个疑似重复的视频）。
-// 仍然复用唯一那份播放器 —— 只是播放列表里只有一条。
-export function mountSinglePlay(view, mediaId) {
-  const box = el("div", { class: "page" });
-  view.append(box);
-  let cleanup = null;
-  let cancelled = false;
-  api.media(mediaId).then((item) => {
-    if (cancelled) return;
-    if (!item || !item.id) {
-      box.append(el("div", { class: "card info", text: "找不到这个视频" }));
-      return;
-    }
-    cleanup = mountFeed(box, {
-      playlist: { title: item.title || "预览", items: [item], startId: item.id, navKey: "me" },
-    });
-  }).catch((err) => {
-    if (cancelled) return;
-    box.append(el("div", { class: "card info", text: err && err.message ? err.message : "加载失败" }));
-  });
-  return function cleanupSinglePlay() {
-    cancelled = true;
-    if (cleanup) cleanup();
-  };
 }
 
 // videoGrid：一组视频 → 卡片网格（四个列表共用同一套 DOM 与样式）。
@@ -152,4 +128,59 @@ export function mountRecordPlay(view, kind, mediaId) {
     cancelled = true;
     if (cleanup) cleanup();
   };
+}
+
+// 卡片"就地播放"（管理端"去重"专用）：点封面把共享的 <video> 挂进这张卡的封面框里，
+// 再点收起；同一屏同时只留一个在播（避免几路声音一起响）。播放器实现不在这里，见 feed.js。
+const inlineStops = new Set();
+
+// stopInlinePlayers 收掉页面上所有就地播放（路由切走/重新加载时调用，别让声音留着）。
+export function stopInlinePlayers() {
+  for (const stop of Array.from(inlineStops)) stop();
+  inlineStops.clear();
+}
+
+function attachInlinePlay(opener, box, item) {
+  let video = null;
+  let stopBtn = null;
+  const stop = () => {
+    inlineStops.delete(stop);
+    if (!video) return;
+    video.pause();
+    video.remove();
+    video = null;
+    if (stopBtn) { stopBtn.remove(); stopBtn = null; }
+    box.classList.remove("playing");
+  };
+  const toggle = () => {
+    if (video) { stop(); return; }
+    stopInlinePlayers();
+    video = createMediaVideo(item, { class: "card-video", controls: true });
+    box.classList.add("playing");
+    box.append(video);
+    // 收起要有**明确**的按钮：视频自带控件会把点表面的点击吃掉（实测点第二下收不起来），
+    // 所以点视频 = 原生播放/暂停，收起只认这个按钮（或点标题）。
+    stopBtn = el("button", {
+      class: "btn small inline-stop", type: "button", text: "✕ 收起",
+      dataset: { role: "inline-stop" },
+    });
+    stopBtn.addEventListener("click", (event) => { event.stopPropagation(); stop(); });
+    box.append(stopBtn);
+    inlineStops.add(stop);
+    const started = video.play();
+    if (started && typeof started.catch === "function") started.catch(() => {}); // 被拒也不炸，控件还在
+  };
+  const fromChrome = (event) => !!(event.target && event.target.closest
+    && event.target.closest("video, button, [data-role='inline-stop']"));
+  opener.addEventListener("click", (event) => {
+    if (video && fromChrome(event)) return; // 视频控件/收起按钮自己的点击不算"再点一次"
+    event.preventDefault();
+    toggle();
+  });
+  opener.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (fromChrome(event)) return;
+    event.preventDefault();
+    toggle();
+  });
 }

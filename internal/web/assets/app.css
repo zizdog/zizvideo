@@ -230,6 +230,11 @@ body {
 }
 .video-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .video-cover .no-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+/* 卡片就地播放（管理端"去重"）：视频就占封面框，不放大；播放时藏掉角标/进度条让画面干净 */
+.video-cover video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.video-cover.playing .video-badge, .video-cover.playing .video-progress { display: none; }
+.video-open.inline-play { cursor: pointer; }
+.video-cover .inline-stop { position: absolute; z-index: 3; top: 6px; right: 6px; }
 .video-badge {
   position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 999px;
   font-size: 11px; line-height: 1.6; background: rgba(0, 0, 0, 0.68); color: #fff;

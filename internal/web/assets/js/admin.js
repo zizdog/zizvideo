@@ -5,7 +5,7 @@ import { el, clear, banner, setBanner, field, input, fmtDuration, fmtBytes, fmtD
 import { openDirectoryPicker } from "./roots.js";
 import { uploadToLibrary } from "./uploads.js";
 import { mountSeriesTab } from "./admin-series.js";
-import { videoCard } from "./cards.js";
+import { videoCard, stopInlinePlayers } from "./cards.js";
 
 function button(label, onclick, extraClass) {
   return el("button", {
@@ -1079,7 +1079,7 @@ function mountDuplicates(root) {
           if (check.checked) selected.add(member.id); else selected.delete(member.id);
         });
         grid.append(videoCard(member, {
-          href: "#/one/" + encodeURIComponent(member.id), // 点封面 = 预览播放这条
+          playInline: true, // 点封面在**这张卡里**播（用户 2026-09-23：不要放大播放，原位置播放）
           badge: fmtBytes(member.size_bytes),
           leading: check,
           meta: [
@@ -1094,7 +1094,7 @@ function mountDuplicates(root) {
       },
         el("div", { class: "panel-title",
           text: "疑似重复 " + members.length + " 个 · " + fmtBytes(group.size_bytes) + " · " + fmtDuration(group.duration_ms) }),
-        el("div", { class: "muted small-note", text: "大小+时长相同只是疑似，不代表内容相同 —— 点封面即可预览播放再决定。" }),
+        el("div", { class: "muted small-note", text: "大小+时长相同只是疑似，不代表内容相同 —— 点封面就地播放，再点收起。" }),
         grid));
     });
   }
@@ -1176,11 +1176,14 @@ function mountDuplicates(root) {
   });
   root.append(note, el("div", { class: "panel" },
     el("div", { class: "row" }, detect, summary),
-    el("div", { class: "muted small-note", text: "判据：大小 + 时长相同 ⇒ 疑似重复，不代表内容相同；点封面可预览。" }),
+    el("div", { class: "muted small-note", text: "判据：大小 + 时长相同 ⇒ 疑似重复，不代表内容相同；点封面就地播放。" }),
     el("div", { class: "row" }, pickAll, pickNone, delRecords, confirmInput, delFiles), progress), groupsBox);
   load();
 
-  return () => { for (const timer of timers) clearInterval(timer); };
+  return () => {
+    for (const timer of timers) clearInterval(timer);
+    stopInlinePlayers(); // 换页/重新检测时别把声音留在后台
+  };
 }
 
 /* ---------- 系统 ---------- */

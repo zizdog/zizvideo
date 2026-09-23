@@ -71,6 +71,21 @@ function titleOf(item, index) {
   return label ? (label + " · " + title) : title;
 }
 
+// createMediaVideo 是**全站唯一**"给一条媒体造 <video>"的地方：首页/剧场/记录列表/管理端
+// 卡片内联播放都用它（用户 2026-09-23："不要重复写播放器，复用即可"）。
+// 只负责元素本身（地址、播放属性）；连播/手势/进度上报/声音偏好属于 mountFeed，别塞进来。
+export function createMediaVideo(item, opts = {}) {
+  const video = el("video", {
+    class: opts.class || "video", playsinline: "", "webkit-playsinline": "",
+    preload: opts.preload || "metadata",
+  });
+  video.controls = opts.controls === true;
+  video.muted = opts.muted === true;
+  video.loop = opts.loop === true;
+  video.src = item.stream_url || ("/api/v1/media/" + encodeURIComponent(item.id) + "/stream");
+  return video;
+}
+
 // mountFeed 是全站唯一的播放器（用户 2026-09-22 明确要求："剧场直接利用首页，不许两套"）。
 // options.playlist = { title, items } 时进入**播放列表模式**（剧场）：
 //   · 数据由调用方给（不取随机游标、没有选库）；顺序播、自动连播且不可设置；
@@ -272,13 +287,8 @@ export function mountFeed(view, options = {}) {
       return entry;
     }
 
-    const video = el("video", {
-      class: "video", playsinline: "", "webkit-playsinline": "", preload: "metadata",
-    });
-    video.controls = false;
-    video.muted = !state.soundOn;
-    video.loop = loopEnabled();
-    video.src = item.stream_url;
+    // 页面级行为（连播/手势/进度上报/声音提示）留在下面；"造 <video>"这一步是共享的。
+    const video = createMediaVideo(item, { muted: !state.soundOn, loop: loopEnabled() });
     entry.video = video;
     video.addEventListener("loadedmetadata", () => onMetadata(entry));
     video.addEventListener("loadeddata", () => checkFrames(entry));
