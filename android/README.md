@@ -69,6 +69,25 @@ media id 与标题、按顺序）+ 正在播的那条 + 位置整体交给原生
   `/api/v1/media/{id}/reactions`、`/me/watch-later/{id}`），状态从 `GET /api/v1/media/{id}` 读，
   点亮变强调色。实测：点喜欢 → `reaction=like`；点稍后再看 → `watch_later=true`（服务器状态为准）。
 
+## 已验证矩阵（模拟器 Pixel 6 / Android 15 / arm64，release 包）
+| 能力 | 判据 | 结果 |
+|---|---|---|
+| 原生登录 → 会话交接给 WebView | 焦点变 WebActivity 且网页在播 | ✅ |
+| 冷启动免密 | 有会话 cookie 时直接进网页 | ✅ |
+| 列表点卡片 → 原生播放 | `zvplayer: queue kind=favorites 条数=4` + 标题+画面 | ✅ |
+| **网页退后台 → 原生接手** | HOME 后 `PLAYING` 且位置接着走 | ✅ |
+| **熄屏 → 原生接手** | 熄屏 6~12s 后 `PLAYING`（有几秒延迟） | ✅ |
+| **回前台 → 网页收回** | 网页进度继续涨、原生 `NONE`（无双路声音） | ✅ |
+| 后台继续解码 | 12 秒 position 走 10,984ms；`dumpsys power` 有 `ExoPlayer:WakeLockManager (partial)` | ✅ |
+| 通知栏/锁屏/耳机键控制 | `input keyevent 127` → `PAUSED(2)`；`126` → `PLAYING(3)` | ✅ |
+| 前台服务类型 | `isForeground=true types=0x00000002`（mediaPlayback） | ✅ |
+| 续播 | 长样本 20199ms → 打开后 29148ms，标题标「已续播」 | ✅ |
+| 播完连播下一条 | 5 秒短片播完自动跳条（后台判据靠这个） | ✅ |
+| 快捷方式「听首页」 | `zizvideo://listen/feed` → `queue kind=feed 条数=7` + 播放 | ✅ |
+| 搜索结果原生播放 | 点搜索结果 → `queue kind=search 条数=4` + 播放 | ✅ |
+| 播放页互动栏 ❤/👍/🕒 | 点 👍 → 服务器 `reaction=like`；点 🕒 → `watch_later=true` | ✅ |
+| **真机硬件解码 / 省电白名单** | 见下（模拟器验不了，必须真机） | ⬜ 待用户 |
+
 ## 真机验收清单（只能人工做，命令都在下面）
 ```bash
 # 1) 装正式签名包（比 debug 小、以后换包不用卸载）
