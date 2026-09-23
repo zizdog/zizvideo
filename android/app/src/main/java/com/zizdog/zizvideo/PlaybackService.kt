@@ -31,7 +31,10 @@ class PlaybackService : MediaSessionService() {
     private val reporter = Executors.newSingleThreadExecutor()
     private var reporting = false
     private var base = ""
-    private var cookie = ""
+
+    /** 会话 cookie 现读：服务只在 onCreate 缓存它的话，用户在网页里重新登录后就一直 401（修过）。 */
+    private fun cookie(): String =
+        android.webkit.CookieManager.getInstance().getCookie(base) ?: ""
 
     private val tick = object : Runnable {
         override fun run() {
@@ -43,12 +46,18 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         base = Prefs(this).baseUrl
-        cookie = android.webkit.CookieManager.getInstance().getCookie(base) ?: ""
-        val headers = if (cookie.isBlank()) emptyMap() else mapOf("Cookie" to cookie)
-        val factory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(headers)
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(20000)
+        // 数据源工厂在**每次建流时**现读 cookie（登录/换服务器后不用重启服务）
+        val factory = object : androidx.media3.datasource.DataSource.Factory {
+            override fun createDataSource(): androidx.media3.datasource.DataSource {
+                val c = cookie()
+                val headers = if (c.isBlank()) emptyMap() else mapOf("Cookie" to c)
+                return DefaultHttpDataSource.Factory()
+                    .setDefaultRequestProperties(headers)
+                    .setConnectTimeoutMs(15000)
+                    .setReadTimeoutMs(20000)
+                    .createDataSource()
+            }
+        }
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
             .setAudioAttributes(
@@ -89,7 +98,8 @@ class PlaybackService : MediaSessionService() {
     private fun report() {
         val item = player.currentMediaItem ?: return
         val id = item.mediaId
-        if (id.isBlank() || cookie.isBlank()) return
+        val c = cookie()
+        if (id.isBlank() || c.isBlank()) return
         val pos = player.currentPosition
         val dur = player.duration
         if (pos <= 0) return
@@ -99,7 +109,7 @@ class PlaybackService : MediaSessionService() {
         reporting = true
         reporter.execute {
             try {
-                ZvApi2.reportProgress(base, cookie, id, pos, total, done)
+                ZvApi2.reportProgress(base, c, id, pos, total, done)
             } catch (e: Exception) {
                 // 报进度失败不影响听视频，下次再报
             } finally {

@@ -45,6 +45,7 @@ class WebActivity : AppCompatActivity() {
     private var base: String = ""
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var launchingNative = false
+    private var handlingLogin = false
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -171,6 +172,16 @@ class WebActivity : AppCompatActivity() {
      */
     private fun handlePlayRoute(url: String): Boolean {
         val hash = url.substringAfter("#", "")
+        // 会话失效时网页会退到 #/login：把用户交回原生登录页（那里会重新登录并把新 cookie 灌进来），
+        // 否则他在网页里重登、原生播放器还拿着旧 cookie 一直 401。
+        if (hash == "/login") {
+            if (!handlingLogin) {
+                handlingLogin = true
+                startActivity(Intent(this, LoginActivity::class.java))
+                finish()
+            }
+            return true
+        }
         val parts = hash.split("/").filter { it.isNotEmpty() }
         if (parts.size < 3 || parts[0] != "play") return false
         val kind = parts[1]

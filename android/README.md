@@ -49,10 +49,25 @@ adb shell dumpsys media.metrics | tr ',' '\n' | grep -o "android.media.mediacode
 #   （模拟器上必然是 c2.android.*：模拟器没有真硬件解码器，别拿模拟器当硬解证据）
 
 # 3) 后台/锁屏：播放中按 HOME、再锁屏，通知栏应有媒体控制且声音不断
+#    控制也可以用按键路径验（等价耳机线控）：
+#      adb shell input keyevent 127   # 暂停 → dumpsys media_session 应变成 state=PAUSED(2)
+#      adb shell input keyevent 126   # 播放 → 变回 PLAYING(3)
+#      adb shell input keyevent 87    # 下一集
+#    后台稳不稳的硬证据（播放中执行，应看到 ExoPlayer 的 partial wakelock）：
+#      adb shell dumpsys power | grep -i "ExoPlayer:WakeLockManager"
 # 4) 国产 ROM：设置 → 电池/后台管理里给 zizvideo 允许后台运行（代码解决不了，必须手动放行）
 ```
 
-## 这一轮（第三轮）新增
+## 第四轮新增
+- **会话 cookie 现读**：服务原来只在 `onCreate` 缓存 cookie ⇒ 用户在网页里重新登录后原生播放器
+  一直 401。改成数据源工厂 `createDataSource()` 时现读 + 进度上报现读。
+- **登录态失效回原生登录页**：网页退到 `#/login` 时把用户交回 `LoginActivity`（重新登录会灌新 cookie），
+  否则他会卡在"网页里登录了、原生还 401"这种半死状态。
+- 验证（模拟器 / release 包）：耳机键暂停 `PLAYING(3)→PAUSED(2)`、播放 `PAUSED(2)→PLAYING(3)`；
+  `dumpsys power` 里有 `10208 (com.zizdog.zizvideo) - ACQ ExoPlayer:WakeLockManager (partial)`
+  ⇒ 后台解码靠的是 partial wakelock，不依赖亮屏。
+
+## 第三轮新增
 - **续播**：与网页端同语义（`position>0 且未看完`才续），标题会标「（已续播）」。
   实测：长样本 20199ms → 打开后 position 29148ms（= 20s + 播放 9s）。
 - **正式签名**：`keystore.properties`（gitignored）+ 仓库外的 `~/android-toolchain/zv-release.keystore`，
