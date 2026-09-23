@@ -23,6 +23,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 
@@ -57,6 +60,10 @@ class WebActivity : AppCompatActivity() {
      * 点进结果时用 ?q= 自己重放同一份列表（仍然是服务端同一个筛选接口，不另立契约）。
      */
     private var lastSearchQuery = ""
+
+    // 连一个 MediaController：media3 靠"有没有控制器"判断会话在用，进而发媒体通知 + 提升前台服务。
+    // 少了它，交接路径下服务不进前台（startForegroundCount:0、通知栏没有媒体卡片），后台就不算稳定（实测踩过）。
+    private var mediaFuture: ListenableFuture<MediaController>? = null
 
     /** 网页调这个：它在后台了，把**它当前那份队列 + 正在播的那条 + 位置**整体交出来。 */
     inner class Bridge {
@@ -153,8 +160,11 @@ class WebActivity : AppCompatActivity() {
         configure(web)
         web.addJavascriptInterface(Bridge(), "ZvAndroid")
         // 前台时先把服务"启动"起来（此时不受后台启动限制），后面在后台才能提升为前台服务
-        // 前台时先把服务起起来（此时不受后台启动限制）；交接时直接调它的实例方法
+        // 前台时先把服务起起来（此时不受后台启动限制）+ 连一个控制器（见 mediaFuture 的说明）
         startService(Intent(this, PlaybackService::class.java))
+        mediaFuture = MediaController.Builder(
+            this, SessionToken(this, ComponentName(this, PlaybackService::class.java)),
+        ).buildAsync()
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         web.loadUrl(base + path)
 
@@ -318,6 +328,7 @@ class WebActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        mediaFuture?.let { MediaController.releaseFuture(it) }
         // 全屏视频要先收干净，否则会漏一个 SurfaceView
         customView?.let { fullscreen.removeView(it) }
         web.destroy()

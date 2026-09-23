@@ -20,8 +20,10 @@ TAG="${4:-/tmp/zv-emu}"
 # 默认验 debug 包；验正式签名包：ZV_APK=app/build/outputs/apk/release/app-release.apk
 APK="${ZV_APK:-app/build/outputs/apk/debug/app-debug.apk}"
 AVD="${ZV_AVD:-zv35}"
+# 想验别的页面就传 ZV_PATH（如 ZV_PATH="/#/series/<id>"）；默认进稍后再看列表走原生播放那条路
 
-cleanup() { adb emu kill >/dev/null 2>&1 || true; sleep 2; pkill -f "emulator -avd $AVD" 2>/dev/null || true; }
+# ZV_KEEP=1：跑完不关模拟器（手动接着验别的；不用了记得自己 adb emu kill）
+cleanup() { [ "${ZV_KEEP:-0}" = "1" ] && return 0; adb emu kill >/dev/null 2>&1 || true; sleep 2; pkill -f "emulator -avd ${AVD}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 [ -f "$APK" ] || { echo "先构建：bash tools/build.sh" >&2; exit 1; }
@@ -59,7 +61,7 @@ adb shell pm clear com.zizdog.zizvideo >/dev/null
 adb shell pm grant com.zizdog.zizvideo android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 adb logcat -c
 # 启动就打开列表页：比"点底栏再点页签"稳得多（底栏样式一改，写死的坐标就废了）
-adb shell am start -n com.zizdog.zizvideo/.LoginActivity --es path "/#/favorites/later" >/dev/null
+adb shell am start -n com.zizdog.zizvideo/.LoginActivity --es path "${ZV_PATH:-/#/favorites/later}" >/dev/null
 sleep 3
 
 tap_field() { adb shell input tap 540 "$1"; sleep 1; adb shell input text "$2"; sleep 1; }

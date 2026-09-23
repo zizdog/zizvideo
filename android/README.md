@@ -58,6 +58,18 @@ media id 与标题、按顺序）+ 正在播的那条 + 位置整体交给原生
 实测（模拟器 / release 包）：前台网页进度 5016 → 按 HOME 后原生 `PLAYING position=24154` →
 后台 10 秒 `33164` 且服务器进度 31102 → 回前台网页 40159→50159（+10s）、原生 `NONE`（没有两路声音）。
 
+## 第七轮：交接路径其实没进前台服务（修）+ 三个补验
+**发现的真问题**：只验"位置还在走"是不够的。查 `dumpsys activity services` 发现交接路径下
+`startForegroundCount:0`、**服务没进前台、通知栏没有媒体卡片** —— 也就是说后台播放靠的是"进程恰好还没被杀"，
+**不满足"稳定"**（系统随时可以回收，也没有锁屏控制）。
+原因：这条路径没有 MediaController 连接，而 media3 是靠"会话有没有控制器在用"来决定发通知 + 提升前台服务的。
+**修法**：`WebActivity` 在前台时连一个 `MediaController`（`MediaSessionService` 靠 `onBind` 提供连接，
+这也再次说明**不能覆盖 onBind**）。
+**修后实测**：交接路径下 `isForeground=true foregroundId=1001`，通知栏出现媒体卡片（标题/进度/上下条），
+点卡片能回到原生播放页。
+
+另外三项补验：剧场页退后台也交接（钩子通用）✅、横屏继续播 ✅、点通知回播放页 ✅。
+
 ## 第六轮：原生播放页补互动栏 + 修一个严重自造 bug
 - **严重 bug（我上一轮造的）**：为了"退后台交接"我给 `PlaybackService` 覆盖了 `onBind` 返回自己的 binder ——
   这会把 media3 的 **MediaController 连接掐断**（`MediaSessionService` 就是靠 onBind 把控制器给播放页的）。
@@ -84,6 +96,10 @@ media id 与标题、按顺序）+ 正在播的那条 + 位置整体交给原生
 | 续播 | 长样本 20199ms → 打开后 29148ms，标题标「已续播」 | ✅ |
 | 播完连播下一条 | 5 秒短片播完自动跳条（后台判据靠这个） | ✅ |
 | 快捷方式「听首页」 | `zizvideo://listen/feed` → `queue kind=feed 条数=7` + 播放 | ✅ |
+| 剧场（剧集）页退后台 | 剧场页按 HOME → 原生 `PLAYING`（钩子是通用的，不限首页） | ✅ |
+| 横屏 | 旋转到横屏后仍 `PLAYING`（位置 42446→48455） | ✅ |
+| 点通知卡片 | 焦点回到 `PlayerActivity` | ✅ |
+| **交接路径的前台服务** | `isForeground=true foregroundId=1001` + 通知栏有媒体卡片 | ✅（原来是缺失的，见下） |
 | 搜索结果原生播放 | 点搜索结果 → `queue kind=search 条数=4` + 播放 | ✅ |
 | 播放页互动栏 ❤/👍/🕒 | 点 👍 → 服务器 `reaction=like`；点 🕒 → `watch_later=true` | ✅ |
 | **真机硬件解码 / 省电白名单** | 见下（模拟器验不了，必须真机） | ⬜ 待用户 |
