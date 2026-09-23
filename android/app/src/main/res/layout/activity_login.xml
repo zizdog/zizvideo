@@ -79,6 +79,15 @@
             android:layout_marginTop="18dp"
             android:text="@string/action_login" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/battery"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:visibility="gone"
+            android:text="@string/allow_background" />
+
         <TextView
             android:id="@+id/status"
             android:layout_width="match_parent"

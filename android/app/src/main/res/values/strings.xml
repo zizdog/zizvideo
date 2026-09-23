@@ -11,4 +11,5 @@
     <string name="err_credentials_empty">请先填用户名和口令</string>
     <string name="shortcut_listen_feed">听首页</string>
     <string name="shortcut_open_app">打开浏览</string>
+    <string name="allow_background">允许后台运行（后台听视频更稳）</string>
 </resources>

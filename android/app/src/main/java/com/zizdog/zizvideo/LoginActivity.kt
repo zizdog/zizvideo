@@ -43,6 +43,25 @@ class LoginActivity : AppCompatActivity() {
         username.setText(prefs.username)
         login.setOnClickListener { submit() }
 
+        // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
+        // 只在还没放行时显示；放行了就不显示（不占地方、不误导）。
+        val battery = findViewById<MaterialButton>(R.id.battery)
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+            battery.visibility = View.VISIBLE
+            battery.setOnClickListener {
+                try {
+                    @Suppress("BatteryLife")
+                    startActivity(
+                        Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            .setData(android.net.Uri.parse("package:$packageName")),
+                    )
+                } catch (e: Exception) {
+                    status.text = "这台机器不支持一键申请，请到系统设置里手动允许"
+                }
+            }
+        }
+
         val data = intent?.data?.toString() ?: ""
         if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")
         // 上次登录留下的会话 cookie 还有效就直接进 —— 不然每次冷启动都要重输口令（用户预期是免登录）

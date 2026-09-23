@@ -57,11 +57,24 @@ class PlaybackService : MediaSessionService() {
     /** 播放页注册这个来显示错误（服务在后台时没人听，所以只存最近一条）。 */
     var onError: ((String) -> Unit)? = null
 
-    private fun friendlyError(error: androidx.media3.common.PlaybackException): String = when (error.errorCode) {
+    private fun friendlyError(error: androidx.media3.common.PlaybackException): String {
+        // HTTP 码不在 PlaybackException 上，得从 cause 里取（media3 1.4 的 API 就是这样）
+        val http = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode ?: 0
+        return friendlyError(error, http)
+    }
+
+    private fun friendlyError(error: androidx.media3.common.PlaybackException, httpCode: Int): String = when (error.errorCode) {
         androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
         androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
         -> "网络断了，连不上服务器"
-        androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "服务器拒绝了请求（可能登录过期）"
+        // HTTP 码要分细：404 其实是"文件不在了"，笼统说成"登录过期"是错的（实测踩过）
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> when (httpCode) {
+            404 -> "文件不在了（可能已改名或移动）"
+            401, 403 -> "登录过期了，请重新登录"
+            416 -> "这个视频的数据不完整"
+            0 -> "服务器拒绝了请求"
+            else -> "服务器出错（HTTP " + httpCode + "）"
+        }
         androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不在了（可能已改名或移动）"
         androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
         androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
@@ -153,6 +166,7 @@ class PlaybackService : MediaSessionService() {
     /** 按给定 id 列表播（stream 地址由 base 拼），从 index 条的 positionMs 开始。 */
     fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) {
         if (ids.isEmpty()) return
+        base = Prefs(this).baseUrl // 同上：换服务器后 stream 地址也要跟着走
         val items = ids.mapIndexed { i, id ->
             MediaItem.Builder()
                 .setUri("$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
@@ -174,7 +188,8 @@ class PlaybackService : MediaSessionService() {
 
     /** 拉一份队列并开始播（网页交接过来的那一条 + 它的位置）。网线活儿全在后台线程。 */
     fun playQueue(kind: String, mediaId: String, positionMs: Long) {
-        if (base.isBlank()) base = Prefs(this).baseUrl
+        // 每次现读：用户可能换了服务器（原来只在为空时读，换服务器后会往老地址拉）
+        base = Prefs(this).baseUrl
         val c = cookie()
         Thread {
             val list = ZvApi2.queue(base, kind, c)
