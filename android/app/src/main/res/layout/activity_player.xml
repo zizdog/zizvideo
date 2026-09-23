@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 原生播放页：硬解播放 + 后台继续。控件交给 PlayerView（播放/暂停/上下条/进度/手势）。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/playerRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#FF000000"

@@ -19,6 +19,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 
 /**
@@ -52,8 +53,10 @@ class WebActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_web)
+        Ui.padSystemBars(findViewById(R.id.root))
         web = findViewById(R.id.web)
         fullscreen = findViewById(R.id.fullscreen)
         base = intent.getStringExtra(EXTRA_BASE) ?: Prefs(this).baseUrl

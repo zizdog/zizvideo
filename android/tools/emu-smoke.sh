@@ -37,6 +37,15 @@ if ! adb devices | grep -q "emulator-.*device"; then
 fi
 echo "==> 设备：$(adb shell getprop ro.build.version.release | tr -d '\r') / $(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
 
+# 刚开机时模拟器的虚拟网卡可能还没就绪（实测过一次 ConnectException）——先等能连通宿主再装。
+echo "==> 等模拟器网络就绪"
+net=0
+for _ in $(seq 1 30); do
+  if adb shell ping -c 1 -W 1 10.0.2.2 >/dev/null 2>&1; then net=1; break; fi
+  sleep 2
+done
+[ "$net" = "1" ] && echo "✓ 网络就绪" || echo "!! 30 次探测仍不通，继续跑（失败会有截图）"
+
 echo "==> 装 APK 并清数据（每次从首屏开始）"
 adb install -r "$APK" >/dev/null
 adb shell pm clear com.zizdog.zizvideo >/dev/null
@@ -60,6 +69,13 @@ print('' if not m else '%d %d' % ((int(m.group(1))+int(m.group(3)))//2, (int(m.g
 [ -n "$COORD" ] || { echo "!! 找不到登录按钮（首屏没起来？）"; exit 1; }
 adb shell input tap $COORD
 sleep 10
+# 偶发连不上（模拟器网络抖动）时再点一次登录：字段还在，重试无副作用。
+focus0=$(adb shell dumpsys window 2>/dev/null | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^}]*\)}.*/\1/p' | head -1)
+if [ "${focus0##*.}" = "LoginActivity" ]; then
+  echo "==> 第一次没进网页，重试一次登录"
+  adb shell input tap $COORD
+  sleep 10
+fi
 
 focus=$(adb shell dumpsys window 2>/dev/null | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^}]*\)}.*/\1/p' | head -1)
 echo "==> 登录后焦点窗口：$focus"

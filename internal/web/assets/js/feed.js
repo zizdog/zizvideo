@@ -1,6 +1,7 @@
 // 竖向全屏短视频流：transform 位移 + 手势锁 + seed 随机游标 + 拖动进度
 
 import { api, patchProgressKeepalive } from "./api.js";
+import { icon, setIcon } from "./icons.js";
 import { el, clear, asArray, fmtDuration } from "./dom.js";
 import { mountNav } from "./nav.js";
 import { session } from "./auth.js";
@@ -221,9 +222,9 @@ export function mountFeed(view, options = {}) {
     };
     state.built.set(index, entry);
 
-    entry.fav = el("button", { class: "icon-btn", type: "button", title: "收藏", text: "♥" });
-    entry.like = el("button", { class: "icon-btn", type: "button", title: "喜欢", text: "👍" });
-    entry.later = el("button", { class: "icon-btn", type: "button", title: "稍后再看", text: "🕒" });
+    entry.fav = el("button", { class: "icon-btn", type: "button", title: "收藏" }, icon("heart"));
+    entry.like = el("button", { class: "icon-btn", type: "button", title: "喜欢" }, icon("thumb"));
+    entry.later = el("button", { class: "icon-btn", type: "button", title: "稍后再看" }, icon("clock"));
     entry.fav.classList.toggle("on", !!item.favorite);
     entry.like.classList.toggle("on", item.reaction === "like");
     entry.later.classList.toggle("on", !!item.watch_later);
@@ -232,7 +233,7 @@ export function mountFeed(view, options = {}) {
     entry.later.addEventListener("click", () => toggleWatchLater(entry));
     // 删除入口只给管理员（前台也不放宽权限，接口侧再拦一次）
     entry.del = isAdmin()
-      ? el("button", { class: "icon-btn", type: "button", title: "删除这个视频", text: "🗑" })
+      ? el("button", { class: "icon-btn", type: "button", title: "删除这个视频" }, icon("trash"))
       : null;
     if (entry.del) {
       entry.del.addEventListener("click", (event) => { event.stopPropagation(); askDelete(entry); });
@@ -372,7 +373,7 @@ export function mountFeed(view, options = {}) {
   /* ---------- 声音（角落按钮，不再是单击画面） ---------- */
 
   function paintSound(entry) {
-    if (entry && entry.sound) entry.sound.textContent = state.soundOn ? "🔊" : "🔇";
+    if (entry && entry.sound) setIcon(entry.sound, state.soundOn ? "volume" : "mute");
   }
 
   function setSound(on) {
@@ -398,7 +399,7 @@ export function mountFeed(view, options = {}) {
   function showSoundHint(entry) {
     if (entry.destroyed || !entry.layer) return;
     if (!entry.soundHint) {
-      entry.soundHint = el("div", { class: "hint low", text: "点右上角喇叭开启声音" });
+      entry.soundHint = el("div", { class: "hint low", text: "点右下角的喇叭开启声音" });
       entry.layer.append(entry.soundHint);
     }
     entry.soundHint.classList.remove("hidden");
@@ -639,7 +640,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function gearButton(entry) {
-    entry.gear = el("button", { class: "icon-btn", type: "button", title: "播放设置", text: "⚙" });
+    entry.gear = el("button", { class: "icon-btn", type: "button", title: "播放设置" }, icon("gear"));
     entry.gear.addEventListener("click", (event) => {
       event.stopPropagation();
       if (!entry.panel) entry.layer.append(buildPanel(entry));

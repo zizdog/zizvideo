@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.View
 import android.webkit.CookieManager
 import android.widget.TextView
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
@@ -24,8 +25,10 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
+        Ui.padSystemBars(findViewById(R.id.loginRoot))
         prefs = Prefs(this)
         server = findViewById(R.id.server)
         username = findViewById(R.id.username)

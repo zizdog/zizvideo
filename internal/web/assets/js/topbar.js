@@ -4,6 +4,7 @@
 
 import { el, clear } from "./dom.js";
 import { session } from "./auth.js";
+import { icon } from "./icons.js";
 
 export function renderTopBar(headerEl, options) {
   const opts = options || {};
@@ -15,13 +16,13 @@ export function renderTopBar(headerEl, options) {
   if (opts.showBack) {
     nodes.push(el("button", {
       class: "top-btn", type: "button", title: "返回", "aria-label": "返回",
-      dataset: { role: "top-back" }, text: "←", onclick: opts.onBack,
-    }));
+      dataset: { role: "top-back" }, onclick: opts.onBack,
+    }, icon("back")));
   }
   nodes.push(el("div", { class: "spacer" }));
   nodes.push(el("button", {
     class: "top-btn", type: "button", title: "搜索", "aria-label": "搜索",
-    dataset: { role: "top-search" }, text: "🔍", onclick: opts.onSearch,
-  }));
+    dataset: { role: "top-search" }, onclick: opts.onSearch,
+  }, icon("search")));
   for (const node of nodes) headerEl.append(node);
 }

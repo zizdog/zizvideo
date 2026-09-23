@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.webkit.CookieManager
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
@@ -40,8 +41,10 @@ class PlayerActivity : AppCompatActivity() {
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 拒了也能放，只是没有通知 */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
+        Ui.padSystemBars(findViewById(R.id.playerRoot))
         view = findViewById(R.id.player)
         nowPlaying = findViewById(R.id.nowPlaying)
         if (Build.VERSION.SDK_INT >= 33 &&

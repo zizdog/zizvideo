@@ -30,11 +30,12 @@ body {
   height: 52px; padding: 0 10px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .top-btn {
-  font: inherit; font-size: 19px; line-height: 1; width: 40px; height: 36px; padding: 0;
+  font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--fg);
+  border: 0; border-radius: 999px; background: transparent; color: var(--fg);
 }
-.top-btn:hover { background: var(--panel2); border-color: var(--line); }
+.top-btn svg { width: 24px; height: 24px; }
+.top-btn:hover { background: var(--panel2); }
 /* 搜索页的输入条 */
 .search-bar { display: flex; gap: 8px; align-items: center; }
 .search-bar .input { flex: 1 1 auto; }
@@ -98,7 +99,7 @@ body {
   inset: 0; height: auto; z-index: 3; color: var(--muted); font-size: 14px;
 }
 .feed-chip {
-  position: absolute; z-index: 8; top: 12px; left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 8; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
   padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,.62); color: #fff; font-size: 12px;
 }
 .layer { position: absolute; inset: 0; }
@@ -123,11 +124,19 @@ body {
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
+/* 抖音式图标栏（用户 2026-09-23："参考抖音的图标样式，字符图标太难看"）：
+   实心矢量、无圆圈底、白图标 + 投影；选中/点亮变强调色（像抖音点赞变红）。 */
 .icon-btn {
-  width: 38px; height: 38px; border-radius: 50%; font-size: 17px; line-height: 1; cursor: pointer;
-  border: 1px solid rgba(255,255,255,.28); background: rgba(0,0,0,.42); color: #fff;
+  width: 44px; height: 44px; padding: 0; line-height: 0; cursor: pointer;
+  border: 0; background: transparent; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.55));
+  transition: transform .12s ease, color .12s ease;
 }
-.icon-btn.on { background: var(--accent); border-color: var(--accent); color: #04121f; }
+.icon-btn svg { width: 30px; height: 30px; }
+.icon-btn:hover { transform: scale(1.06); }
+.icon-btn.on { color: var(--accent); }
+.icon-btn.on svg { filter: drop-shadow(0 0 6px rgba(255,59,91,.45)); }
 .bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
 .bar-fill { display: block; height: 100%; width: 0; background: #fff; }
 /* 进度条：扩大命中区，支持点击/拖动（item 3） */
@@ -139,7 +148,10 @@ body {
 }
 /* 角落：库归属（左）与声音/设置（右）；单击画面不再切静音（item 1/13） */
 .ov-corner {
-  position: absolute; z-index: 7; top: 0; display: flex; gap: 8px; padding: 10px 12px;
+  /* 顶部要躲开状态栏/刘海：安卓 App 里由原生把 WebView 垫到状态栏下方，
+     浏览器/刘海屏这里再用 env() 兜一道（0 时无副作用）。 */
+  position: absolute; z-index: 7; top: env(safe-area-inset-top, 0px);
+  display: flex; gap: 8px; padding: 10px 12px;
   pointer-events: none; max-width: 100%;
 }
 .ov-corner.left { left: 0; }
@@ -311,7 +323,8 @@ body {
   padding: 7px 4px 8px; text-decoration: none; color: var(--muted); font-size: 12px;
 }
 .nav-item.on { color: var(--accent); }
-.nav-icon { font-size: 17px; line-height: 1.1; }
+.nav-icon { line-height: 0; }
+.nav-icon svg { width: 24px; height: 24px; }
 
 /* 剧场列表：抖音式竖版海报网格（用户 2026-09-22："不要横条，参考抖音"）。
    auto-fill + minmax 让它自己决定一行几张：手机 2 张、宽屏 5~6 张。 */
