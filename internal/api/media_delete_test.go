@@ -114,6 +114,35 @@ func TestMissingMediaIsHonestAndPurgeable(t *testing.T) {
 		t.Fatalf("清理不许误伤正常记录，实际 %d", res.StatusCode)
 	}
 
+	// ⑤ 更阴的一种：文件被删/改名，但**还没扫描**（missing_since 为空、status 仍是 ready）。
+	// 这正是用户报障的形态（首页显示"这个视频放不了 状态：ready"）：missing_since 只有扫描才写，
+	// 所以 feed 必须在**出页之前**逐个 stat 掉这种行，并顺手标记缺失（幂等，下次清扫看得见）。
+	// 单独的库 + 单独的 feed 作用域，避免上面已经推进过的游标/轮次干扰。
+	lib2 := e.newLibrary("未扫描库", filepath.Join(e.Root, "b2"))
+	ghostPath := filepath.Join(e.Root, "b2", "ghost.mp4")
+	ghost := e.newMedia(lib2.ID, ghostPath, body(16))
+	if err := os.Remove(ghostPath); err != nil {
+		t.Fatal(err)
+	}
+	res, env, raw = e.do(http.MethodGet, "/api/v1/feed/next?limit=50&library_id="+lib2.ID, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("feed(lib2) = %d (%s)", res.StatusCode, raw)
+	}
+	var feed2 listBody
+	decodeInto(t, env.Data, &feed2)
+	if has(feed2, ghost.ID) {
+		t.Fatalf("文件已不在、又没扫描过的记录仍进了 feed: %s", raw)
+	}
+	res, env, raw = e.do(http.MethodGet, "/api/v1/media?status=missing&per_page=50", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("missing 筛选 = %d (%s)", res.StatusCode, raw)
+	}
+	var marked listBody
+	decodeInto(t, env.Data, &marked)
+	if !has(marked, ghost.ID) {
+		t.Fatalf("feed 出页时该顺手把缺失行标记 missing: %s", raw)
+	}
+
 	// 非管理员：403（清理是管理动作）
 	e.write(http.MethodPatch, "/api/v1/admin/settings", map[string]any{"allow_register": true})
 	anon := e.anonClient()

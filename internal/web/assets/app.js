@@ -8,7 +8,6 @@ import { mountAdmin } from "./js/admin.js";
 import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
-import { mountWatchLater, mountWatchLaterPlay } from "./js/watch-later.js";
 import { mountRecordPlay, mountSinglePlay } from "./js/cards.js";
 import { mountMe } from "./js/me.js";
 
@@ -70,19 +69,18 @@ function route() {
     show((view) => mountSeriesPlay(view, id), false);
     return;
   }
-  if (path === "/favorites") {
-    show((view) => withNav(view, "favorites", () => mountFavorites(view)), false);
+  // 收藏面板：点赞 / 收藏 / 稍后再看 / 历史 四个 Tab，支持 #/favorites/later 深链。
+  if (path === "/favorites" || path.startsWith("/favorites/")) {
+    const tab = path === "/favorites" ? "" : decodeURIComponent(path.slice("/favorites/".length));
+    show((view) => withNav(view, "favorites", () => mountFavorites(view, tab)), false);
     return;
   }
-  if (path === "/later") {
-    // 从「我的」进来，底栏高亮「我的」。
-    show((view) => withNav(view, "me", () => mountWatchLater(view)), false);
-    return;
-  }
+  // 旧的稍后再看入口：列表页已经并进收藏面板，老的链接/书签仍然能用。
+  if (path === "/later") { location.replace("#/favorites/later"); return; }
   if (path.startsWith("/later/")) {
-    // 点卡片播放：复用首页播放器（它自己挂底栏，navKey=me），这里不能再包 withNav。
+    // 点卡片播放：复用首页播放器（唯一那份实现），这里不能再包 withNav。
     const id = decodeURIComponent(path.slice("/later/".length));
-    show((view) => mountWatchLaterPlay(view, id), false);
+    show((view) => mountRecordPlay(view, "later", id), false);
     return;
   }
   // 单条预览（后台"去重"页点封面）：仍然用唯一那份播放器，列表里只有一条
@@ -100,7 +98,7 @@ function route() {
     show((view) => mountRecordPlay(view, decodeURIComponent(kind), id), false);
     return;
   }
-  if (path === "/watch-later") { location.replace("#/later"); return; } // 旧书签
+  if (path === "/watch-later") { location.replace("#/favorites/later"); return; } // 旧书签
   if (path === "/me") {
     show((view) => withNav(view, "me", () => mountMe(view, { onLogout })), false);
     return;

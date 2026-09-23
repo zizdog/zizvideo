@@ -36,11 +36,11 @@ export function mountMe(view, options) {
     libraryLine.lastChild.textContent = n ? (n + " 个") : "未授权任何媒体库";
   }).catch(() => { libraryLine.lastChild.textContent = "未复核"; });
 
-  // 内容：「稍后再看」（列表页 #/later，点卡片用首页那套播放器连播）
+  // 内容：「稍后再看」（收藏面板的 Tab： #/favorites/later，点卡片用首页那套播放器连播）
   const laterNote = el("span", { class: "cell-note" });
   const content = el("div", { class: "panel", dataset: { role: "me-content" } },
     el("div", { class: "panel-title", text: "内容" }),
-    el("a", { class: "cell", href: "#/later", dataset: { role: "me-watch-later" } },
+    el("a", { class: "cell", href: "#/favorites/later", dataset: { role: "me-watch-later" } },
       el("span", { class: "cell-label", text: "稍后再看" }), laterNote,
       el("span", { class: "cell-chevron", text: "›" })));
   api.watchLater().then((data) => {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,31 @@ import (
 type feedItem struct {
 	mediaItem
 	LibraryName string `json:"library_name"`
+}
+
+// dropMissingFiles 剔除磁盘上已不存在的行，并顺手标记 missing（幂等；标记失败只记日志）。
+// 只在"出页之前"调用，所以游标推进仍以真实返回的行为准（不会把游标推过没返回的行）。
+func (s *Server) dropMissingFiles(rows []domain.Media) []domain.Media {
+	if len(rows) == 0 {
+		return rows
+	}
+	now := domain.NowString()
+	kept := rows[:0]
+	for _, m := range rows {
+		if m.Path == "" {
+			continue // 没有路径的行不该被推荐
+		}
+		if _, err := os.Stat(m.Path); err != nil {
+			if os.IsNotExist(err) {
+				if markErr := s.DB.MarkMissing(m.ID, now); markErr != nil && s.Log != nil {
+					s.Log.Warn("标记缺失失败", "media_id", m.ID, "error", markErr.Error())
+				}
+			}
+			continue // 不存在/读不到：这一轮不推它
+		}
+		kept = append(kept, m)
+	}
+	return kept
 }
 
 // buildFeedItems decorates feed rows with their library name (item 13).
@@ -77,6 +103,11 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		}
 		rotated = true
 	}
+	// 文件真的还在吗？（用户 2026-09-22 报障：首页仍然出现"这个视频放不了 / 状态：ready"）
+	// 扫描才会写 missing_since；用户改名/移走后**没重新扫描**的话，库里那行还是 ready，
+	// 首页就会推荐一条播到 404 的记录。这里在出页之前逐个 stat：不在的标记 missing 并剔除本页。
+	// 代价是每页最多 limit 次 stat（≤50），换"首页绝不推荐播不了的视频"。
+	rows = s.dropMissingFiles(rows)
 	next := ""
 	if len(rows) > 0 {
 		last := rows[len(rows)-1]

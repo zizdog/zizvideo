@@ -32,7 +32,7 @@ export const RECORD_LISTS = {
   },
   later: {
     label: "稍后再看", empty: "还没有稍后再看的视频", clearHint: "只清除记录，不删除视频文件。",
-    navKey: "me",
+    navKey: "favorites", // 稍后再看已并入收藏面板（2026-09-22）
     load: async () => (await api.watchLater()).list || [],
     clear: () => api.clearWatchLater(),
   },

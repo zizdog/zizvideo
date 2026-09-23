@@ -109,7 +109,10 @@ export function mountFeed(view, options = {}) {
 
   const gate = createGestureGate();
   const state = {
-    items: playlist ? playlist.items.slice() : [],
+    // ⚠️ items 必须**从空开始**：数据统一由 appendItems 追加（它按 state.items.length 决定下标与
+    // 外壳 top）。播放列表模式若在这里预填，appendItems 会再加一遍 ⇒ 外壳下标/位置错位，
+    // 卡片被推到 top:100% 的视口外 —— 观感就是"点开一片黑"（用户 2026-09-22 报障）。
+    items: [],
     shells: [], built: new Map(),
     active: -1,
     // 首页靠游标无限翻页；播放列表模式一次给全，没有"更多页"（goTo 到末尾就 clamp）
@@ -1052,7 +1055,7 @@ export function mountFeed(view, options = {}) {
 
   if (playlist) {
     // 剧场/稍后再看：数据一次给全，不取游标、不翻页、不选库。
-    appendItems(state.items.slice(), { has_more: false });
+    appendItems(playlist.items.slice(), { has_more: false }); // 传数据源；state.items 由 appendItems 填
     // 指定从某条开始（点卡片进来时用）；找不到就仍从第一条开始。
     if (playlist.startId) {
       const start = state.items.findIndex((item) => String(item.id) === String(playlist.startId));

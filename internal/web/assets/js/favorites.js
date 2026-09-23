@@ -1,13 +1,15 @@
-// 记录页：点赞 / 收藏 / 历史 三个 Tab（用户 2026-09-22：全部用同一套卡片，风格与"稍后再看"一致）。
+// 记录页：点赞 / 收藏 / 稍后再看 / 历史 四个 Tab（用户 2026-09-22：稍后再看也并进收藏面板，
+// 全部用同一套卡片，风格统一）。
 // 卡片渲染与"点卡片连播"都在 cards.js，一页一套的实现已经删掉。
 
 import { el, clear, banner, setBanner } from "./dom.js";
 import { confirmDialog } from "./confirm.js";
 import { RECORD_LISTS, videoGrid } from "./cards.js";
 
-const TAB_KEYS = ["likes", "favorites", "history"];
+const TAB_KEYS = ["likes", "favorites", "later", "history"];
 
-export function mountFavorites(view) {
+// initialKey 支持 #/favorites/later 这样的深链（「我的」里的稍后再看就指向它）。
+export function mountFavorites(view, initialKey) {
   const note = banner();
   const tabsNav = el("nav", { class: "tabs", dataset: { role: "fav-tabs" } });
   const listBox = el("div", { dataset: { role: "fav-list" } });
@@ -17,7 +19,7 @@ export function mountFavorites(view) {
     class: "btn danger small", type: "button", text: "清除记录", dataset: { role: "clear-records" },
   });
   const buttons = new Map();
-  let currentKey = TAB_KEYS[0];
+  let currentKey = TAB_KEYS.includes(initialKey) ? initialKey : TAB_KEYS[0];
 
   view.append(el("div", { class: "page" },
     el("div", { class: "page-head" },
@@ -37,6 +39,8 @@ export function mountFavorites(view) {
   function select(key) {
     currentKey = key;
     for (const [k, node] of buttons) node.classList.toggle("on", k === key);
+    // 地址栏跟着 Tab 走（可收藏、刷新后还停在这个 Tab），但不触发 hashchange ⇒ 不重新挂载整页。
+    history.replaceState(null, "", "#/favorites/" + key);
     clearBtn.dataset.tab = key;
     setBanner(note, "");
     status.textContent = "";
@@ -86,6 +90,6 @@ export function mountFavorites(view) {
     }
   });
 
-  select(TAB_KEYS[0]);
+  select(currentKey);
   return null;
 }
