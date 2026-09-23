@@ -83,6 +83,17 @@ media id 与标题、按顺序）+ 正在播的那条 + 位置整体交给原生
   `/api/v1/media/{id}/reactions`、`/me/watch-later/{id}`），状态从 `GET /api/v1/media/{id}` 读，
   点亮变强调色。实测：点喜欢 → `reaction=like`；点稍后再看 → `watch_later=true`（服务器状态为准）。
 
+## 版本兼容（客户端要装到"未知版本"的手机上，所以两头都验）
+| 系统 | 结果 |
+|---|---|
+| Android 11（AVD `zv30`，API 30，Pixel 5 分辨率） | 装 ✅ 登录 ✅ 进网页 ✅ 深链进原生播放 ✅ 后台继续放 ✅ |
+| Android 15（AVD `zv35`，API 35，Pixel 6） | 见下面的矩阵，全绿 ✅ |
+
+顺带修了冒烟脚本两处**只在一个版本上成立**的写法（都会造成"假红"）：
+- `dumpsys media_session` 的 PlaybackState **各版本格式不同**：API 35 是 `state=PLAYING(3)`，API 30 是 `state=3`
+  ⇒ 改成 python 解析、版本无关（这条差点让我误判"Android 11 上放不了"，其实放得好好的）。
+- 登录页坐标原来写死了 y=1008/1195/1382（只对 Pixel 6 成立）⇒ 改成从 UI dump 里读控件 bounds。
+
 ## 已验证矩阵（模拟器 Pixel 6 / Android 15 / arm64，release 包）
 | 能力 | 判据 | 结果 |
 |---|---|---|

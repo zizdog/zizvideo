@@ -64,10 +64,17 @@ adb logcat -c
 adb shell am start -n com.zizdog.zizvideo/.LoginActivity --es path "${ZV_PATH:-/#/favorites/later}" >/dev/null
 sleep 3
 
-tap_field() { adb shell input tap 540 "$1"; sleep 1; adb shell input text "$2"; sleep 1; }
-tap_field 1008 "$HOSTPORT"
-tap_field 1195 "$USER_NAME"
-[ -n "$PASS" ] && tap_field 1382 "$PASS"
+# 坐标从 UI dump 里读（别写死像素：Pixel 5/6/不同密度都不一样，写死过一次就废）
+adb shell uiautomator dump /sdcard/zv0.xml >/dev/null 2>&1
+bounds_of() { adb shell cat /sdcard/zv0.xml 2>/dev/null | python3 -c "
+import sys,re
+m=re.search(r'resource-id=\"com\.zizdog\.zizvideo:id/$1\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', sys.stdin.read())
+print('' if not m else '%d %d' % ((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2))"; }
+tap_field() { adb shell input tap $1; sleep 1; adb shell input text "$2"; sleep 1; }
+S=$(bounds_of server); U=$(bounds_of username); P=$(bounds_of password)
+[ -n "$S" ] && tap_field "$S" "$HOSTPORT"
+[ -n "$U" ] && tap_field "$U" "$USER_NAME"
+[ -n "$P" ] && [ -n "$PASS" ] && tap_field "$P" "$PASS"
 adb shell input keyevent 111 >/dev/null 2>&1   # ESC 收键盘（别用返回键，那会关掉 Activity）
 sleep 2
 adb shell uiautomator dump /sdcard/zv.xml >/dev/null 2>&1
@@ -92,6 +99,7 @@ adb exec-out screencap -p > "${TAG}-after-login.png" 2>/dev/null
 echo "==> 截图：${TAG}-after-login.png"
 case "$focus" in
   *WebActivity*) echo "✓ 已进网页界面（登录 + cookie 传递成功）";;
+  *PlayerActivity*) echo "✓ 登录后直接进原生播放页（启动路径本身就是 #/play/ 深链）";;
   *LoginActivity*) echo "!! 还停在登录页 —— 看 adb logcat（口令错？地址不通？）"; adb logcat -d | grep -iE "zizvideo|Exception" | tail -5; exit 1;;
   *) echo "!! 意外窗口：$focus"; exit 1;;
 esac
@@ -100,32 +108,47 @@ esac
 # 说明：靠坐标点「收藏」→「收藏」Tab → 第一张卡（只对 `-d pixel_6` 这个 AVD 成立）。
 #       这段是这套客户端最要紧的能力（后台听视频），所以固化成可复跑的一步。
 if [ "${ZV_SKIP_PLAY:-0}" = "1" ]; then echo "（跳过原生播放验证）"; exit 0; fi
-echo "==> 走原生播放：点列表第一张卡"
+echo "==> 走原生播放"
 adb logcat -c
-adb shell input tap 236 544 >/dev/null; sleep 10  # 第一张卡 → 应被原生播放页接管
+if [ "${ZV_NO_TAP:-0}" = "1" ]; then
+  sleep 10   # 启动路径本身就是深链（/#/play/...），已经直接进原生播放页
+else
+  adb shell input tap 236 544 >/dev/null; sleep 10  # 列表第一张卡 → 应被原生播放页接管
+fi
 
 focus=$(adb shell dumpsys window 2>/dev/null | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^}]*\)}.*/\1/p' | head -1)
 [ "${focus##*.}" = "PlayerActivity" ] || { echo "!! 没进原生播放页，实际：$focus"; exit 1; }
 echo "✓ 深链已交原生播放页（PlayerActivity）"
 
-# 从 PlaybackState 里同时取状态、播放位置与"当前是队列里第几条"：
-# 素材有长有短，短片会**播完自动跳下一条**，所以"位置前进"或"换条了"都算后台在继续放。
-state() { adb shell dumpsys media_session 2>/dev/null | grep -A12 "com.zizdog.zizvideo/androidx" \
-  | grep -oE "state=PlaybackState \{state=[A-Z]+\([0-9]\), position=[0-9]+.*active item id=[0-9-]+" | tail -1; }
-pos_of() { echo "$1" | sed -n 's/.*position=\([0-9]*\).*/\1/p'; }
-item_of() { echo "$1" | sed -n 's/.*active item id=\([0-9-]*\).*/\1/p'; }
+# PlaybackState 在**不同安卓版本格式不同**：API 35 是 `state=PLAYING(3)`，API 30 是 `state=3`。
+# 所以统一用 python 解析，输出 "STATE POS ITEM"（坑：写死一种格式会在另一版本上假红）。
+msess() { adb shell dumpsys media_session 2>/dev/null | python3 -c "
+import sys,re
+s=sys.stdin.read()
+i=s.find('package=com.zizdog.zizvideo')
+if i<0:
+    print('NONE 0 -1'); raise SystemExit
+blk=s[i:i+2000]
+m=re.search(r'state=PlaybackState \{state=(?:[A-Z]+\(([0-9]+)\)|([0-9]+))', blk)
+pos=re.search(r'position=([0-9]+)', blk)
+item=re.search(r'active item id=([0-9-]+)', blk)
+code=(m.group(1) or m.group(2)) if m else '0'
+names={'3':'PLAYING','2':'PAUSED','1':'STOPPED','6':'BUFFERING','0':'NONE','7':'ERROR'}
+print(names.get(code,'?'), pos.group(1) if pos else '0', item.group(1) if item else '-1')
+"; }
 
-line=$(state); echo "前台：$line"
-case "$line" in *PLAYING*) ;; *) echo "!! 不是 PLAYING：$line"; exit 1;; esac
+line=$(msess); echo "前台：$line"
+case "$line" in PLAYING*) ;; *) echo "!! 不是 PLAYING：$line"; exit 1;; esac
 
 echo "==> 按 HOME 回桌面，验后台是否继续解码"
 adb shell input keyevent 3 >/dev/null
-p1=$(pos_of "$line"); i1=$(item_of "$line")
+set -- $(msess); p1=$2; i1=$3
 sleep 3
-line2=$(state); p2=$(pos_of "$line2"); i2=$(item_of "$line2")
+set -- $(msess); p2=$2; i2=$3
 delta=$((p2 - p1))
 echo "后台 3 秒：position $p1 → ${p2}（Δ${delta}ms），item $i1 → $i2"
-case "$line2" in *PLAYING*) ;; *) echo "!! 后台状态不是 PLAYING：$line2"; exit 1;; esac
+set -- $(msess)
+[ "$1" = "PLAYING" ] || { echo "!! 后台状态不是 PLAYING：$1"; exit 1; }
 if [ "$delta" -lt 1000 ] && [ "$i1" = "$i2" ]; then
   echo "!! 后台没在继续放：位置没走、也没换条（Δ=${delta}ms, item=${i1}）"; exit 1
 fi
