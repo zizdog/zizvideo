@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.1.9-mvp"
+var Version = "0.1.10-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {
@@ -45,6 +45,27 @@ type Server struct {
 
 	mu   sync.RWMutex
 	caps ffmpeg.Capabilities
+
+	// coverMu/coverLocks：封面冷缓存时**同一 media 只抽一次**（并发请求不重复起 ffmpeg）。
+	// 零值可用，不用改构造函数。
+	coverMu    sync.Mutex
+	coverLocks map[string]*sync.Mutex
+}
+
+// lockCover 返回该 media 的封面生成解锁函数（每个 id 一把锁）。
+func (s *Server) lockCover(id string) func() {
+	s.coverMu.Lock()
+	if s.coverLocks == nil {
+		s.coverLocks = map[string]*sync.Mutex{}
+	}
+	mu := s.coverLocks[id]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.coverLocks[id] = mu
+	}
+	s.coverMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // NewServer wires a Server and probes ffmpeg capabilities once at startup.

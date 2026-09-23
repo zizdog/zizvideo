@@ -2,8 +2,11 @@ package api_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -147,20 +150,79 @@ func (e *env) callRange(url, rng string) (*http.Response, []byte) {
 	return res, raw
 }
 
-func TestCoverFallsBackToPlaceholder(t *testing.T) {
+// coverStubRunner 假装 ffmpeg 抽帧成功：ExtractCover 的 dst 是最后一个参数，
+// 它把一帧"JPEG"写到那里（真 ffmpeg 也是这么落盘）。
+type coverStubRunner struct {
+	calls int
+	err   error
+}
+
+func (r *coverStubRunner) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+	r.calls++
+	if r.err != nil {
+		return nil, []byte("boom"), r.err
+	}
+	if len(args) == 0 {
+		return nil, nil, fmt.Errorf("没有参数")
+	}
+	return nil, nil, os.WriteFile(args[len(args)-1], []byte{0xff, 0xd8, 0xff, 0xe0, 's', 't', 'u', 'b'}, 0o600)
+}
+
+// 门禁（用户 2026-09-23 报障："去重功能不可用，没有画面！无法判断是否真的重复"）：
+// /cover 的冷缓存（老记录 / 扫描期抽帧失败）必须**现场抽帧并缓存**，而不是直接甩占位图；
+// 只有真的抽不出来（ffmpeg 失败、源文件不在）才回占位图 —— 那时候不装成有画面。
+func TestCoverColdCacheExtractsThenFallsBackToPlaceholder(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	lib := e.newLibrary("l", e.Root)
 	m := e.newMedia(lib.ID, filepath.Join(e.Root, "clip.mp4"), body(64))
+	cached := filepath.Join(e.Cfg.CoversDir(), m.ID+".jpg")
+
+	// ① 冷缓存 + 抽得出来 ⇒ 真 JPEG，并落盘成缓存；第二次不再抽
+	stub := &coverStubRunner{}
+	e.S.Runner = stub
 	res, raw := e.call(http.MethodGet, "/api/v1/media/"+m.ID+"/cover", nil, false)
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("无封面应返回占位, 状态 = %d", res.StatusCode)
+	if res.StatusCode != http.StatusOK || !strings.Contains(res.Header.Get("Content-Type"), "image/jpeg") {
+		t.Fatalf("冷缓存应现场抽帧回 JPEG，实际 %d / %q", res.StatusCode, res.Header.Get("Content-Type"))
 	}
-	if !strings.Contains(res.Header.Get("Content-Type"), "image/svg") {
-		t.Fatalf("占位内容类型 = %q", res.Header.Get("Content-Type"))
+	if !bytes.HasPrefix(raw, []byte{0xff, 0xd8}) {
+		t.Fatalf("回的不是 JPEG 字节: %q", raw)
+	}
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("抽出的封面应落盘成缓存: %v", err)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("抽帧次数 = %d，期望 1", stub.calls)
+	}
+	if _, _ = e.call(http.MethodGet, "/api/v1/media/"+m.ID+"/cover", nil, false); stub.calls != 1 {
+		t.Fatalf("已有缓存时不该再抽：%d 次", stub.calls)
+	}
+
+	// ② 抽不出来（ffmpeg 失败）⇒ 占位图
+	if err := os.Remove(cached); err != nil {
+		t.Fatal(err)
+	}
+	e.S.Runner = &coverStubRunner{err: errors.New("抽帧失败")}
+	res, raw = e.call(http.MethodGet, "/api/v1/media/"+m.ID+"/cover", nil, false)
+	if res.StatusCode != http.StatusOK || !strings.Contains(res.Header.Get("Content-Type"), "image/svg") {
+		t.Fatalf("抽帧失败应回占位图，实际 %d / %q", res.StatusCode, res.Header.Get("Content-Type"))
 	}
 	if !strings.Contains(string(raw), "<svg") {
 		t.Fatal("占位不是 SVG")
+	}
+
+	// ③ 源文件已经不在 ⇒ 直接占位图，连 ffmpeg 都不该起（白起只会更慢）
+	if err := os.Remove(m.Path); err != nil {
+		t.Fatal(err)
+	}
+	counting := &coverStubRunner{}
+	e.S.Runner = counting
+	res, _ = e.call(http.MethodGet, "/api/v1/media/"+m.ID+"/cover", nil, false)
+	if !strings.Contains(res.Header.Get("Content-Type"), "image/svg") {
+		t.Fatalf("源文件不在应回占位图，实际 %q", res.Header.Get("Content-Type"))
+	}
+	if counting.calls != 0 {
+		t.Fatalf("源文件不在时不该起 ffmpeg：%d 次", counting.calls)
 	}
 }
 

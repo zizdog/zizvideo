@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zizdog/zizvideo/internal/domain"
+	"github.com/zizdog/zizvideo/internal/ffmpeg"
 	"github.com/zizdog/zizvideo/internal/media"
 	"github.com/zizdog/zizvideo/internal/storage"
 )
@@ -262,6 +264,9 @@ func (f *liveFile) Read(p []byte) (int, error) {
 }
 
 // HandleCover serves the extracted JPEG, or a placeholder when there is none.
+// coverGenTimeout 是**现场抽帧**的上限：抽不出来就回占位图，绝不拖住请求。
+const coverGenTimeout = 10 * time.Second
+
 func (s *Server) HandleCover(w http.ResponseWriter, r *http.Request) {
 	// 无权必须 404，绝不回落到占位图（占位 200 会泄露"这个 id 存在"）。
 	m, err := s.canAccessMedia(r.Context(), r.PathValue("id"))
@@ -270,19 +275,72 @@ func (s *Server) HandleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := filepath.Join(s.Cfg.CoversDir(), m.ID+".jpg")
-	if f, err := os.Open(path); err == nil {
-		defer f.Close()
-		if st, err := f.Stat(); err == nil && !st.IsDir() {
-			w.Header().Set("Content-Type", "image/jpeg")
-			w.Header().Set("Cache-Control", "private, max-age=300")
-			http.ServeContent(w, r, m.ID+".jpg", st.ModTime(), f)
-			return
-		}
+	if s.serveCoverFile(w, r, m.ID, path) {
+		return
+	}
+	// 冷缓存（老记录 / 扫描时抽帧失败）：现场抽一帧并缓存 —— 用户 2026-09-23 报障
+	// "去重页没有画面，无法判断是否真的重复"，占位图对他没有信息量。抽不出来才退回占位图。
+	if s.extractCover(r.Context(), m, path) && s.serveCoverFile(w, r, m.ID, path) {
+		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(placeholderCover))
+}
+
+// serveCoverFile 有缓存就发出去；返回是否已经响应过。
+func (s *Server) serveCoverFile(w http.ResponseWriter, r *http.Request, id, path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.IsDir() || st.Size() == 0 {
+		return false
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, id+".jpg", st.ModTime(), f)
+	return true
+}
+
+// extractCover 在封面缓存缺失时现场抽帧。原子落盘（先 .tmp 再 rename，半张图不会被读到）；
+// 同一 media 的并发请求只抽一次（lockCover）；源文件不在就直接放弃，不白起 ffmpeg。
+func (s *Server) extractCover(ctx context.Context, m *domain.Media, dst string) bool {
+	if m == nil || m.Path == "" {
+		return false
+	}
+	if _, err := os.Stat(m.Path); err != nil {
+		return false
+	}
+	unlock := s.lockCover(m.ID)
+	defer unlock()
+	if _, err := os.Stat(dst); err == nil {
+		return true // 排队期间别人已经抽好了
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		if s.Log != nil {
+			s.Log.Warn("创建封面目录失败", "media_id", m.ID, "error", err.Error())
+		}
+		return false
+	}
+	tmp := dst + ".tmp"
+	_ = os.Remove(tmp)
+	if err := ffmpeg.ExtractCover(ctx, s.Runner, s.Cfg.FFmpegBin, m.Path, tmp,
+		ffmpeg.CoverTime(m.DurationMS), s.Cfg.CoverQuality, coverGenTimeout); err != nil {
+		_ = os.Remove(tmp)
+		if s.Log != nil {
+			s.Log.Warn("现场抽封面失败", "media_id", m.ID, "error", err.Error())
+		}
+		return false
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
+	return true
 }
 
 const placeholderCover = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="640">` +

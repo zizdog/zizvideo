@@ -147,6 +147,7 @@ type duplicateGroups struct {
 			Path       string `json:"path"`
 			LibraryID  string `json:"library_id"`
 			FileExists bool   `json:"file_exists"`
+			CoverURL   string `json:"cover_url"`
 		} `json:"members"`
 	} `json:"groups"`
 }
@@ -194,6 +195,10 @@ func TestDuplicateDetectionGroupsBySizeAndDuration(t *testing.T) {
 		ids[m.ID] = true
 		if m.Path == "" || m.LibraryID == "" {
 			t.Fatalf("成员缺少路径/库: %+v", m)
+		}
+		// 去重页要靠封面判断"是不是同一个"（用户 2026-09-23："没有画面！无法判断是否真的重复"）
+		if m.CoverURL != "/api/v1/media/"+m.ID+"/cover" {
+			t.Fatalf("成员必须带 cover_url，实际 %q", m.CoverURL)
 		}
 	}
 	if !ids[a.ID] || !ids[b.ID] {

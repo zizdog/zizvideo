@@ -139,6 +139,10 @@ type duplicateMemberView struct {
 	storage.DuplicateMember
 	LibraryName string `json:"library_name"`
 	FileExists  bool   `json:"file_exists"`
+	// CoverURL 必须有：去重页要靠它显示画面判断"到底是不是同一个"（用户 2026-09-23 报障：
+	// "去重功能不可用，没有画面！无法判断是否真的重复"）。缺了它前端只能显示"无封面"。
+	// 与媒体列表 buildItems 同约定：无条件给，能不能取到由 /cover 自己判权。
+	CoverURL string `json:"cover_url"`
 }
 
 // HandleListDuplicates lists suspected-duplicate groups by the stated key only.
@@ -163,6 +167,7 @@ func (s *Server) HandleListDuplicates(w http.ResponseWriter, r *http.Request) {
 			_, statErr := os.Stat(m.Path)
 			views = append(views, duplicateMemberView{
 				DuplicateMember: m, LibraryName: names[m.LibraryID], FileExists: statErr == nil,
+				CoverURL: "/api/v1/media/" + m.ID + "/cover",
 			})
 		}
 		members += len(views)
