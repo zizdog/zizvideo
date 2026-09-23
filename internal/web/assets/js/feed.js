@@ -1040,7 +1040,14 @@ export function mountFeed(view, options = {}) {
       seekBy(event.key === "ArrowRight" ? 1 : -1);
       return;
     }
-    if (event.key === "ArrowDown" || event.key === "PageDown" || event.key === " " || event.key === "Spacebar") {
+    // 空格 = 播放/暂停（用户 2026-09-23："空格就该是暂停，不是下一个"）；下一个只认 ↓/PageDown。
+    if (event.key === " " || event.key === "Spacebar") {
+      event.preventDefault();
+      const here = state.built.get(state.active);
+      if (here) togglePlay(here);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "PageDown") {
       event.preventDefault();
       goTo(state.active + 1);
     } else if (event.key === "ArrowUp" || event.key === "PageUp") {

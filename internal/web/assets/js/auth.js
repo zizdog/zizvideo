@@ -1,4 +1,4 @@
-// 会话状态 + 登录/初始化视图 + 顶栏
+// 会话状态 + 登录/初始化视图（顶栏已删：用户 2026-09-23「顶部什么都不显示」）
 
 import { api } from "./api.js";
 import { el, clear, banner, setBanner, field, input } from "./dom.js";
@@ -18,22 +18,6 @@ export async function loadMe() {
 export async function doLogout() {
   try { await api.logout(); } catch (err) { /* 退出失败也要回到登录页 */ }
   session.user = null;
-}
-
-export function renderHeader(headerEl, onLogout, hideHeader) {
-  clear(headerEl);
-  const user = session.user;
-  if (hideHeader || !user) { headerEl.hidden = true; return; }
-  headerEl.hidden = false;
-  const nodes = [
-    el("div", { class: "brand", text: "Zizvideo" }),
-    el("div", { class: "spacer" }),
-    el("span", { class: "who", text: user.display_name || user.username || "" }),
-  ];
-  // append() 会把 null 变成 "null" 文本节点，非管理员必须走条件分支（坑 10）
-  if (user.role === "admin") nodes.push(el("a", { class: "link", href: "#/admin", text: "管理" }));
-  nodes.push(el("button", { class: "btn small", type: "button", text: "退出", onclick: onLogout }));
-  for (const node of nodes) headerEl.append(node);
 }
 
 export function mountLogin(view, onSuccess) {

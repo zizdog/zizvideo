@@ -18,20 +18,23 @@ func scopeOnly(libraryID string) LibraryScope {
 	return LibraryScope{IDs: map[string]bool{libraryID: true}}
 }
 
-// resolveScope 是唯一判据：admin 全见，普通用户只认 user_libraries 的授权行。
+// resolveScope 是唯一判据：**显式授权优先**，管理员没有显式授权时才全见。
+//
+// 管理员能被收窄是用户 2026-09-23 明确要求的（"后台可以为管理员设置访问范围"）：
+// 勾了库/组就只可见那些（清空 = 恢复全见）；普通用户 0 行 = 0 个库，绝不回落成全部。
 func (s *Server) resolveScope(u *domain.User) (LibraryScope, error) {
 	if u == nil {
 		return LibraryScope{}, nil
-	}
-	if u.Role == domain.RoleAdmin {
-		return scopeAll(), nil
 	}
 	ids, err := s.DB.UserLibraryIDs(u.ID)
 	if err != nil {
 		return LibraryScope{}, err
 	}
 	if len(ids) == 0 {
-		return LibraryScope{}, nil // 0 行 = 0 个库，绝不回落成全部
+		if u.Role == domain.RoleAdmin {
+			return scopeAll(), nil
+		}
+		return LibraryScope{}, nil
 	}
 	return LibraryScope{IDs: ids}, nil
 }

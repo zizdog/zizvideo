@@ -321,6 +321,41 @@ func TestMyLibrariesRespectsScope(t *testing.T) {
 	if len(list) != len(authzLibKeys) {
 		t.Errorf("admin 应看到全部 %d 个库, 得到 %d", len(authzLibKeys), len(list))
 	}
+
+	// 用户 2026-09-23："后台可以为管理员设置访问范围" —— 管理员**默认全见，被显式授权后收窄**，
+	// 清空授权 = 恢复全见。授权走的就是后台那个接口（PUT /admin/users/{id}/libraries）。
+	grantAdmin := func(ids []string) {
+		t.Helper()
+		res, _, raw := f.e.write(http.MethodPut, "/api/v1/admin/users/"+f.ids["admin"]+"/libraries",
+			map[string]any{"library_ids": ids})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("给管理员授权 %v = %d (%s)", ids, res.StatusCode, raw)
+		}
+	}
+	grantAdmin([]string{f.libs["L2"].ID})
+	res, env, raw = f.e.do(http.MethodGet, "/api/v1/me/libraries", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("收窄后 /me/libraries = %d (%s)", res.StatusCode, raw)
+	}
+	var narrowed []domain.LibraryBrief
+	decodeInto(t, env.Data, &narrowed)
+	if len(narrowed) != 1 || narrowed[0].ID != f.libs["L2"].ID {
+		t.Fatalf("管理员被授权后只该看到 L2，实际 %+v", narrowed)
+	}
+	// 范围外的单条必须 404（与"不存在"同码，别泄露存在性）
+	if res, _, raw := f.e.do(http.MethodGet, "/api/v1/media/"+f.media["L1"].ID, nil); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("收窄后读范围外单条 = %d, 期望 404 (%s)", res.StatusCode, raw)
+	}
+	grantAdmin(nil)
+	res, env, raw = f.e.do(http.MethodGet, "/api/v1/me/libraries", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("清空后 /me/libraries = %d (%s)", res.StatusCode, raw)
+	}
+	var restored []domain.LibraryBrief
+	decodeInto(t, env.Data, &restored)
+	if len(restored) != len(authzLibKeys) {
+		t.Fatalf("清空授权后管理员应恢复全见 %d 个库，实际 %d", len(authzLibKeys), len(restored))
+	}
 }
 
 func TestForbiddenListsAreEmpty200NotError(t *testing.T) {

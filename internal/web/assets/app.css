@@ -221,6 +221,8 @@ body {
 
 /* 视频卡片网格（稍后再看等列表）：16:9 封面 + 时长徽标 + 观看进度条 */
 .video-grid { display: grid; gap: 12px; align-content: start; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
+/* 去重要看清画面（用户 2026-09-23："重复文件显示要大一些，窗口太小"）⇒ 这一页的卡明显放大 */
+.video-grid.large { grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
 .video-card { position: relative; display: block; color: inherit; }
 .video-open { display: block; text-decoration: none; color: inherit; }
 .video-card:hover .video-cover { border-color: var(--accent); }
@@ -396,3 +398,7 @@ body {
 .series-admin-body { gap: 12px; }
 
 .admin-back { position: fixed; top: 60px; right: 12px; z-index: 30; text-decoration: none; }
+
+/* 权限抽屉里的分组标题行（与「媒体库」页的折叠语义一致，只是用在面板里而不是表格里） */
+.group-head { border-top: 1px solid var(--line); margin-top: 6px; }
+.group-head .row { align-items: center; gap: 8px; }

@@ -714,6 +714,20 @@ function openUserLibrariesDrawer(user, onSaved) {
   const groupChecks = new Map();
   const listBox = el("div", { class: "panel" });
   const groupsBox = el("div", { class: "panel" });
+  // 管理员默认全见：勾了库/组才收窄（用户 2026-09-23："后台可以为管理员设置访问范围"）
+  const adminHint = user.role === "admin"
+    ? el("div", { class: "muted small-note", dataset: { role: "admin-scope-hint" },
+        text: "管理员默认可见全部库；一旦勾选就只可见勾选的库，全部清空 = 恢复全部。" })
+    : null;
+  // 逐库列表按分组折叠（用户 2026-09-23："将分组显示在上面。或者，媒体库可以折叠显示"）：
+  // 折叠状态与「媒体库」页共用同一个 localStorage 键，在哪折的在哪都折着。
+  const COLLAPSE_KEY = "zv_admin_collapsed_groups";
+  const collapsed = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]")); } catch (err) { return new Set(); }
+  })();
+  function saveCollapsed() {
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(Array.from(collapsed))); } catch (err) { /* 隐私模式忽略 */ }
+  }
   const state = el("div", { class: "muted small-note", dataset: { role: "user-libraries-state" } });
   const save = el("button", { class: "btn primary", type: "button", text: "保存", dataset: { role: "save-user-libraries" } });
   const selectAll = el("button", { class: "btn small", type: "button", text: "全选" });
@@ -726,21 +740,49 @@ function openUserLibrariesDrawer(user, onSaved) {
     for (const grant of asArray(grants)) sources.set(grant.library_id, grant.source);
     clear(listBox);
     checks.clear();
+    listBox.append(el("div", { class: "panel-title", text: "逐库授权（与上面的分组授权是并集）" }));
     if (!libraries.length) { listBox.append(el("div", { class: "muted", text: "暂无媒体库" })); }
-    for (const library of libraries) {
-      const check = el("input", { type: "checkbox", checked: sources.has(library.id) });
-      const tag = sources.has(library.id)
-        ? (sources.get(library.id) === "default" ? "（注册时继承）" : "（管理员授权）") : "";
-      checks.set(library.id, check);
-      listBox.append(el("label", { class: "check" }, check,
-        el("span", { text: (library.name || library.id) + tag })));
+    const known = new Set(groups.map((g) => g.id));
+    const section = (title, key, members) => {
+      const rows = members.map((library) => {
+        const check = el("input", { type: "checkbox", checked: sources.has(library.id) });
+        const tag = sources.has(library.id)
+          ? (sources.get(library.id) === "default" ? "（注册时继承）" : "（管理员授权）") : "";
+        checks.set(library.id, check);
+        return el("label", { class: "check" }, check, el("span", { text: (library.name || library.id) + tag }));
+      });
+      const caret = el("button", { class: "btn small", type: "button", dataset: { role: "group-toggle" },
+        style: { minWidth: "28px" } });
+      const head = el("div", { class: "group-head", dataset: { role: "group-row", group: title } },
+        el("div", { class: "row" }, caret, el("span", { text: title }),
+          el("span", { class: "muted small-note", text: members.length + " 个库" })));
+      const apply = () => {
+        const on = collapsed.has(key);
+        caret.textContent = on ? "▸" : "▾";
+        caret.title = on ? "展开这一组" : "折叠这一组";
+        for (const row of rows) row.hidden = on;
+      };
+      caret.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+        saveCollapsed();
+        apply();
+      });
+      listBox.append(head);
+      for (const row of rows) listBox.append(row);
+      apply();
+    };
+    for (const group of groups) {
+      section(group.name || group.id, group.id, libraries.filter((library) => library.group_id === group.id));
     }
+    section("未分组", "__ungrouped__",
+      libraries.filter((library) => !library.group_id || !known.has(library.group_id)));
 
     // 组授权：勾一个组 = 该组当下及以后加入的库都可见（与上面的直授是并集）。
     const granted = new Set(asArray(groupGrants).map((g) => g.group_id));
     clear(groupsBox);
     groupChecks.clear();
-    groupsBox.append(el("div", { class: "panel-title", text: "按分组授权（与上面的逐库授权是并集）" }));
+    groupsBox.append(el("div", { class: "panel-title", text: "按分组授权（勾一个组 = 该组现在及以后加入的库都可见）" }));
     if (!groups.length) {
       groupsBox.append(el("div", { class: "muted", text: "还没有分组，可在「媒体库」页新建" }));
       return;
@@ -802,7 +844,9 @@ function openUserLibrariesDrawer(user, onSaved) {
     for (const check of checks.values()) check.checked = false;
     for (const check of groupChecks.values()) check.checked = false;
   });
-  body.append(listBox, groupsBox, el("div", { class: "actions" }, selectAll, selectNone, save), state);
+  // 分组授权放上面、逐库授权放下面（用户 2026-09-23："应该将分组显示在上面"）
+  body.append(...(adminHint ? [adminHint] : []), groupsBox, listBox,
+    el("div", { class: "actions" }, selectAll, selectNone, save), state);
   load();
 }
 
@@ -861,9 +905,9 @@ function mountUsers(root) {
     });
     const resetBox = el("div", { class: "actions hidden" }, newPassword, confirm);
     const actions = el("div", { class: "actions" });
-    if (user.role !== "admin") {
-      actions.append(button("媒体库权限", () => openUserLibrariesDrawer(user, refresh)));
-    }
+    // 管理员也能设范围（用户 2026-09-23："后台可以为管理员设置访问范围"）：
+    // 管理员默认全见，一旦勾了库就收窄到那些库（清空 = 恢复全见，抽屉里有说明）。
+    actions.append(button("媒体库权限", () => openUserLibrariesDrawer(user, refresh)));
     actions.append(
       button("改角色", () => patch({ role: user.role === "admin" ? "user" : "admin" })),
       button(user.status === "active" ? "禁用" : "启用", () => patch({ status: user.status === "active" ? "disabled" : "active" })),
@@ -1069,7 +1113,7 @@ function mountDuplicates(root) {
     if (!groups.length) { groupsBox.append(el("div", { class: "muted", text: "没有疑似重复" })); return; }
     groups.forEach((group, index) => {
       const members = asArray(group && group.members);
-      const grid = el("div", { class: "video-grid", dataset: { role: "dup-grid" } });
+      const grid = el("div", { class: "video-grid large", dataset: { role: "dup-grid" } });
       for (const member of members) {
         const check = el("input", {
           type: "checkbox", title: "勾选后可用下方按钮删记录/删文件",

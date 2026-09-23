@@ -48,9 +48,11 @@ export function mountMe(view, options) {
     laterNote.textContent = n ? (n + " 个") : "空";
   }).catch(() => { laterNote.textContent = ""; });
 
-  // 「我的」里不放播放设置（用户 2026-09-22）：入口只留在首页右上 ⚙。
+  // 设置：播放设置（用户 2026-09-23 要求把入口从顶栏收进「我的」）+ 管理后台。
+  // 首页右上 ⚙ 仍然在（就近改），两处共用同一份控件与同一个 PATCH。
   const settings = el("div", { class: "panel", dataset: { role: "me-settings" } },
-    el("div", { class: "panel-title", text: "设置" }));
+    el("div", { class: "panel-title", text: "设置" }),
+    cell("#/settings", "播放设置", "", "me-play-settings"));
   if (user.role === "admin") settings.append(cell("#/admin", "管理后台", "", "me-admin"));
 
   // 版本号就几个字，直接写在这一页（不再单独一个「关于」页）
