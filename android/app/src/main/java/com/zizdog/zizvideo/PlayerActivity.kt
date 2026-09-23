@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.webkit.CookieManager
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +39,10 @@ class PlayerActivity : AppCompatActivity() {
 
     private lateinit var view: PlayerView
     private lateinit var nowPlaying: TextView
+    private lateinit var favBtn: android.widget.ImageButton
+    private lateinit var likeBtn: android.widget.ImageButton
+    private lateinit var laterBtn: android.widget.ImageButton
+    private var currentId = ""
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var resumed = false // 本条是从上次位置接着放的（标题上要标出来，与网页端同义）
@@ -52,6 +57,12 @@ class PlayerActivity : AppCompatActivity() {
         Ui.padSystemBars(findViewById(R.id.playerRoot))
         view = findViewById(R.id.player)
         nowPlaying = findViewById(R.id.nowPlaying)
+        favBtn = findViewById(R.id.fav)
+        likeBtn = findViewById(R.id.like)
+        laterBtn = findViewById(R.id.later)
+        favBtn.setOnClickListener { toggle("fav") }
+        likeBtn.setOnClickListener { toggle("like") }
+        laterBtn.setOnClickListener { toggle("later") }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -66,13 +77,22 @@ class PlayerActivity : AppCompatActivity() {
         val future = MediaController.Builder(this, token).buildAsync()
         controllerFuture = future
         future.addListener({
-            val c = future.get()
+            // 连接失败要**说出来**：不然就是"黑屏 + 没标题 + 按钮不上色"这种静默失败（实测踩过）
+            val c = try {
+                future.get()
+            } catch (e: Exception) {
+                Log.e("zvplayer", "controller 连接失败", e)
+                nowPlaying.text = "播放器没连上，退出去重进一次"
+                return@addListener
+            }
             controller = c
             view.player = c
             c.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(metadata.title?.toString() ?: "")
-                override fun onMediaItemTransition(item: MediaItem?, reason: Int) =
+                override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                     paint(item?.mediaMetadata?.title?.toString() ?: "")
+                    refreshState(item?.mediaId ?: "")
+                }
             })
             if (kind == "feed") {
                 loadQueue(base, kind, "", c, query)     // 首页队列：没有"起点"，从头播
@@ -91,6 +111,47 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // 标题后缀写在 paint 里：否则会被随后的 metadata/transition 事件刷掉（实测踩过）。
+    private fun base(): String = Prefs(this).baseUrl
+
+    /** 三个图标按钮的开关：读当前状态 → 写 → 回读刷新（与网页图标栏同一批接口）。 */
+    private fun toggle(kind: String) {
+        val id = currentId
+        if (id.isBlank()) return
+        Thread {
+            val b = base()
+            val c = android.webkit.CookieManager.getInstance().getCookie(b) ?: return@Thread
+            val now = ZvApi2.state(b, c, id) ?: return@Thread
+            val ok = when (kind) {
+                "fav" -> ZvApi2.toggleFavorite(b, c, id, !now.favorite)
+                "like" -> ZvApi2.toggleLike(b, c, id, !now.liked)
+                else -> ZvApi2.toggleLater(b, c, id, !now.watchLater)
+            }
+            if (!ok) return@Thread
+            val after = ZvApi2.state(b, c, id) ?: return@Thread
+            runOnUiThread { paintState(after, id) }
+        }.start()
+    }
+
+    private fun refreshState(id: String) {
+        currentId = id
+        if (id.isBlank()) return
+        Thread {
+            val b = base()
+            val c = android.webkit.CookieManager.getInstance().getCookie(b) ?: return@Thread
+            val st = ZvApi2.state(b, c, id) ?: return@Thread
+            runOnUiThread { paintState(st, id) }
+        }.start()
+    }
+
+    private fun paintState(st: ZvApi2.State, id: String) {
+        if (id != currentId) return // 期间切集了，丢弃过期状态
+        val on = androidx.core.content.ContextCompat.getColor(this, R.color.zv_accent)
+        val off = androidx.core.content.ContextCompat.getColor(this, android.R.color.white)
+        favBtn.setColorFilter(if (st.favorite) on else off)
+        likeBtn.setColorFilter(if (st.liked) on else off)
+        laterBtn.setColorFilter(if (st.watchLater) on else off)
+    }
+
     private fun paint(title: String) {
         val base = if (title.isBlank()) "正在播放" else "正在播放：$title"
         nowPlaying.text = if (resumed) "$base（已续播）" else base
@@ -100,7 +161,13 @@ class PlayerActivity : AppCompatActivity() {
     private fun loadQueue(base: String, kind: String, mediaId: String, c: MediaController, query: String = "") {
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
         Thread {
-            val list = ZvApi2.queue(base, kind, cookie, query)
+            val list = try {
+                ZvApi2.queue(base, kind, cookie, query)
+            } catch (e: Exception) {
+                Log.e("zvplayer", "拉队列失败 kind=$kind base=$base", e)
+                emptyList()
+            }
+            Log.i("zvplayer", "queue kind=$kind id=$mediaId 条数=" + list.size)
             val items = list.map { m ->
                 MediaItem.Builder()
                     .setUri(m.streamUrl)
@@ -115,6 +182,7 @@ class PlayerActivity : AppCompatActivity() {
                     nowPlaying.text = "这条没有可播的内容"
                     return@runOnUiThread
                 }
+                refreshState(items.getOrNull(index)?.mediaId ?: "")
                 resumed = resume > 0
                 c.setMediaItems(items, index, resume) // 续播位置与网页端同语义（没看完才续）
                 c.prepare()

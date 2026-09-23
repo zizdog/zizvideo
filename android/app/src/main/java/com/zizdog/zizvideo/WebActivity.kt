@@ -58,29 +58,11 @@ class WebActivity : AppCompatActivity() {
      */
     private var lastSearchQuery = ""
 
-    // ---- "退后台交接"用：绑到播放服务（绑定不受后台限制），网页一隐藏就把播放交出去 ----
-    private var playback: PlaybackService.LocalBinder? = null
-    private var bound = false
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            playback = service as? PlaybackService.LocalBinder
-            bound = true
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            playback = null
-            bound = false
-        }
-    }
-
-    /**
-     * 网页调这个：它在后台了，把**它当前那份队列 + 正在播的那条 + 位置**整体交出来。
-     * 只传一个 mediaId 是不行的：原生若自己重新拉一页（/feed/next），顺序和网页看到的可能不一致（踩过）。
-     */
+    /** 网页调这个：它在后台了，把**它当前那份队列 + 正在播的那条 + 位置**整体交出来。 */
     inner class Bridge {
         @android.webkit.JavascriptInterface
         fun handOff(payload: String) {
-            val binder = playback ?: return
+            val service = PlaybackService.instance ?: return
             val ids = ArrayList<String>()
             val titles = ArrayList<String>()
             var index = 0
@@ -99,7 +81,7 @@ class WebActivity : AppCompatActivity() {
                 return
             }
             if (ids.isEmpty()) return
-            runOnUiThread { binder.playItems(ids, titles, index, positionMs) }
+            runOnUiThread { service.playItems(ids, titles, index, positionMs) }
         }
     }
 
@@ -171,8 +153,8 @@ class WebActivity : AppCompatActivity() {
         configure(web)
         web.addJavascriptInterface(Bridge(), "ZvAndroid")
         // 前台时先把服务"启动"起来（此时不受后台启动限制），后面在后台才能提升为前台服务
+        // 前台时先把服务起起来（此时不受后台启动限制）；交接时直接调它的实例方法
         startService(Intent(this, PlaybackService::class.java))
-        bindService(Intent(this, PlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         web.loadUrl(base + path)
 
@@ -317,10 +299,10 @@ class WebActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         // 回来时把播放从原生收回网页：同一条、同一位置，网页那边界面/按钮/进度都对得上
-        val binder = playback ?: return
-        val cur = binder.current() ?: return
+        val service = PlaybackService.instance ?: return
+        val cur = service.current() ?: return
         val (mediaId, positionMs) = cur
-        binder.stopPlayback()
+        service.stopPlayback()
         // 按"刚交出去的那条"恢复（不是按原生当前条：它可能已经连播到下一条了），位置超长就钳到本条时长里
         val js = "(function(){var want=window.__zvHandedOff||'';var vs=document.querySelectorAll('video');" +
             "var v=null;for(var i=0;i<vs.length;i++){var src=vs[i].getAttribute('src')||'';" +
@@ -336,10 +318,6 @@ class WebActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        if (bound) {
-            unbindService(connection)
-            bound = false
-        }
         // 全屏视频要先收干净，否则会漏一个 SurfaceView
         customView?.let { fullscreen.removeView(it) }
         web.destroy()

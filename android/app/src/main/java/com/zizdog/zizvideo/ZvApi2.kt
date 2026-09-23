@@ -87,6 +87,38 @@ object ZvApi2 {
         )
     }
 
+    /** 一条媒体的互动状态（给原生播放页的图标栏用）。 */
+    data class State(val favorite: Boolean, val watchLater: Boolean, val liked: Boolean)
+
+    fun state(base: String, cookie: String, mediaId: String): State? {
+        val reply = ZvApi.get("$base/api/v1/media/" + java.net.URLEncoder.encode(mediaId, "UTF-8"), cookie)
+        val d = reply.data() ?: return null
+        return State(
+            favorite = d.optBoolean("favorite"),
+            watchLater = d.optBoolean("watch_later"),
+            liked = d.optString("reaction") == "like",
+        )
+    }
+
+    /** 收藏 / 稍后再看 / 喜欢 的开关（与网页端同一批接口）。返回是否成功。 */
+    fun toggleFavorite(base: String, cookie: String, mediaId: String, on: Boolean): Boolean =
+        write(base, cookie, if (on) "POST" else "DELETE", "/api/v1/me/favorites/" + enc(mediaId), null)
+
+    fun toggleLater(base: String, cookie: String, mediaId: String, on: Boolean): Boolean =
+        write(base, cookie, if (on) "POST" else "DELETE", "/api/v1/me/watch-later/" + enc(mediaId), null)
+
+    fun toggleLike(base: String, cookie: String, mediaId: String, on: Boolean): Boolean =
+        if (on) write(base, cookie, "POST", "/api/v1/media/" + enc(mediaId) + "/reactions", "{\"kind\":\"like\"}")
+        else write(base, cookie, "DELETE", "/api/v1/media/" + enc(mediaId) + "/reactions", null)
+
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+
+    private fun write(base: String, cookie: String, method: String, path: String, body: String?): Boolean {
+        val csrf = cookie.split(';').map { it.trim().split("=", limit = 2) }
+            .firstOrNull { it.size == 2 && it[0] == "zv_csrf" }?.get(1) ?: ""
+        return ZvApi.send("$base$path", method, body, cookie, csrf).ok
+    }
+
     data class Media(
         val id: String,
         val title: String,

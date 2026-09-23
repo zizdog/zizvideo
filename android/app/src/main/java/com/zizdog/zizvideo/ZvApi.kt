@@ -83,6 +83,10 @@ object ZvApi {
     /** 写操作：会话 cookie + X-CSRF-Token（与网页端同一套双提交）。 */
     fun patch(url: String, body: String, cookie: String, csrf: String): Reply = request(url, "PATCH", body, cookie, csrf)
 
+    /** 通用读写（POST/DELETE 等），同样带 cookie + CSRF。 */
+    fun send(url: String, method: String, body: String?, cookie: String, csrf: String): Reply =
+        request(url, method, body, cookie, csrf)
+
     fun login(base: String, username: String, password: String): Reply {
         val payload = JSONObject()
             .put("username", username)

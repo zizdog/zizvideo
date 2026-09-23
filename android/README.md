@@ -58,6 +58,17 @@ media id 与标题、按顺序）+ 正在播的那条 + 位置整体交给原生
 实测（模拟器 / release 包）：前台网页进度 5016 → 按 HOME 后原生 `PLAYING position=24154` →
 后台 10 秒 `33164` 且服务器进度 31102 → 回前台网页 40159→50159（+10s）、原生 `NONE`（没有两路声音）。
 
+## 第六轮：原生播放页补互动栏 + 修一个严重自造 bug
+- **严重 bug（我上一轮造的）**：为了"退后台交接"我给 `PlaybackService` 覆盖了 `onBind` 返回自己的 binder ——
+  这会把 media3 的 **MediaController 连接掐断**（`MediaSessionService` 就是靠 onBind 把控制器给播放页的）。
+  表现：从列表点进播放页是**黑屏 + 没有标题 + 图标不上色**，而服务自己在后台放（所以一开始没被发现）。
+  修法：**不覆盖 onBind**，改用单进程实例引用 `PlaybackService.instance`（单进程应用够用且更简单）。
+- 顺带把**静默失败变成看得见**：控制器连接失败会在标题处明说"播放器没连上，退出去重进一次"并打日志
+  （`adb logcat -s zvplayer`），不再是一片黑让人猜。
+- **原生播放页补互动栏**：❤ 收藏 / 👍 喜欢 / 🕒 稍后再看（同一批接口：`/me/favorites/{id}`、
+  `/api/v1/media/{id}/reactions`、`/me/watch-later/{id}`），状态从 `GET /api/v1/media/{id}` 读，
+  点亮变强调色。实测：点喜欢 → `reaction=like`；点稍后再看 → `watch_later=true`（服务器状态为准）。
+
 ## 真机验收清单（只能人工做，命令都在下面）
 ```bash
 # 1) 装正式签名包（比 debug 小、以后换包不用卸载）

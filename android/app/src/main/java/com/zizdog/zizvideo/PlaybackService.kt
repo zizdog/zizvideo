@@ -25,31 +25,27 @@ import androidx.media3.session.MediaSessionService
  */
 class PlaybackService : MediaSessionService() {
 
-    /**
-     * 给同进程的 WebActivity 用：网页退到后台时把播放"交接"过来（Chromium 会挂起隐藏页面的媒体，
-     * 而浏览器的 Chrome 之所以能后台放，是因为它替页面建了 MediaSession + 前台服务 —— WebView 没有）。
-     * 走**绑定**而不是 startService：后台限制针对的是 startForegroundService/startService，
-     * 绑定不受限；前台服务提升由本服务在做完准备后自己调。
-     */
-    inner class LocalBinder : Binder() {
-        fun playQueue(kind: String, mediaId: String, positionMs: Long) = this@PlaybackService.playQueue(kind, mediaId, positionMs)
-
-        /** 网页交接：按**网页自己那份队列**（顺序、标题都由它给）接着播，别去重新拉一页（顺序会对不上）。 */
-        fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) =
-            this@PlaybackService.playItems(ids, titles, index, positionMs)
-        fun current(): Pair<String, Long>? {
-            val item = player.currentMediaItem ?: return null
-            return item.mediaId to player.currentPosition
-        }
-        fun stopPlayback() {
-            player.stop()
-            player.clearMediaItems()
-        }
+    companion object {
+        /**
+         * 单进程内的服务实例：WebActivity 的"退后台交接"直接用它。
+         * **不要覆盖 onBind**：MediaSessionService 靠 onBind 把 MediaController 连接给播放页，
+         * 覆盖它就等于把播放页的控制器掐断 —— 表现是黑屏+没标题+按钮不上色（实测踩过这个坑）。
+         */
+        @Volatile
+        var instance: PlaybackService? = null
+            private set
     }
 
-    private val binder = LocalBinder()
+    /** 当前在播的媒体 id 与位置（回前台时用来把播放收回网页）。 */
+    fun current(): Pair<String, Long>? {
+        val item = player.currentMediaItem ?: return null
+        return item.mediaId to player.currentPosition
+    }
 
-    override fun onBind(intent: Intent?): android.os.IBinder = binder
+    fun stopPlayback() {
+        player.stop()
+        player.clearMediaItems()
+    }
 
     private var session: MediaSession? = null
     private lateinit var player: ExoPlayer
@@ -72,6 +68,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         base = Prefs(this).baseUrl
         // 数据源工厂在**每次建流时**现读 cookie（登录/换服务器后不用重启服务）
         val factory = object : androidx.media3.datasource.DataSource.Factory {
@@ -197,6 +194,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        instance = null
         handler.removeCallbacks(tick)
         reporter.shutdownNow()
         session?.run {

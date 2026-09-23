@@ -7,4 +7,5 @@
         <item name="android:navigationBarColor">#FF101014</item>
         <item name="android:windowBackground">#FF101014</item>
     </style>
+    <color name="zv_accent">#FFFF3B5B</color>
 </resources>
