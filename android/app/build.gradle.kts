@@ -34,5 +34,9 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    // 原生播放：MediaCodec 硬解 + MediaSession（锁屏/通知栏/耳机键）+ 前台服务（后台不被回收）
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-session:1.4.1")
     testImplementation("junit:junit:4.13.2")
 }

@@ -40,6 +40,7 @@ class WebActivity : AppCompatActivity() {
     private lateinit var fullscreen: FrameLayout
     private var base: String = ""
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var launchingNative = false
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -92,13 +93,18 @@ class WebActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 // 站内（同 host）继续在 WebView 里走；其它一律交给系统浏览器，别把网页壳当浏览器用。
-                if (url.toString().startsWith(base)) return false
+                if (url.toString().startsWith(base)) return handlePlayRoute(url.toString())
                 return try {
                     startActivity(Intent(Intent.ACTION_VIEW, url))
                     true
                 } catch (e: ActivityNotFoundException) {
                     true
                 }
+            }
+
+            /** 网页里点「收藏/历史/稍后再看」的卡片 = 同文档 hash 跳转，只能从这里截；截住后交原生播。 */
+            override fun doUpdateVisitedHistory(v: WebView, url: String?, isReload: Boolean) {
+                if (url != null) handlePlayRoute(url)
             }
 
             override fun onReceivedSslError(v: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
@@ -149,6 +155,31 @@ class WebActivity : AppCompatActivity() {
                 customViewCallback = null
             }
         }
+    }
+
+    /**
+     * 网页深链 #/play/<kind>/<id> → 原生播放器（kind 只认服务端有据可查的四种）。
+     * 处理完让网页**退回上一页**（通常就是那个列表页）：不这么做，网页播放器会在后台继续放，
+     * 跟原生播放器两路声音；退回去之后网页那边自然收声，用户回来时还停在列表上，更好挑下一条。
+     */
+    private fun handlePlayRoute(url: String): Boolean {
+        val hash = url.substringAfter("#", "")
+        val parts = hash.split("/").filter { it.isNotEmpty() }
+        if (parts.size < 3 || parts[0] != "play") return false
+        val kind = parts[1]
+        if (kind !in ZvApi2.supportedKinds) return false // search 是网页临时队列：留给网页播放器
+        if (launchingNative) return true
+        launchingNative = true
+        startActivity(
+            Intent(this, PlayerActivity::class.java)
+                .putExtra(PlayerActivity.EXTRA_KIND, kind)
+                .putExtra(PlayerActivity.EXTRA_MEDIA_ID, android.net.Uri.decode(parts[2])),
+        )
+        web.post {
+            if (web.canGoBack()) web.goBack()
+            web.postDelayed({ launchingNative = false }, 1500)
+        }
+        return true
     }
 
     override fun onPause() {

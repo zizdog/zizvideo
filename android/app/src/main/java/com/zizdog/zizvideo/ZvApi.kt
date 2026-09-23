@@ -46,12 +46,14 @@ object ZvApi {
         }
     }
 
-    private fun request(url: String, method: String, body: String?): Reply {
+    private fun request(url: String, method: String, body: String?, cookie: String = "", csrf: String = ""): Reply {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 8000
             readTimeout = 8000
             instanceFollowRedirects = true
+            if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
+            if (csrf.isNotBlank()) setRequestProperty("X-CSRF-Token", csrf)
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -74,6 +76,12 @@ object ZvApi {
 
     /** 探活 + 拿版本与"是否还没初始化"（地址填错时这里就会失败，登录前先拦一道）。 */
     fun setupStatus(base: String): Reply = request("$base/api/v1/setup/status", "GET", null)
+
+    /** 带会话 cookie 的 GET：原生侧复用网页端已有的列表接口，不另立契约。 */
+    fun get(url: String, cookie: String): Reply = request(url, "GET", null, cookie)
+
+    /** 写操作：会话 cookie + X-CSRF-Token（与网页端同一套双提交）。 */
+    fun patch(url: String, body: String, cookie: String, csrf: String): Reply = request(url, "PATCH", body, cookie, csrf)
 
     fun login(base: String, username: String, password: String): Reply {
         val payload = JSONObject()
