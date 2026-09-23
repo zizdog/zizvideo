@@ -11,8 +11,31 @@ import { mountFavorites } from "./js/favorites.js";
 import { mountRecordPlay } from "./js/cards.js";
 import { mountMe } from "./js/me.js";
 import { mountSettings } from "./js/settings.js";
+import { mountSearch } from "./js/search.js";
+import { renderTopBar } from "./js/topbar.js";
 
 const viewEl = document.getElementById("view");
+const headerEl = document.getElementById("header");
+
+// 应用内来路（顶部返回键用）：不依赖 history.length（那可能是别的站点），也绝不会把用户带出应用。
+let currentPath = "";
+const trail = [];
+const AUTH_PATHS = ["/login", "/register", "/setup"];
+function notePath(path) {
+  if (path === currentPath) return;
+  // 登录/注册/初始化不算"来路"（进和出都算）：否则登录后落在首页，返回键会把人送回登录页，
+  // 而登录页又把已登录的人打回首页 —— 一个点了没用的死循环按钮。
+  if (AUTH_PATHS.includes(path) || AUTH_PATHS.includes(currentPath)) {
+    trail.length = 0;
+    currentPath = path;
+    return;
+  }
+  if (trail.length && trail[trail.length - 1] === path) trail.pop(); // 回退
+  else if (currentPath) trail.push(currentPath); // 前进
+  currentPath = path;
+}
+function backTarget() { return trail.length ? trail[trail.length - 1] : "/feed"; }
+function canGoBack() { return trail.length > 0 || currentPath !== "/feed"; }
 
 let needsSetup = false;
 let current = null;
@@ -24,16 +47,21 @@ function teardown() {
   current = null;
 }
 
-// 顶栏已经不显示任何东西（用户 2026-09-23："顶部什么都不显示"，退出/设置都进了「我的」），
-// 所以这里不再渲染 header，hideHeader 这个参数也一并没用了，别再往回调里塞它。
+// 顶栏每路由重建：左返回（有来路才出现）+ 右搜索，中间空（用户 2026-09-23 要求抖音式顶栏）。
 function show(mount) {
   teardown();
   clear(viewEl);
+  renderTopBar(headerEl, {
+    showBack: canGoBack(),
+    onBack: () => { location.hash = "#" + backTarget(); },
+    onSearch: () => { location.hash = "#/search"; },
+  });
   current = { cleanup: mount(viewEl) || null };
 }
 
 function route() {
   const path = (location.hash || "").replace(/^#/, "");
+  notePath(path);
   if (path === "/setup") {
     if (!needsSetup) { replace(session.user ? "#/feed" : "#/login"); return; }
     show((view) => mountSetup(view, () => { needsSetup = false; go("#/feed"); }));
@@ -94,6 +122,11 @@ function route() {
     return;
   }
   if (path === "/watch-later") { location.replace("#/favorites/later"); return; } // 旧书签
+  if (path === "/search" || path.startsWith("/search/")) {
+    const q = path === "/search" ? "" : decodeURIComponent(path.slice("/search/".length));
+    show((view) => withNav(view, "feed", () => mountSearch(view, q)));
+    return;
+  }
   if (path === "/settings") {
     show((view) => withNav(view, "me", () => mountSettings(view)));
     return;

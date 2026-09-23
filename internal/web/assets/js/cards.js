@@ -30,6 +30,12 @@ export const RECORD_LISTS = {
       })),
     clear: () => api.request("DELETE", "/api/v1/me/progress"),
   },
+  // search 是**临时**列表：结果由搜索页（js/search.js）放进下面的缓存，点卡片进 #/play/search/<id>
+  // 能左右滑着看下一条。刷新/直链进来缓存是空的 —— 那就如实说"没有搜索结果"，不假装有。
+  search: {
+    label: "搜索", empty: "没有搜索结果", clearHint: "", navKey: "feed",
+    load: async () => searchCache,
+  },
   later: {
     label: "稍后再看", empty: "还没有稍后再看的视频", clearHint: "只清除记录，不删除视频文件。",
     navKey: "favorites", // 稍后再看已并入收藏面板（2026-09-22）
@@ -37,6 +43,13 @@ export const RECORD_LISTS = {
     clear: () => api.clearWatchLater(),
   },
 };
+
+// searchCache 见上面 RECORD_LISTS.search：搜索页设，播放页读，仅存在于当前页面生命周期。
+let searchCache = [];
+
+export function setSearchResults(items) {
+  searchCache = Array.isArray(items) ? items.slice() : [];
+}
 
 // videoCard：16:9 封面 + 角标（时长/已看完/看到几分）+ 观看进度条 + 两行标题。
 // options 可覆盖：href（链接目标）、badge（角标文本）、leading（封面左上角节点，如勾选框）、

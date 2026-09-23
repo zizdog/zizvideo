@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -258,6 +259,33 @@ func TestMediaListPaginationBoundaries(t *testing.T) {
 	}
 	if got := list.List[0]["stream_url"]; got != "/api/v1/media/"+list.List[0]["id"].(string)+"/stream" {
 		t.Fatalf("stream_url = %v", got)
+	}
+
+	// 搜索（用户 2026-09-23 要顶部搜索入口，走的就是这个 ?q=）：命中标题或路径，且**仍受 scope 限制**。
+	named := e.newMedia(lib.ID, filepath.Join(e.Root, "特别的名字.mp4"), body(48))
+	res, env, raw = e.do(http.MethodGet, "/api/v1/media?per_page=50&q="+url.QueryEscape("特别的名字"), nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("搜索状态 %d: %s", res.StatusCode, raw)
+	}
+	var hits struct {
+		List []struct {
+			ID string `json:"id"`
+		} `json:"list"`
+	}
+	decodeInto(t, env.Data, &hits)
+	if len(hits.List) != 1 || hits.List[0].ID != named.ID {
+		t.Fatalf("q 搜标题应只命中那一条，实际 %+v", hits.List)
+	}
+	// 路径也匹配（别名/中文目录很常见），并且搜不到就是不返回（不回落成全量）
+	_, env, _ = e.do(http.MethodGet, "/api/v1/media?per_page=50&q="+url.QueryEscape("特别的名字.mp4"), nil)
+	decodeInto(t, env.Data, &hits)
+	if len(hits.List) != 1 {
+		t.Fatalf("q 搜路径应命中 1 条，实际 %d", len(hits.List))
+	}
+	_, env, _ = e.do(http.MethodGet, "/api/v1/media?per_page=50&q="+url.QueryEscape("绝对不存在的关键词zzz"), nil)
+	decodeInto(t, env.Data, &hits)
+	if len(hits.List) != 0 {
+		t.Fatalf("搜不到就该空，实际 %d 条", len(hits.List))
 	}
 }
 

@@ -1268,10 +1268,7 @@ export function mountAdmin(view, initialTab) {
   const tabs = el("nav", { class: "tabs" });
   const panel = el("div", { class: "admin-body" });
   // 条目 12：顶部固定的「返回播放」，Esc 也能回播放页
-  const back = el("a", {
-    class: "btn small admin-back", href: "#/feed", text: "← 返回播放",
-    dataset: { role: "back-to-feed" },
-  });
+  // 「返回播放」不再放这里：顶栏已经有返回键（用户 2026-09-23 要抖音式顶栏）。Esc 快捷方式保留。
   function onBackKey(event) {
     if (event.key !== "Escape") return;
     if (document.querySelector(".modal-overlay, .picker-overlay")) return;
@@ -1310,7 +1307,7 @@ export function mountAdmin(view, initialTab) {
     tabs.append(tabButton);
   }
 
-  view.append(el("div", { class: "admin" }, back, note,
+  view.append(el("div", { class: "admin" }, note,
     el("div", { class: "muted small-note", text: "剧场的新建/导入/识别/上传/管理都在「剧场」页签" }),
     tabs, panel));
   select(tabButtons.has(initialTab) ? initialTab : "libraries");
