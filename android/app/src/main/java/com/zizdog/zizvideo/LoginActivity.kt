@@ -24,6 +24,9 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var login: MaterialButton
     private lateinit var status: TextView
 
+    /** 快捷方式要求直接开播的队列（zizvideo://listen/feed ⇒ "feed"）。 */
+    private var listenKind = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -39,6 +42,30 @@ class LoginActivity : AppCompatActivity() {
         server.setText(prefs.baseUrl)
         username.setText(prefs.username)
         login.setOnClickListener { submit() }
+
+        val data = intent?.data?.toString() ?: ""
+        if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")
+        // 上次登录留下的会话 cookie 还有效就直接进 —— 不然每次冷启动都要重输口令（用户预期是免登录）
+        autoEnterIfLoggedIn()
+    }
+
+    private fun autoEnterIfLoggedIn() {
+        val base = prefs.baseUrl
+        if (base.isBlank()) return
+        val cookie = CookieManager.getInstance().getCookie(base) ?: ""
+        if (cookie.isBlank()) return
+        setBusy(true, "检查登录状态…")
+        Thread {
+            val me = try {
+                ZvApi.get("$base/api/v1/auth/me", cookie)
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (me != null && me.ok) enterWeb(base, "已登录")
+                else setBusy(false, "登录已过期，请重新输入口令")
+            }
+        }.start()
     }
 
     private fun submit() {
@@ -118,6 +145,15 @@ class LoginActivity : AppCompatActivity() {
 
     private fun enterWeb(base: String, note: String) {
         setBusy(false, note)
+        if (listenKind.isNotBlank()) {
+            // 快捷方式"听首页"：直接起原生播放器（队列由 GET /feed/next 拉），不用先进网页
+            startActivity(
+                Intent(this, PlayerActivity::class.java)
+                    .putExtra(PlayerActivity.EXTRA_KIND, listenKind),
+            )
+            finish()
+            return
+        }
         val intent = Intent(this, WebActivity::class.java).putExtra(WebActivity.EXTRA_BASE, base)
         // 允许"启动就打开某一页"（通知/深链/自测都靠它，别在测试里写死坐标点导航栏）
         this.intent.getStringExtra(WebActivity.EXTRA_PATH)?.let { intent.putExtra(WebActivity.EXTRA_PATH, it) }

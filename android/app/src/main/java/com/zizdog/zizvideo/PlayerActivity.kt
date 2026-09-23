@@ -31,6 +31,9 @@ class PlayerActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_KIND = "kind"
         const val EXTRA_MEDIA_ID = "media_id"
+
+        /** search 队列要关键词（网页那边是临时缓存，原生拿地址里的词自己重放同一份结果）。 */
+        const val EXTRA_QUERY = "query"
     }
 
     private lateinit var view: PlayerView
@@ -57,6 +60,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val kind = intent.getStringExtra(EXTRA_KIND) ?: ""
         val mediaId = intent.getStringExtra(EXTRA_MEDIA_ID) ?: ""
+        val query = intent.getStringExtra(EXTRA_QUERY) ?: ""
         val base = Prefs(this).baseUrl
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val future = MediaController.Builder(this, token).buildAsync()
@@ -70,8 +74,10 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) =
                     paint(item?.mediaMetadata?.title?.toString() ?: "")
             })
-            if (kind.isNotEmpty() && mediaId.isNotEmpty()) {
-                loadQueue(base, kind, mediaId, c)
+            if (kind == "feed") {
+                loadQueue(base, kind, "", c, query)     // 首页队列：没有"起点"，从头播
+            } else if (kind.isNotEmpty() && mediaId.isNotEmpty()) {
+                loadQueue(base, kind, mediaId, c, query)
             } else {
                 paint(c.currentMediaItem?.mediaMetadata?.title?.toString() ?: "正在播放")
             }
@@ -91,10 +97,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /** 拉列表 → 转成 ExoPlayer 的队列 → 从点中的那一条开始播。 */
-    private fun loadQueue(base: String, kind: String, mediaId: String, c: MediaController) {
+    private fun loadQueue(base: String, kind: String, mediaId: String, c: MediaController, query: String = "") {
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
         Thread {
-            val list = ZvApi2.queue(base, kind, cookie)
+            val list = ZvApi2.queue(base, kind, cookie, query)
             val items = list.map { m ->
                 MediaItem.Builder()
                     .setUri(m.streamUrl)

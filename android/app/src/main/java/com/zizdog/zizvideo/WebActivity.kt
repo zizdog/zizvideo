@@ -6,7 +6,11 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.content.ComponentName
+import android.content.Context
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
@@ -46,6 +50,100 @@ class WebActivity : AppCompatActivity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var launchingNative = false
     private var handlingLogin = false
+
+    /**
+     * 记住最近一次搜索词：网页里点搜索结果会跳到 #/play/search/<id>，这个地址**不带关键词**，
+     * 而网页那份结果是内存里的临时缓存，原生拿不到。所以在它还在 #/search/<q> 时先记下来，
+     * 点进结果时用 ?q= 自己重放同一份列表（仍然是服务端同一个筛选接口，不另立契约）。
+     */
+    private var lastSearchQuery = ""
+
+    // ---- "退后台交接"用：绑到播放服务（绑定不受后台限制），网页一隐藏就把播放交出去 ----
+    private var playback: PlaybackService.LocalBinder? = null
+    private var bound = false
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            playback = service as? PlaybackService.LocalBinder
+            bound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            playback = null
+            bound = false
+        }
+    }
+
+    /**
+     * 网页调这个：它在后台了，把**它当前那份队列 + 正在播的那条 + 位置**整体交出来。
+     * 只传一个 mediaId 是不行的：原生若自己重新拉一页（/feed/next），顺序和网页看到的可能不一致（踩过）。
+     */
+    inner class Bridge {
+        @android.webkit.JavascriptInterface
+        fun handOff(payload: String) {
+            val binder = playback ?: return
+            val ids = ArrayList<String>()
+            val titles = ArrayList<String>()
+            var index = 0
+            var positionMs = 0L
+            try {
+                val obj = org.json.JSONObject(payload)
+                val arr = obj.optJSONArray("ids") ?: return
+                val tarr = obj.optJSONArray("titles")
+                for (i in 0 until arr.length()) {
+                    ids.add(arr.optString(i))
+                    titles.add(tarr?.optString(i) ?: "")
+                }
+                index = obj.optInt("index")
+                positionMs = obj.optLong("positionMs")
+            } catch (e: Exception) {
+                return
+            }
+            if (ids.isEmpty()) return
+            runOnUiThread { binder.playItems(ids, titles, index, positionMs) }
+        }
+    }
+
+    /**
+     * 注入的钩子（不改网页仓库）：页面隐藏且**真的在播**时，把 media id 与位置交给原生。
+     * 交完立刻暂停网页那个 video，避免两路声音；原生那边有 MediaSession+前台服务，后台/锁屏都稳。
+     */
+    private val hookScript = """
+        (function () {
+          if (window.__zvHooked) return; window.__zvHooked = true;
+          function idOf(v) {
+            var src = v.getAttribute('src') || '';
+            var i = src.indexOf('/media/');
+            if (i < 0) return '';
+            return src.substring(i + 7).split('/')[0];
+          }
+          function titleOf(v) {
+            var shell = v.closest('article.card') || v.parentElement;
+            var t = shell ? shell.querySelector('.ov-title') : null;
+            return t ? (t.textContent || '').trim() : '';
+          }
+          document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState !== 'hidden') return;
+            var vs = [].slice.call(document.querySelectorAll('video'));
+            var ids = [], titles = [], index = -1, positionMs = 0;
+            for (var i = 0; i < vs.length; i++) {
+              var id = idOf(vs[i]);
+              if (!id) continue;
+              if (!vs[i].paused && index < 0) {
+                index = ids.length;
+                positionMs = Math.round((vs[i].currentTime || 0) * 1000);
+              }
+              ids.push(id);
+              titles.push(titleOf(vs[i]));
+            }
+            if (index < 0 || !window.ZvAndroid) return;
+            try {
+              ZvAndroid.handOff(JSON.stringify({ ids: ids, titles: titles, index: index, positionMs: positionMs }));
+            } catch (e) { return; }
+            window.__zvHandedOff = ids[index];
+            try { vs.forEach(function (v) { v.pause(); }); } catch (e) {}
+          });
+        })();
+    """.trimIndent()
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -71,6 +169,10 @@ class WebActivity : AppCompatActivity() {
         }
         CookieManager.getInstance().setAcceptCookie(true)
         configure(web)
+        web.addJavascriptInterface(Bridge(), "ZvAndroid")
+        // 前台时先把服务"启动"起来（此时不受后台启动限制），后面在后台才能提升为前台服务
+        startService(Intent(this, PlaybackService::class.java))
+        bindService(Intent(this, PlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         web.loadUrl(base + path)
 
@@ -98,6 +200,10 @@ class WebActivity : AppCompatActivity() {
         }
         view.setBackgroundColor(0xFF101014.toInt())
         view.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(v: WebView, url: String?) {
+                v.evaluateJavascript(hookScript, null)
+            }
+
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 // 站内（同 host）继续在 WebView 里走；其它一律交给系统浏览器，别把网页壳当浏览器用。
@@ -172,6 +278,11 @@ class WebActivity : AppCompatActivity() {
      */
     private fun handlePlayRoute(url: String): Boolean {
         val hash = url.substringAfter("#", "")
+        val segs = hash.split("/").filter { it.isNotEmpty() }
+        if (segs.size >= 2 && segs[0] == "search") {
+            lastSearchQuery = android.net.Uri.decode(segs[1])
+            return false
+        }
         // 会话失效时网页会退到 #/login：把用户交回原生登录页（那里会重新登录并把新 cookie 灌进来），
         // 否则他在网页里重登、原生播放器还拿着旧 cookie 一直 401。
         if (hash == "/login") {
@@ -185,13 +296,16 @@ class WebActivity : AppCompatActivity() {
         val parts = hash.split("/").filter { it.isNotEmpty() }
         if (parts.size < 3 || parts[0] != "play") return false
         val kind = parts[1]
-        if (kind !in ZvApi2.supportedKinds) return false // search 是网页临时队列：留给网页播放器
+        if (kind !in ZvApi2.supportedKinds) return false
+        // search：没有记住关键词就没法重建队列，这时留给网页播放器（前台可用，后台不听），别假装能后台
+        if (kind == "search" && lastSearchQuery.isBlank()) return false
         if (launchingNative) return true
         launchingNative = true
         startActivity(
             Intent(this, PlayerActivity::class.java)
                 .putExtra(PlayerActivity.EXTRA_KIND, kind)
-                .putExtra(PlayerActivity.EXTRA_MEDIA_ID, android.net.Uri.decode(parts[2])),
+                .putExtra(PlayerActivity.EXTRA_MEDIA_ID, android.net.Uri.decode(parts[2]))
+                .putExtra(PlayerActivity.EXTRA_QUERY, if (kind == "search") lastSearchQuery else ""),
         )
         web.post {
             if (web.canGoBack()) web.goBack()
@@ -200,12 +314,32 @@ class WebActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 回来时把播放从原生收回网页：同一条、同一位置，网页那边界面/按钮/进度都对得上
+        val binder = playback ?: return
+        val cur = binder.current() ?: return
+        val (mediaId, positionMs) = cur
+        binder.stopPlayback()
+        // 按"刚交出去的那条"恢复（不是按原生当前条：它可能已经连播到下一条了），位置超长就钳到本条时长里
+        val js = "(function(){var want=window.__zvHandedOff||'';var vs=document.querySelectorAll('video');" +
+            "var v=null;for(var i=0;i<vs.length;i++){var src=vs[i].getAttribute('src')||'';" +
+            "if(want&&src.indexOf('/media/'+want+'/stream')>=0){v=vs[i];break;}}" +
+            "if(!v)return;try{var d=v.duration||0;var t=" + (positionMs / 1000.0) + ";" +
+            "if(d>0&&t>d-1)t=0;v.currentTime=t;}catch(e){}try{v.play();}catch(e){}})();"
+        web.evaluateJavascript(js, null)
+    }
+
     override fun onPause() {
         super.onPause()
         CookieManager.getInstance().flush() // 会话 cookie 落盘，重启免登录
     }
 
     override fun onDestroy() {
+        if (bound) {
+            unbindService(connection)
+            bound = false
+        }
         // 全屏视频要先收干净，否则会漏一个 SurfaceView
         customView?.let { fullscreen.removeView(it) }
         web.destroy()

@@ -2,6 +2,7 @@ package com.zizdog.zizvideo
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Binder
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executors
@@ -23,6 +24,32 @@ import androidx.media3.session.MediaSessionService
  *   · 进度按网页端同一个 PATCH /me/progress 回写（原生侧自己上报，因为页面可能已被冻结）。
  */
 class PlaybackService : MediaSessionService() {
+
+    /**
+     * 给同进程的 WebActivity 用：网页退到后台时把播放"交接"过来（Chromium 会挂起隐藏页面的媒体，
+     * 而浏览器的 Chrome 之所以能后台放，是因为它替页面建了 MediaSession + 前台服务 —— WebView 没有）。
+     * 走**绑定**而不是 startService：后台限制针对的是 startForegroundService/startService，
+     * 绑定不受限；前台服务提升由本服务在做完准备后自己调。
+     */
+    inner class LocalBinder : Binder() {
+        fun playQueue(kind: String, mediaId: String, positionMs: Long) = this@PlaybackService.playQueue(kind, mediaId, positionMs)
+
+        /** 网页交接：按**网页自己那份队列**（顺序、标题都由它给）接着播，别去重新拉一页（顺序会对不上）。 */
+        fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) =
+            this@PlaybackService.playItems(ids, titles, index, positionMs)
+        fun current(): Pair<String, Long>? {
+            val item = player.currentMediaItem ?: return null
+            return item.mediaId to player.currentPosition
+        }
+        fun stopPlayback() {
+            player.stop()
+            player.clearMediaItems()
+        }
+    }
+
+    private val binder = LocalBinder()
+
+    override fun onBind(intent: Intent?): android.os.IBinder = binder
 
     private var session: MediaSession? = null
     private lateinit var player: ExoPlayer
@@ -90,6 +117,51 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+
+    /** 按给定 id 列表播（stream 地址由 base 拼），从 index 条的 positionMs 开始。 */
+    fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) {
+        if (ids.isEmpty()) return
+        val items = ids.mapIndexed { i, id ->
+            MediaItem.Builder()
+                .setUri("$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
+                .setMediaId(id)
+                .setMediaMetadata(
+                    androidx.media3.common.MediaMetadata.Builder()
+                        .setTitle(titles.getOrNull(i)?.ifBlank { id } ?: id)
+                        .build(),
+                )
+                .build()
+        }
+        val start = index.coerceIn(0, items.size - 1)
+        handler.post {
+            player.setMediaItems(items, start, if (positionMs > 0) positionMs else 0L)
+            player.prepare()
+            player.play()
+        }
+    }
+
+    /** 拉一份队列并开始播（网页交接过来的那一条 + 它的位置）。网线活儿全在后台线程。 */
+    fun playQueue(kind: String, mediaId: String, positionMs: Long) {
+        if (base.isBlank()) base = Prefs(this).baseUrl
+        val c = cookie()
+        Thread {
+            val list = ZvApi2.queue(base, kind, c)
+            if (list.isEmpty()) return@Thread
+            val items = list.map { m ->
+                MediaItem.Builder()
+                    .setUri(m.streamUrl)
+                    .setMediaId(m.id)
+                    .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(m.title).build())
+                    .build()
+            }
+            val index = list.indexOfFirst { it.id == mediaId }.coerceAtLeast(0)
+            handler.post {
+                player.setMediaItems(items, index, if (positionMs > 0) positionMs else 0L)
+                player.prepare()
+                player.play()
+            }
+        }.start()
+    }
 
     /**
      * 进度回写：只在有进度时发，失败静默（5 秒后再报）。

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 长按应用图标的快捷方式：首页队列直接交原生播放器 ⇒ 后台/锁屏能听。
+     走 LoginActivity（它是 exported 的启动页）：已登录就直接开播，没登录先登录。
+     这条路径**不需要网页端或服务端改任何东西**。 -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="listen_feed"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_listen_feed">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="zizvideo://listen/feed"
+            android:targetPackage="com.zizdog.zizvideo"
+            android:targetClass="com.zizdog.zizvideo.LoginActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="open_app"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_open_app">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="zizvideo://open"
+            android:targetPackage="com.zizdog.zizvideo"
+            android:targetClass="com.zizdog.zizvideo.LoginActivity" />
+    </shortcut>
+</shortcuts>

@@ -9,4 +9,6 @@
     <string name="action_checking">连接中…</string>
     <string name="err_server_empty">请先填服务器地址</string>
     <string name="err_credentials_empty">请先填用户名和口令</string>
+    <string name="shortcut_listen_feed">听首页</string>
+    <string name="shortcut_open_app">打开浏览</string>
 </resources>

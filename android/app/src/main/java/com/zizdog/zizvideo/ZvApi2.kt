@@ -11,8 +11,12 @@ import org.json.JSONObject
  */
 object ZvApi2 {
 
-    /** 列表页的 kind 与网页端 #/play/<kind>/<id> 一一对应；只认服务端有据可查的那几种。 */
-    val supportedKinds = setOf("likes", "favorites", "history", "later")
+    /**
+     * 播放队列的来源。前四种与网页 #/play/<kind>/<id> 一一对应；
+     * search 需要关键词（网页那边是临时缓存，原生用 ?q= 自己重放同一份结果）；
+     * feed 是首页队列（GET /feed/next），给"听首页"快捷方式用 —— 网页/服务端都不用改。
+     */
+    val supportedKinds = setOf("likes", "favorites", "history", "later", "search")
 
     /** 播放器请求流地址时要带的头（会话 cookie）。 */
     fun streamHeaders(base: String): Map<String, String> {
@@ -29,12 +33,17 @@ object ZvApi2 {
     }
 
     /** 拉一份列表当播放队列。history 的形状是 {list:[{media:{...}}]}，其余是 {list:[media...]}。 */
-    fun queue(base: String, kind: String, cookie: String): List<Media> {
+    fun queue(base: String, kind: String, cookie: String, query: String = ""): List<Media> {
         val path = when (kind) {
             "likes" -> "/api/v1/me/likes"
             "favorites" -> "/api/v1/me/favorites"
             "later" -> "/api/v1/me/watch-later"
             "history" -> "/api/v1/me/progress"
+            "search" -> {
+                if (query.isBlank()) return emptyList()
+                "/api/v1/media?per_page=100&q=" + java.net.URLEncoder.encode(query, "UTF-8")
+            }
+            "feed" -> "/api/v1/feed/next?limit=20"
             else -> return emptyList()
         }
         val reply = ZvApi.get(base + path, cookie)
