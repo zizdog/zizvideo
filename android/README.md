@@ -10,6 +10,12 @@
       自签 HTTPS 证书让用户自己决定。
 - [ ] 原生播放页：ExoPlayer（MediaCodec 硬解）+ `MediaSessionService` 前台服务 ⇒ 后台/锁屏听视频。
 
+## 已验证（2026-09-23，模拟器 Pixel 6 / Android 15 / arm64）
+`bash tools/emu-smoke.sh 10.0.2.2:17771 admin <口令>` 全绿：
+原生登录页渲染正确 → 点登录进 `WebActivity` → 网页首页在**播放**（时间码在走）→
+顶栏返回/搜索、右侧图标栏、底栏都在 →「我的」→ 安卓返回键回到首页（**不是退出 App**），
+到底再按才退出。**还没验的**：真机硬件解码、后台/锁屏播放（那是原生播放页那一步的事）。
+
 ## 构建
 需要 JDK 17 + Android SDK（cmdline-tools / platform-tools / platforms;android-35 / build-tools;35.0.0）。
 ```bash
