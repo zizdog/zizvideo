@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 网页端是深色，客户端也跟着深色，切换时不会闪白。 -->
+    <style name="Theme.Zizvideo" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#FF3B5B</item>
+        <item name="android:statusBarColor">#FF101014</item>
+        <item name="android:navigationBarColor">#FF101014</item>
+        <item name="android:windowBackground">#FF101014</item>
+    </style>
+</resources>

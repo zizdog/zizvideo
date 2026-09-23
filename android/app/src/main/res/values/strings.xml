@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">zizvideo</string>
+    <string name="login_title">连接你的 zizvideo</string>
+    <string name="hint_server">服务器地址（如 192.168.1.9:7766）</string>
+    <string name="hint_username">用户名</string>
+    <string name="hint_password">口令</string>
+    <string name="action_login">登录</string>
+    <string name="action_checking">连接中…</string>
+    <string name="err_server_empty">请先填服务器地址</string>
+    <string name="err_credentials_empty">请先填用户名和口令</string>
+</resources>

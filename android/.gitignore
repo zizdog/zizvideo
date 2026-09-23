@@ -1,0 +1,6 @@
+# 安卓构建产物与本机路径，不进 git
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
