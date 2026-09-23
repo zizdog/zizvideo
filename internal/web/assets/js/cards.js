@@ -133,7 +133,10 @@ export function mountRecordPlay(view, kind, mediaId) {
   let cancelled = false;
   list.load().then((items) => {
     if (cancelled) return;
-    const usable = (items || []).filter(Boolean);
+    // 文件已不在的记录不进连播队列（否则连播会撞到"这个视频放不了 状态：ready"）；
+    // 但用户**点名**点开的那一条要留着 —— 宁可如实报"放不了"，也不许悄悄跳到别的视频。
+    const usable = (items || []).filter(Boolean)
+      .filter((it) => !it.missing || String(it.id) === String(mediaId));
     if (!usable.length) {
       box.append(el("div", { class: "card info", text: list.empty }));
       return;
