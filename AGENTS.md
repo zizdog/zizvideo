@@ -87,7 +87,7 @@
 ## 四、目录速览
 
 ```
-cmd/server                入口（--config / --version / --supervise）
+cmd/server                入口（只有 --config / --version；没有 --supervise）
 internal/api              路由与 handler；Version 常量在这里
 internal/web/assets       内嵌前端（原生 ESM，无构建步骤）
 internal/{storage,media,dirimport,autoscan,config,auth,task}
