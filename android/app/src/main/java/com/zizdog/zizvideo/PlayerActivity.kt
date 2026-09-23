@@ -87,6 +87,10 @@ class PlayerActivity : AppCompatActivity() {
             }
             controller = c
             view.player = c
+            PlaybackService.instance?.let { svc ->
+                svc.onError = { msg -> runOnUiThread { nowPlaying.text = msg } }
+                svc.lastError?.let { nowPlaying.text = it } // 进页面前就错了的，也别漏
+            }
             c.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(metadata.title?.toString() ?: "")
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -161,10 +165,12 @@ class PlayerActivity : AppCompatActivity() {
     private fun loadQueue(base: String, kind: String, mediaId: String, c: MediaController, query: String = "") {
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
         Thread {
+            var fetched = true
             val list = try {
                 ZvApi2.queue(base, kind, cookie, query)
             } catch (e: Exception) {
                 Log.e("zvplayer", "拉队列失败 kind=$kind base=$base", e)
+                fetched = false
                 emptyList()
             }
             Log.i("zvplayer", "queue kind=$kind id=$mediaId 条数=" + list.size)
@@ -179,7 +185,8 @@ class PlayerActivity : AppCompatActivity() {
             val resume = list.getOrNull(index)?.resumeMs ?: 0L
             runOnUiThread {
                 if (items.isEmpty()) {
-                    nowPlaying.text = "这条没有可播的内容"
+                    // 如实区分"没内容"和"连不上"：说错原因比不说更糟（原来一律说"没有可播的内容"）
+                    nowPlaying.text = if (fetched) "这条没有可播的内容" else "连不上服务器，拉不到播放列表"
                     return@runOnUiThread
                 }
                 refreshState(items.getOrNull(index)?.mediaId ?: "")

@@ -48,6 +48,26 @@ class PlaybackService : MediaSessionService() {
     }
 
     private var session: MediaSession? = null
+
+    /** 最近一次播放错误（人话）；播放页进来时先读它，避免错过已发生的错误。 */
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    /** 播放页注册这个来显示错误（服务在后台时没人听，所以只存最近一条）。 */
+    var onError: ((String) -> Unit)? = null
+
+    private fun friendlyError(error: androidx.media3.common.PlaybackException): String = when (error.errorCode) {
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        -> "网络断了，连不上服务器"
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "服务器拒绝了请求（可能登录过期）"
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不在了（可能已改名或移动）"
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
+        -> "这台手机解不了这个视频"
+        else -> "播放出错：" + (error.errorCodeName)
+    }
     private lateinit var player: ExoPlayer
     private val handler = Handler(Looper.getMainLooper())
     // 进度回写必须**离开主线程**：安卓禁止主线程做网络，上一版就是在这儿把 service 崩掉的。
@@ -83,7 +103,12 @@ class PlaybackService : MediaSessionService() {
             }
         }
         player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
+            // 手机上切网/信号差很常见：默认可重试次数太少，给 5 次（media3 里这个策略挂在数据源工厂上）
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(factory).setLoadErrorHandlingPolicy(
+                    androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(5),
+                ),
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -104,6 +129,16 @@ class PlaybackService : MediaSessionService() {
 
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 report()
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // 别静默：界面要能说"放不了/网络断了"，否则用户只看到黑屏卡住（坑）
+                lastError = friendlyError(error)
+                onError?.invoke(lastError ?: "播放出错")
+            }
+
+            override fun onPlayerErrorChanged(error: androidx.media3.common.PlaybackException?) {
+                if (error == null) lastError = null
             }
         })
         val openApp = PendingIntent.getActivity(
