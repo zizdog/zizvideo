@@ -161,6 +161,12 @@ adb shell dumpsys media.metrics | tr ',' '\n' | grep -o "android.media.mediacode
 - 冒烟脚本：支持 `ZV_APK=` 换包（签名不同自动先卸载）、开机等网络、登录失败重试、
   后台判据改成"位置前进**或**已连播下一条"（5 秒短片会播完跳下一条，只比位置会误判）。
 
+## 发布件里一起带客户端
+`make release` 现在会**顺带**把安卓 release APK 放进版本目录（`dist/apps/zizvideo/<版本>/zizvideo-android-<versionName>.apk`），
+`make publish` 就会一起上传 —— 于是"服务端 + 客户端"在同一个下载目录里。
+没有 Android 工具链的机器不受影响（找不到 APK 就跳过，服务端发布不依赖客户端）。
+注意：`make release` 每次的 sha256 可能不同（codesign 带时间戳），**所以同一版本绝不能重复发布**，发布前先 bump VERSION。
+
 ## 构建
 需要 JDK 17 + Android SDK（cmdline-tools / platform-tools / platforms;android-35 / build-tools;35.0.0）。
 ```bash

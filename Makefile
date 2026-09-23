@@ -95,6 +95,16 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 	  fi; \
 	done
 	@python3 tools/make-app-index.py $(VERDIR) $(VERSION)
+	@# 安卓客户端（可选）：有 release APK 就一起放进版本目录，随索引一起发；
+	@# 没有 Android 工具链的机器不会因此失败 —— 服务端发布不依赖客户端。
+	@APK=android/app/build/outputs/apk/release/app-release.apk; \
+	 if [ -f "$$APK" ]; then \
+	   AV=$$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts | head -1); \
+	   cp "$$APK" "$(VERDIR)/zizvideo-android-$$AV.apk"; \
+	   echo "    ✓ 已带上安卓客户端：zizvideo-android-$$AV.apk（$$(wc -c < "$$APK" | tr -d ' ') 字节）"; \
+	 else \
+	   echo "    （没有安卓 release APK，跳过；要带客户端先 cd android && bash tools/build.sh）"; \
+	 fi
 	@echo "发布件就绪：$(APPDIR)（下一步：make publish）"
 
 index: ## 只按现有版本目录重算索引（产物没重编时用）
