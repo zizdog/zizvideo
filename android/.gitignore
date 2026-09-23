@@ -4,3 +4,6 @@ build/
 local.properties
 *.iml
 .idea/
+# 发布签名（本机密钥库在仓库外，配置里含口令）
+keystore.properties
+*.keystore

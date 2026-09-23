@@ -35,6 +35,9 @@ class WebActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_BASE = "base"
+
+        /** 启动时直接打开的站内路径（如 "/#/favorites/later"）；不传就进首页。 */
+        const val EXTRA_PATH = "path"
     }
 
     private lateinit var web: WebView
@@ -67,7 +70,8 @@ class WebActivity : AppCompatActivity() {
         }
         CookieManager.getInstance().setAcceptCookie(true)
         configure(web)
-        web.loadUrl("$base/#/feed")
+        val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
+        web.loadUrl(base + path)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {

@@ -17,7 +17,8 @@ HOSTPORT="${1:-10.0.2.2:17771}"
 USER_NAME="${2:-admin}"
 PASS="${3:-}"
 TAG="${4:-/tmp/zv-emu}"
-APK="app/build/outputs/apk/debug/app-debug.apk"
+# 默认验 debug 包；验正式签名包：ZV_APK=app/build/outputs/apk/release/app-release.apk
+APK="${ZV_APK:-app/build/outputs/apk/debug/app-debug.apk}"
 AVD="${ZV_AVD:-zv35}"
 
 cleanup() { adb emu kill >/dev/null 2>&1 || true; sleep 2; pkill -f "emulator -avd $AVD" 2>/dev/null || true; }
@@ -47,12 +48,18 @@ done
 [ "$net" = "1" ] && echo "✓ 网络就绪" || echo "!! 30 次探测仍不通，继续跑（失败会有截图）"
 
 echo "==> 装 APK 并清数据（每次从首屏开始）"
-adb install -r "$APK" >/dev/null
+# debug 与 release 签名不同，直接 -r 会被拒 —— 这时先卸载再装（换包不许静默失败）。
+if ! adb install -r "$APK" >/dev/null 2>&1; then
+  echo "==> 签名与已装的不同（debug↔release）：先卸载再装"
+  adb uninstall com.zizdog.zizvideo >/dev/null 2>&1 || true
+  adb install "$APK" >/dev/null
+fi
 adb shell pm clear com.zizdog.zizvideo >/dev/null
 # 通知权限先授予：不然第一次进播放页会弹系统对话框，挡住焦点判定（真机上点一次就行）
 adb shell pm grant com.zizdog.zizvideo android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 adb logcat -c
-adb shell am start -n com.zizdog.zizvideo/.LoginActivity >/dev/null
+# 启动就打开列表页：比"点底栏再点页签"稳得多（底栏样式一改，写死的坐标就废了）
+adb shell am start -n com.zizdog.zizvideo/.LoginActivity --es path "/#/favorites/later" >/dev/null
 sleep 3
 
 tap_field() { adb shell input tap 540 "$1"; sleep 1; adb shell input text "$2"; sleep 1; }
@@ -91,28 +98,38 @@ esac
 # 说明：靠坐标点「收藏」→「收藏」Tab → 第一张卡（只对 `-d pixel_6` 这个 AVD 成立）。
 #       这段是这套客户端最要紧的能力（后台听视频），所以固化成可复跑的一步。
 if [ "${ZV_SKIP_PLAY:-0}" = "1" ]; then echo "（跳过原生播放验证）"; exit 0; fi
-echo "==> 走原生播放：收藏 → 收藏 Tab → 第一张卡"
-adb shell input tap 675 2277 >/dev/null; sleep 4   # 底部「收藏」
-adb shell input tap 280 312  >/dev/null; sleep 4   # 「收藏」Tab
+echo "==> 走原生播放：点列表第一张卡"
 adb logcat -c
-adb shell input tap 236 544  >/dev/null; sleep 10  # 第一张卡 → 应被原生播放页接管
+adb shell input tap 236 544 >/dev/null; sleep 10  # 第一张卡 → 应被原生播放页接管
 
 focus=$(adb shell dumpsys window 2>/dev/null | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^}]*\)}.*/\1/p' | head -1)
 [ "${focus##*.}" = "PlayerActivity" ] || { echo "!! 没进原生播放页，实际：$focus"; exit 1; }
 echo "✓ 深链已交原生播放页（PlayerActivity）"
 
+# 从 PlaybackState 里同时取状态、播放位置与"当前是队列里第几条"：
+# 素材有长有短，短片会**播完自动跳下一条**，所以"位置前进"或"换条了"都算后台在继续放。
 state() { adb shell dumpsys media_session 2>/dev/null | grep -A12 "com.zizdog.zizvideo/androidx" \
-  | grep -oE "state=PlaybackState \{state=[A-Z]+\([0-9]\), position=[0-9]+" | tail -1; }
+  | grep -oE "state=PlaybackState \{state=[A-Z]+\([0-9]\), position=[0-9]+.*active item id=[0-9-]+" | tail -1; }
+pos_of() { echo "$1" | sed -n 's/.*position=\([0-9]*\).*/\1/p'; }
+item_of() { echo "$1" | sed -n 's/.*active item id=\([0-9-]*\).*/\1/p'; }
+
 line=$(state); echo "前台：$line"
 case "$line" in *PLAYING*) ;; *) echo "!! 不是 PLAYING：$line"; exit 1;; esac
 
 echo "==> 按 HOME 回桌面，验后台是否继续解码"
-adb shell input keyevent 3 >/dev/null; sleep 2
-p1=$(echo "$(state)" | sed 's/.*position=//')
-sleep 12
-line2=$(state); p2=$(echo "$line2" | sed 's/.*position=//')
+adb shell input keyevent 3 >/dev/null
+p1=$(pos_of "$line"); i1=$(item_of "$line")
+sleep 3
+line2=$(state); p2=$(pos_of "$line2"); i2=$(item_of "$line2")
 delta=$((p2 - p1))
-echo "后台 12 秒：position $p1 → ${p2}（Δ${delta}ms）"
-[ "$delta" -ge 8000 ] || { echo "!! 后台没有继续播放（Δ=${delta}ms）"; exit 1; }
+echo "后台 3 秒：position $p1 → ${p2}（Δ${delta}ms），item $i1 → $i2"
 case "$line2" in *PLAYING*) ;; *) echo "!! 后台状态不是 PLAYING：$line2"; exit 1;; esac
-echo "✓ 后台播放成立（前台服务 types=mediaPlayback + 通知栏可见）"
+if [ "$delta" -lt 1000 ] && [ "$i1" = "$i2" ]; then
+  echo "!! 后台没在继续放：位置没走、也没换条（Δ=${delta}ms, item=${i1}）"; exit 1
+fi
+echo "✓ 后台播放成立（位置前进或已连播下一条；前台服务 types=mediaPlayback + 通知栏可见）"
+
+# 解码器是谁：模拟器上必然是软解（c2.android.*），真机上这里应当出现厂商硬件解码器
+# （c2.qti.* / c2.mtk.* / OMX.* 等）—— 这是"有没有用上手机硬件解码"的唯一硬判据。
+echo "==> 当前用的解码器（真机上应为厂商硬件解码器）"
+adb shell dumpsys media.codec 2>/dev/null | grep -iE "avc|hevc|decoder" | grep -iE "c2\.|OMX\." | head -5

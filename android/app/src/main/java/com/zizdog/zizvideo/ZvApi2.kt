@@ -48,12 +48,17 @@ object ZvApi2 {
             val id = item.optString("id")
             val stream = item.optString("stream_url")
             if (id.isEmpty() || stream.isEmpty()) continue
+            // 续播：与网页端同一语义（position>0 且没看完才续）。history 的进度在外层对象上。
+            val prog = if (kind == "history") raw.optJSONObject("progress") else item.optJSONObject("progress")
+            val position = prog?.optLong("position_ms") ?: 0L
+            val completed = prog?.optBoolean("completed") ?: false
             out.add(
                 Media(
                     id = id,
                     title = item.optString("title").ifBlank { id },
                     streamUrl = if (stream.startsWith("http")) stream else base + stream,
                     durationMs = item.optLong("duration_ms"),
+                    resumeMs = if (position > 0 && !completed) position else 0L,
                 )
             )
         }
@@ -73,5 +78,11 @@ object ZvApi2 {
         )
     }
 
-    data class Media(val id: String, val title: String, val streamUrl: String, val durationMs: Long)
+    data class Media(
+        val id: String,
+        val title: String,
+        val streamUrl: String,
+        val durationMs: Long,
+        val resumeMs: Long,
+    )
 }

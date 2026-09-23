@@ -37,6 +37,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var nowPlaying: TextView
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
+    private var resumed = false // 本条是从上次位置接着放的（标题上要标出来，与网页端同义）
+
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 拒了也能放，只是没有通知 */ }
 
@@ -82,8 +84,10 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    // 标题后缀写在 paint 里：否则会被随后的 metadata/transition 事件刷掉（实测踩过）。
     private fun paint(title: String) {
-        nowPlaying.text = if (title.isBlank()) "正在播放" else "正在播放：$title"
+        val base = if (title.isBlank()) "正在播放" else "正在播放：$title"
+        nowPlaying.text = if (resumed) "$base（已续播）" else base
     }
 
     /** 拉列表 → 转成 ExoPlayer 的队列 → 从点中的那一条开始播。 */
@@ -99,12 +103,14 @@ class PlayerActivity : AppCompatActivity() {
                     .build()
             }
             val index = list.indexOfFirst { it.id == mediaId }.coerceAtLeast(0)
+            val resume = list.getOrNull(index)?.resumeMs ?: 0L
             runOnUiThread {
                 if (items.isEmpty()) {
                     nowPlaying.text = "这条没有可播的内容"
                     return@runOnUiThread
                 }
-                c.setMediaItems(items, index, 0L)
+                resumed = resume > 0
+                c.setMediaItems(items, index, resume) // 续播位置与网页端同语义（没看完才续）
                 c.prepare()
                 c.play()
                 paint(list.getOrNull(index)?.title ?: "")

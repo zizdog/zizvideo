@@ -8,7 +8,7 @@
       会话 cookie 灌进 WebView 的 CookieManager ⇒ 重启免登录（口令不落盘）。
 - [x] WebView 宿主：返回键走网页历史、网页全屏视频、文件选择（后台"上传"要用）、外链走系统浏览器、
       自签 HTTPS 证书让用户自己决定。
-- [ ] 原生播放页：ExoPlayer（MediaCodec 硬解）+ `MediaSessionService` 前台服务 ⇒ 后台/锁屏听视频。
+- [x] 原生播放页：ExoPlayer（MediaCodec 硬解）+ `MediaSessionService` 前台服务 ⇒ 后台/锁屏听视频（第二轮）。
 
 ## 播放架构（第二轮）
 **网页负责"逛"和"管"，原生负责"放"和"后台"** —— 两者不重复实现：
@@ -35,6 +35,32 @@
 `dumpsys media_session` 里 `state=PLAYING(3)`，**12 秒里 position 走了 10,984ms**（后台确实在解码播放）；
 `dumpsys activity services` 里 `isForeground=true types=0x00000002`（mediaPlayback 前台服务）；
 通知栏有媒体通知（标题/暂停/进度条/上下一条）；锁屏后仍是 `PLAYING`。
+
+## 真机验收清单（只能人工做，命令都在下面）
+```bash
+# 1) 装正式签名包（比 debug 小、以后换包不用卸载）
+ZV_APK=app/build/outputs/apk/release/app-release.apk bash tools/emu-smoke.sh <host:port> <用户> <口令>
+adb install -r app/build/outputs/apk/release/app-release.apk
+
+# 2) 硬解判据（播放中执行）：看 codec 名字
+adb shell dumpsys media.metrics | tr ',' '\n' | grep -o "android.media.mediacodec.codec=[a-zA-Z0-9._-]*" | sort | uniq -c | sort -rn
+#   c2.android.*            ⇒ **软解**
+#   c2.qti.* / c2.mtk.* / c2.exynos.* / c2.samsung.* / OMX.<厂商>.*  ⇒ **硬件解码** ✔
+#   （模拟器上必然是 c2.android.*：模拟器没有真硬件解码器，别拿模拟器当硬解证据）
+
+# 3) 后台/锁屏：播放中按 HOME、再锁屏，通知栏应有媒体控制且声音不断
+# 4) 国产 ROM：设置 → 电池/后台管理里给 zizvideo 允许后台运行（代码解决不了，必须手动放行）
+```
+
+## 这一轮（第三轮）新增
+- **续播**：与网页端同语义（`position>0 且未看完`才续），标题会标「（已续播）」。
+  实测：长样本 20199ms → 打开后 position 29148ms（= 20s + 播放 9s）。
+- **正式签名**：`keystore.properties`（gitignored）+ 仓库外的 `~/android-toolchain/zv-release.keystore`，
+  `assembleRelease` 出 7.6MB 签名包，`apksigner verify` 通过。**密钥丢了以后只能卸载重装才能升级。**
+- **启动即打开指定页面**：`am start -n com.zizdog.zizvideo/.LoginActivity --es path "/#/favorites/later"`
+  （通知/深链/自测都用它；自测不再写死导航栏坐标 —— 图标一改坐标就废，已经踩过一次）。
+- 冒烟脚本：支持 `ZV_APK=` 换包（签名不同自动先卸载）、开机等网络、登录失败重试、
+  后台判据改成"位置前进**或**已连播下一条"（5 秒短片会播完跳下一条，只比位置会误判）。
 
 ## 构建
 需要 JDK 17 + Android SDK（cmdline-tools / platform-tools / platforms;android-35 / build-tools;35.0.0）。

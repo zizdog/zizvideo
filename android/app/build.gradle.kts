@@ -3,6 +3,15 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import java.util.Properties
+
+// 发布签名：keystore.properties（gitignored，本机密钥库在仓库外）。没有这个文件就只出 debug 包。
+// 注意：KTS 里 `java.` 会被解析成 java 插件扩展，必须 import java.util.Properties。
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.zizdog.zizvideo"
     compileSdk = 35
@@ -15,11 +24,23 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (keystoreProps.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // 自用发布走 debug 签名之外的正式签名（见 README）；先不混淆，省得跟反射打架。
+            // 自用发布：正式签名（换包不用卸载重装）；不混淆，省得跟反射/媒体库打架。
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

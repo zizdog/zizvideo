@@ -118,7 +118,10 @@ class LoginActivity : AppCompatActivity() {
 
     private fun enterWeb(base: String, note: String) {
         setBusy(false, note)
-        startActivity(Intent(this, WebActivity::class.java).putExtra(WebActivity.EXTRA_BASE, base))
+        val intent = Intent(this, WebActivity::class.java).putExtra(WebActivity.EXTRA_BASE, base)
+        // 允许"启动就打开某一页"（通知/深链/自测都靠它，别在测试里写死坐标点导航栏）
+        this.intent.getStringExtra(WebActivity.EXTRA_PATH)?.let { intent.putExtra(WebActivity.EXTRA_PATH, it) }
+        startActivity(intent)
         finish()
     }
 }
