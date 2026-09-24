@@ -88,7 +88,15 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 	if hash, id, seed, ok := parseFeedCursor(r.URL.Query().Get("cursor")); ok && seed == st.Seed {
 		st.CursorHash, st.CursorID = hash, id
 	}
-	rows, err := s.DB.FeedPage(feedScope, st.Seed, st.CursorHash, st.CursorID, limit)
+	// 首页是否排除剧场内容：用户的播放设置（默认关）。三个查询都要用同一个开关，
+	// 否则"总数"和"取流"对不上（游标逻辑会提前换轮）。
+	feedPrefs, perr := s.DB.GetUserPrefs(u.ID)
+	if perr != nil {
+		s.fail(w, r, perr)
+		return
+	}
+	hideSeries := feedPrefs.FeedHideSeries
+	rows, err := s.DB.FeedPage(feedScope, st.Seed, st.CursorHash, st.CursorID, limit, hideSeries)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -96,7 +104,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 	rotated := false
 	if len(rows) == 0 && st.Played > 0 {
 		st.Seed, st.CursorHash, st.CursorID, st.Played = domain.NewID("s"), 0, "", 0
-		rows, err = s.DB.FeedPage(feedScope, st.Seed, 0, "", limit)
+		rows, err = s.DB.FeedPage(feedScope, st.Seed, 0, "", limit, hideSeries)
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -119,12 +127,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	prefs, err := s.DB.GetUserPrefs(u.ID)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	total, err := s.DB.CountPlayable(feedScope)
+	total, err := s.DB.CountPlayable(feedScope, hideSeries)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -136,7 +139,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		"played":      st.Played,
 		"rotated":     rotated,
 		"scope":       reqLib,
-		"settings":    feedSettingsBody(prefs),
+		"settings":    feedSettingsBody(feedPrefs),
 	})
 }
 
@@ -157,6 +160,8 @@ type feedSettingsReq struct {
 	SeekSeconds  *int  `json:"seek_seconds"`
 	// AutoplayEnter = 进入首页自动播放（用户 2026-09-24）。
 	AutoplayEnter *bool `json:"autoplay_enter"`
+	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24 选"用户级开关"）。
+	FeedHideSeries *bool `json:"feed_hide_series"`
 }
 
 // 左右键跳转秒数的合法区间；越界/非法保留原值，不改写也不报错。
@@ -190,6 +195,9 @@ func (s *Server) HandlePatchFeedSettings(w http.ResponseWriter, r *http.Request)
 	if req.AutoplayEnter != nil {
 		prefs.AutoplayEnter = *req.AutoplayEnter
 	}
+	if req.FeedHideSeries != nil {
+		prefs.FeedHideSeries = *req.FeedHideSeries
+	}
 	if err := s.DB.SaveUserPrefs(u.ID, prefs); err != nil {
 		s.fail(w, r, err)
 		return
@@ -206,6 +214,8 @@ func feedSettingsBody(p *storage.UserPrefs) map[string]any {
 		"autoplay_next":  p.AutoplayNext,
 		"seek_seconds":   p.SeekSeconds,
 		"autoplay_enter": p.AutoplayEnter,
+		// 首页是否排除剧场内容（用户级开关）
+		"feed_hide_series": p.FeedHideSeries,
 	}
 }
 

@@ -37,13 +37,14 @@ func seedFeedMedia(t *testing.T, db *DB, libID string, n int) map[string]bool {
 }
 
 // collectFeed walks one cycle and returns the ids in visit order.
-func collectFeed(t *testing.T, db *DB, scope domain.LibraryScope, seed string, limit int) []string {
+// hideSeries=true 对应"首页不显示剧场内容"这个用户级开关（用户 2026-09-24）。
+func collectFeed(t *testing.T, db *DB, scope domain.LibraryScope, seed string, limit int, hideSeries bool) []string {
 	t.Helper()
 	out := []string{}
 	var hash int64
 	id := ""
 	for guard := 0; guard < 200; guard++ {
-		rows, err := db.FeedPage(scope, seed, hash, id, limit)
+		rows, err := db.FeedPage(scope, seed, hash, id, limit, hideSeries)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +83,7 @@ func TestFeedPageVisitsEachItemOncePerCycle(t *testing.T) {
 	}
 	want := seedFeedMedia(t, db, lib.ID, 7)
 
-	got := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-1", 3)
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-1", 3, false)
 	if len(got) != len(want) {
 		t.Fatalf("一轮覆盖 %d 条, 期望 %d", len(got), len(want))
 	}
@@ -99,7 +100,7 @@ func TestFeedPageVisitsEachItemOncePerCycle(t *testing.T) {
 		}
 	}
 	// 换 seed 重开一轮，仍然覆盖全部（只是顺序不同）
-	if again := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-2", 3); len(again) != len(want) {
+	if again := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-2", 3, false); len(again) != len(want) {
 		t.Fatalf("新 seed 一轮覆盖 %d 条, 期望 %d", len(again), len(want))
 	}
 }
@@ -125,7 +126,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 2)
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 2, false)
 	if len(got) != 2 {
 		t.Fatalf("feed = %d 条, 期望 2（缺失那条必须被排除），得到 %v", len(got), got)
 	}
@@ -134,7 +135,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 			t.Fatalf("缺失记录 %s 仍然进了 feed", gone)
 		}
 	}
-	n, err := db.CountPlayable(domain.LibraryScope{All: true})
+	n, err := db.CountPlayable(domain.LibraryScope{All: true}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 	if err := db.ClearMissing(gone); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := db.CountPlayable(domain.LibraryScope{All: true}); n != 3 {
+	if n, _ := db.CountPlayable(domain.LibraryScope{All: true}, false); n != 3 {
 		t.Fatalf("文件回来后 CountPlayable = %d, 期望 3", n)
 	}
 }
@@ -271,10 +272,10 @@ func TestFeedPageScopeFiltersLibrary(t *testing.T) {
 	seedFeedMedia(t, db, libA.ID, 3)
 	seedFeedMedia(t, db, libB.ID, 2)
 
-	if got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 4); len(got) != 5 {
+	if got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 4, false); len(got) != 5 {
 		t.Fatalf("全部库 = %d 条, 期望 5", len(got))
 	}
-	scoped := collectFeed(t, db, domain.LibraryScope{IDs: map[string]bool{libA.ID: true}}, "s", 4)
+	scoped := collectFeed(t, db, domain.LibraryScope{IDs: map[string]bool{libA.ID: true}}, "s", 4, false)
 	if len(scoped) != 3 {
 		t.Fatalf("库 A = %d 条, 期望 3", len(scoped))
 	}
@@ -299,7 +300,7 @@ func TestFeedOrderIgnoresSeriesMembership(t *testing.T) {
 	}
 	want := seedFeedMedia(t, db, lib.ID, 5)
 
-	before := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2)
+	before := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, false)
 	if len(before) != len(want) {
 		t.Fatalf("加入剧场前一轮覆盖 %d 条, 期望 %d", len(before), len(want))
 	}
@@ -313,7 +314,7 @@ func TestFeedOrderIgnoresSeriesMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2)
+	after := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, false)
 	if len(after) != len(want) {
 		t.Fatalf("加入剧场后一轮覆盖 %d 条, 期望 %d（剧集不许被 feed 排除）", len(after), len(want))
 	}
@@ -326,6 +327,25 @@ func TestFeedOrderIgnoresSeriesMembership(t *testing.T) {
 	}
 	if !seen[inSeries] {
 		t.Fatalf("已加入剧场的那一集 %s 必须仍在 feed 的 id 集合里", inSeries)
+	}
+
+	// 同一个剧场成员，在"首页不显示剧场内容"打开后必须被排除（用户 2026-09-24 的用户级开关）。
+	hidden := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, true)
+	if len(hidden) != len(want)-1 {
+		t.Fatalf("打开开关后一轮覆盖 %d 条, 期望 %d（只排除那一条剧集）", len(hidden), len(want)-1)
+	}
+	for _, id := range hidden {
+		if id == inSeries {
+			t.Fatalf("打开开关后剧集 %s 仍在 feed 里", inSeries)
+		}
+	}
+	// 总数判据（首页空态/换轮判断）也必须跟着开关走，否则游标会提前换轮。
+	n, err := db.CountPlayable(domain.LibraryScope{All: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(want)-1 {
+		t.Fatalf("打开开关后 CountPlayable = %d, 期望 %d", n, len(want)-1)
 	}
 }
 

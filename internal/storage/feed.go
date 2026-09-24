@@ -76,15 +76,17 @@ type UserPrefs struct {
 	SeekSeconds  int
 	// AutoplayEnter = 进入首页就自动播放（用户 2026-09-24）。关掉时只显示预览帧，点了才播。
 	AutoplayEnter bool
+	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24）。默认关（保持原行为）。
+	FeedHideSeries bool
 }
 
 // GetUserPrefs returns the player settings; autoplay defaults on, loop off.
 func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
 	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds, AutoplayEnter: true}
-	var loop, auto, enter int
-	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter
+	var loop, auto, enter, hideSeries int
+	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter, feed_hide_series
 		FROM user_prefs WHERE user_id = ?`, userID).
-		Scan(&loop, &auto, &p.SeekSeconds, &enter)
+		Scan(&loop, &auto, &p.SeekSeconds, &enter, &hideSeries)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, nil
 	}
@@ -92,6 +94,7 @@ func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
 		return nil, err
 	}
 	p.LoopPlay, p.AutoplayNext, p.AutoplayEnter = loop != 0, auto != 0, enter != 0
+	p.FeedHideSeries = hideSeries != 0
 	if p.SeekSeconds <= 0 {
 		p.SeekSeconds = DefaultSeekSeconds
 	}
@@ -104,22 +107,31 @@ func (db *DB) SaveUserPrefs(userID string, p *UserPrefs) error {
 	if seek <= 0 {
 		seek = DefaultSeekSeconds
 	}
-	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds, autoplay_enter, updated_at)
-		VALUES (?,?,?,?,?,?)
+	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds,
+			autoplay_enter, feed_hide_series, updated_at)
+		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			loop_play = excluded.loop_play, autoplay_next = excluded.autoplay_next,
 			seek_seconds = excluded.seek_seconds, autoplay_enter = excluded.autoplay_enter,
+			feed_hide_series = excluded.feed_hide_series,
 			updated_at = excluded.updated_at`,
 		userID, boolToInt(p.LoopPlay), boolToInt(p.AutoplayNext), seek,
-		boolToInt(p.AutoplayEnter), domain.NowString())
+		boolToInt(p.AutoplayEnter), boolToInt(p.FeedHideSeries), domain.NowString())
 	return err
 }
 
+// HideSeriesClause 是"首页不显示剧场内容"的判据（用户 2026-09-24）：
+// 只要这条 media 出现在 series_media 里就排除 —— 免得首页刷到剧集、打乱剧场「观看中」的进度。
+const HideSeriesClause = ` AND id NOT IN (SELECT media_id FROM series_media)`
+
 // CountPlayable counts the rows a feed scope can ever serve.
 // "文件不在了"（missing_since 非空）不算可播：它只会 404，进了 feed 就是"放不了"。
-func (db *DB) CountPlayable(scope domain.LibraryScope) (int, error) {
+func (db *DB) CountPlayable(scope domain.LibraryScope, hideSeries bool) (int, error) {
 	q := `SELECT COUNT(1) FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL`
 	args := []any{domain.MediaReady}
+	if hideSeries {
+		q += HideSeriesClause
+	}
 	if w, sargs := scopeWhere(scope, "library_id"); w != "" {
 		q += w
 		args = append(args, sargs...)
@@ -136,11 +148,12 @@ func (db *DB) CountPlayable(scope domain.LibraryScope) (int, error) {
 // exactly once per cycle, so a client that follows next_cursor never sees a
 // repeat before the cycle is exhausted。排序在 Go 里做：媒体量级是个人库，
 // 每次翻页只读 id 列，换来的是与 SQLite 无关的确定顺序。
-func (db *DB) FeedPage(scope domain.LibraryScope, seed string, afterHash int64, afterID string, limit int) ([]domain.Media, error) {
+func (db *DB) FeedPage(scope domain.LibraryScope, seed string, afterHash int64, afterID string,
+	limit int, hideSeries bool) ([]domain.Media, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
-	ids, err := db.feedScopeIDs(scope)
+	ids, err := db.feedScopeIDs(scope, hideSeries)
 	if err != nil {
 		return nil, err
 	}
@@ -180,9 +193,12 @@ func (db *DB) FeedPage(scope domain.LibraryScope, seed string, afterHash int64, 
 
 // feedScopeIDs lists the playable ids of one scope, unordered.
 // 同 CountPlayable：missing_since 非空的行（文件已不在磁盘上）不进推荐流。
-func (db *DB) feedScopeIDs(scope domain.LibraryScope) ([]string, error) {
+func (db *DB) feedScopeIDs(scope domain.LibraryScope, hideSeries bool) ([]string, error) {
 	q := `SELECT id FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL`
 	args := []any{domain.MediaReady}
+	if hideSeries {
+		q += HideSeriesClause
+	}
 	if w, sargs := scopeWhere(scope, "library_id"); w != "" {
 		q += w
 		args = append(args, sargs...)
