@@ -48,7 +48,7 @@ export function mountMe(view, options) {
   }
 
   // 版本号就几个字，直接写在这一页（不再单独一个「关于」页）
-  const version = el("div", { class: "muted small-note", dataset: { role: "app-version" }, text: "zizvideo" });
+  const version = el("div", { class: "muted small-note center version", dataset: { role: "app-version" }, text: "zizvideo" });
   api.setupStatus().then((status) => {
     version.textContent = (status && status.version) ? ("zizvideo " + status.version) : "zizvideo 版本未复核";
   }).catch(() => { version.textContent = "zizvideo 版本未复核"; });

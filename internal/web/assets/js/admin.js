@@ -1172,12 +1172,17 @@ function mountDuplicates(root) {
     if (!groups.length) { groupsBox.append(el("div", { class: "muted", text: "没有疑似重复" })); return; }
     groups.forEach((group, index) => {
       const members = asArray(group && group.members);
+      // 用户 2026-09-24："去重不应该有全选，而是每组重复保留一个" ——
+      // 默认就是"每组留一条"（后端按 created_at ASC 给，所以留最早入库的那条），用户可再单独改。
       const grid = el("div", { class: "video-grid large", dataset: { role: "dup-grid" } });
-      for (const member of members) {
+      members.forEach((member, mi) => {
+        const keeper = mi === 0;
         const check = el("input", {
-          type: "checkbox", title: "勾选后可用下方按钮删记录/删文件",
-          dataset: { role: "dup-pick", id: String(member.id) },
+          type: "checkbox", title: keeper ? "默认保留这条（想删它就先勾上别的）" : "勾选后可用下方按钮删记录/删文件",
+          dataset: { role: "dup-pick", id: String(member.id), keeper: keeper ? "1" : "" },
         });
+        check.checked = !keeper;
+        if (!keeper) selected.add(member.id);
         check.addEventListener("change", () => {
           if (check.checked) selected.add(member.id); else selected.delete(member.id);
         });
@@ -1186,18 +1191,19 @@ function mountDuplicates(root) {
           badge: fmtBytes(member.size_bytes),
           leading: check,
           meta: [
+            keeper ? el("div", { class: "dup-keeper", dataset: { role: "dup-keeper" }, text: "默认保留这条" }) : null,
             (member.library_name || member.library_id || "") + " · " + (member.file_exists ? "文件在" : "文件不在"),
             fmtDuration(member.duration_ms) + " · " + fmtDate(member.created_at),
             el("div", { class: "path", text: member.path || "" }),
-          ],
+          ].filter(Boolean),
         }));
-      }
+      });
       groupsBox.append(el("div", {
         class: "panel", dataset: { role: "dup-group", index: String(index) },
       },
         el("div", { class: "panel-title",
           text: "疑似重复 " + members.length + " 个 · " + fmtBytes(group.size_bytes) + " · " + fmtDuration(group.duration_ms) }),
-        el("div", { class: "muted small-note", text: "大小+时长相同只是疑似，不代表内容相同 —— 点封面就地播放，再点收起。" }),
+        el("div", { class: "muted small-note", text: "大小+时长相同只是疑似，不代表内容相同 —— 点封面就地播放，再点收起；默认每组保留一条，其余已勾好。" }),
         grid));
     });
   }
@@ -1238,9 +1244,10 @@ function mountDuplicates(root) {
     timers.push(timer);
   }
 
-  const delRecords = button("删除所选面板记录", async () => {
+  const delRecords = button("删除勾选的重复记录", async () => {
     const ids = Array.from(selected);
-    if (!ids.length) { setBanner(note, "请先勾选记录"); return; }
+    if (!ids.length) { setBanner(note, "请先勾选要删的（每组默认保留一条）"); return; }
+    if (groupWouldEmpty()) { setBanner(note, "每组至少要留一条，别把整组都删了"); return; }
     if (!window.confirm("只删面板记录，磁盘文件保留。继续？")) return;
     setBanner(note, "");
     try {
@@ -1252,9 +1259,10 @@ function mountDuplicates(root) {
     }
   });
 
-  const delFiles = button("删除所选文件（危险）", async () => {
+  const delFiles = button("删除勾选的文件（危险）", async () => {
     const ids = Array.from(selected);
-    if (!ids.length) { setBanner(note, "请先勾选文件"); return; }
+    if (!ids.length) { setBanner(note, "请先勾选要删的文件（每组默认保留一条）"); return; }
+    if (groupWouldEmpty()) { setBanner(note, "每组至少要留一条，别把整组都删了"); return; }
     const typed = confirmInput.value.trim();
     if (typed !== "删除文件") { setBanner(note, "请手动输入「删除文件」确认"); return; }
     if (!window.confirm("永久删除磁盘上的 " + ids.length + " 个文件，不可恢复。继续？")) return;
@@ -1270,17 +1278,32 @@ function mountDuplicates(root) {
     }
   }, "danger");
 
-  const pickAll = button("全选", () => {
-    for (const box of picks()) { box.checked = true; selected.add(box.dataset.id); }
-  });
-  const pickNone = button("清空选择", () => {
-    for (const box of picks()) { box.checked = false; }
+  // 默认选中 = 每组除保留项之外全部；这两个按钮只做"恢复默认 / 都不选"。
+  function selectDefaults() {
+    selected.clear();
+    for (const box of picks()) {
+      const keeper = box.dataset.keeper === "1";
+      box.checked = !keeper;
+      if (!keeper) selected.add(box.dataset.id);
+    }
+  }
+  const pickDefaults = button("恢复默认（每组留一个）", selectDefaults);
+  const pickNone = button("都不选", () => {
+    for (const box of picks()) box.checked = false;
     selected.clear();
   });
+  // 每组至少留一条：整组都被勾上就拒绝（用户 2026-09-24 明确"每组重复保留一个"）
+  function groupWouldEmpty() {
+    for (const grid of groupsBox.querySelectorAll('[data-role="dup-grid"]')) {
+      const boxes = Array.from(grid.querySelectorAll('[data-role="dup-pick"]'));
+      if (boxes.length && boxes.every((box) => box.checked)) return true;
+    }
+    return false;
+  }
   root.append(note, el("div", { class: "panel" },
     el("div", { class: "row" }, detect, summary),
     el("div", { class: "muted small-note", text: "判据：大小 + 时长相同 ⇒ 疑似重复，不代表内容相同；点封面就地播放。" }),
-    el("div", { class: "row" }, pickAll, pickNone, delRecords, confirmInput, delFiles), progress), groupsBox);
+    el("div", { class: "row" }, pickDefaults, pickNone, delRecords, confirmInput, delFiles), progress), groupsBox);
   load();
 
   return () => {
@@ -1339,12 +1362,12 @@ export function mountAdmin(view, initialTab) {
     { key: "libraries", label: "媒体库", mount: mountLibraries },
     { key: "media", label: "媒体", mount: mountMedia },
     { key: "series", label: "剧场", mount: mountSeriesTab },
-    { key: "roots", label: "媒体允许根", mount: mountRoots },
+    { key: "roots", label: "媒体根目录", mount: mountRoots },
     { key: "uploads", label: "待审", mount: mountUploadsTab },
     { key: "users", label: "用户", mount: mountUsers },
-    { key: "settings", label: "注册开关", mount: mountSettings },
-    { key: "autoscan", label: "自动扫描", mount: mountAutoScan },
-    { key: "duplicates", label: "媒体去重", mount: mountDuplicates },
+    { key: "settings", label: "注册", mount: mountSettings },
+    { key: "autoscan", label: "扫描", mount: mountAutoScan },
+    { key: "duplicates", label: "去重", mount: mountDuplicates },
     { key: "system", label: "系统", mount: mountSystem },
   ];
   const tabButtons = new Map();
@@ -1367,8 +1390,13 @@ export function mountAdmin(view, initialTab) {
     tabs.append(tabButton);
   }
 
-  view.append(el("div", { class: "admin" }, note,
-    el("div", { class: "muted small-note", text: "剧场的新建/导入/识别/上传/管理都在「剧场」页签" }),
+  // 用户 2026-09-24："管理后台页面没有返回入口" —— 顶栏只在播放页显示，后台自己带一个返回。
+  const back = el("a", { class: "btn small", href: "#/me", dataset: { role: "admin-back" }, text: "← 返回「我的」" });
+  view.append(el("div", { class: "admin" },
+    el("div", { class: "row" }, back),
+    note,
+    el("div", { class: "muted ", text: "剧场的新建/导入/识别/上传/管理都在「剧场」页签 " }),
+    el("div", { class: "muted" , text: "请确保添加了正确的【媒体根目录】，默认为【用户/视频】文件夹。" }),
     tabs, panel));
   select(tabButtons.has(initialTab) ? initialTab : "libraries");
 

@@ -48,16 +48,27 @@ function teardown() {
   current = null;
 }
 
-// 顶栏每路由重建：左返回（有来路才出现）+ 右搜索，中间空（用户 2026-09-23 要求抖音式顶栏）。
+// 播放页（首页/剧场播放/记录播放）：顶栏浮在视频上（菜单 + 搜索）。
+// 用户 2026-09-24："菜单和搜索只在播放页面显示，其它所有页面都不需要" —— 其余路由整条顶栏不显示。
+const PLAYER_ROUTES = [/^\/feed$/, /^\/series\//, /^\/play\//, /^\/later\//];
+function isPlayerRoute(path) { return PLAYER_ROUTES.some((re) => re.test(path || "")); }
+
 function show(mount) {
   teardown();
   clear(viewEl);
-  renderTopBar(headerEl, {
-    showBack: canGoBack(),
-    onBack: () => { location.hash = "#" + backTarget(); },
-    onMenu: () => openSidePanel(),
-    onSearch: () => { location.hash = "#/search"; },
-  });
+  const path = (location.hash || "").replace(/^#/, "");
+  if (isPlayerRoute(path)) {
+    renderTopBar(headerEl, {
+      showBack: canGoBack(),
+      onBack: () => { location.hash = "#" + backTarget(); },
+      onMenu: () => openSidePanel(),
+      onSearch: () => { location.hash = "#/search"; },
+    });
+  } else {
+    // 非播放页：顶栏既不放按钮也不占高度（header 的 52px 一起还回去）
+    clear(headerEl);
+    headerEl.hidden = true;
+  }
   current = { cleanup: mount(viewEl) || null };
 }
 
@@ -155,7 +166,7 @@ function route() {
   }
   // 用户上传（UGC）：上传页与「我的上传」；有没有权限由后端 403 说了算（这里不猜）。
   if (path === "/upload") {
-    show((view) => withNav(view, "me", () => mountUpload(view)));
+    show((view) => withNav(view, "upload", () => mountUpload(view)));
     return;
   }
   if (path === "/me/uploads") {

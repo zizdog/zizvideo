@@ -21,7 +21,7 @@ export function mountSeries(view) {
     tabsNav, note, body));
 
   let list = [];
-  let current = "all";       // all | watching | category
+  let current = "watching";  // watching（默认最前）| all | done | category
   let currentLib = "";       // 分类板块里选中的媒体库
 
   async function load() {
@@ -40,11 +40,11 @@ export function mountSeries(view) {
     render();
   }
 
-  // 用户 2026-09-24：**观看中不再是独立页签**，而是"所有内容"最上面的板块
-  // （用户原话："观看中要显示在所有内容前面"）。
+  // 用户 2026-09-24（第二次澄清）：这四个是**平级**页签，且「观看中」排最前
+  // （原话："这 4 个选项应该是平级的，现在你把观看中单独放在其余 3 个的下面了"）。
   function renderTabs() {
     clear(tabsNav);
-    const defs = [["all", "所有内容"], ["done", "已看完"], ["category", "分类"]];
+    const defs = [["watching", "观看中"], ["all", "所有内容"], ["done", "已看完"], ["category", "分类"]];
     for (const [key, label] of defs) {
       tabsNav.append(el("button", {
         class: "tab" + (key === current ? " on" : ""), type: "button", text: label,
@@ -82,6 +82,16 @@ export function mountSeries(view) {
       return;
     }
     count.hidden = false;
+    if (current === "watching") {
+      const items = watching();
+      count.textContent = items.length + " 个在追";
+      if (!items.length) {
+        body.append(el("div", { class: "muted", text: "还没有在追的剧场" }));
+        return;
+      }
+      body.append(posterGrid(items, { progress: true }));
+      return;
+    }
     if (current === "done") {
       const items = finished();
       count.textContent = items.length + " 个已看完";
@@ -109,25 +119,12 @@ export function mountSeries(view) {
       body.append(items.length ? posterGrid(items, {}) : el("div", { class: "muted", text: "这个库里还没有剧场" }));
       return;
     }
-    // 所有内容：**先「观看中」再「所有内容」**（用户 2026-09-24 明确要求这个顺序）
-    const inProgress = watching();
-    count.textContent = list.length + " 个剧场";
-    if (inProgress.length) {
-      body.append(sectionHead("观看中", inProgress.length + " 个在追"));
-      body.append(posterGrid(inProgress, { progress: true }));
-    }
-    body.append(sectionHead("所有内容", list.length + " 个剧场"));
+    // 所有内容（不再往里塞"观看中"板块：四个页签平级）
+    count.textContent = "共：" + list.length + " 个剧场";
     body.append(posterGrid(list, {}));
   }
 
   load();
-}
-
-// 板块小标题（观看中 / 所有内容）：只在页面里做层级，不加新组件。
-function sectionHead(title, note) {
-  return el("div", { class: "series-sec", dataset: { role: "series-sec" } },
-    el("span", { class: "series-sec-title", text: title }),
-    note ? el("span", { class: "series-sec-note muted", text: note }) : null);
 }
 
 function posterGrid(items, opts) {

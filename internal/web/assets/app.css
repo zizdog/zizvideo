@@ -23,7 +23,8 @@ body {
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 #app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
-
+.center{text-align: center;}
+.version{padding:15px 0 25px;}
 /* ---------- header（抖音式：左返回、右搜索、中间空） ---------- */
 .header {
   /* 用户 2026-09-23：顶栏**不要背景横条** —— 只留两个按钮浮在内容上 */
@@ -368,6 +369,18 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .upload-state.approved { color: #1a9a5b; border-color: #1a9a5b; }
 .upload-state.rejected { color: var(--danger); border-color: var(--danger); }
 .preview-video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; }
+
+/* 底栏「+」上传入口（用户 2026-09-24） */
+.nav-item.upload { font-size: 20px; font-weight: 600; line-height: 1.1; }
+/* 去重页：默认保留的那条 + 卡片内的提示（文件不在/放不了） */
+.dup-keeper {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--accent); color: var(--accent);
+}
+.video-cover .inline-note {
+  position: absolute; inset: auto 0 0 0; padding: 6px 8px; font-size: 12px;
+  background: rgba(0,0,0,.72); color: #fff;
+}
 
 /* 剧场板块小标题（用户 2026-09-24：观看中要排在所有内容前面） */
 .series-sec { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 -2px; }

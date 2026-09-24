@@ -85,7 +85,8 @@ export function videoCard(item, options) {
   const card = el("div", {
     class: "video-card", dataset: { role: "video-card", id: String(item.id) },
   }, link);
-  if (opts.playInline && item.missing !== true && item.file_exists !== false) attachInlinePlay(link, coverBox, item);
+  // playInline 一律挂上处理器：文件不在时**也必须给反馈**（点封面一点反应都没有 = 用户眼里的"功能失效"）
+  if (opts.playInline) attachInlinePlay(link, coverBox, item);
   if (opts.leading) card.append(el("span", { class: "video-lead" }, opts.leading));
   // meta 行（媒体库/大小/路径…，管理端"去重预览"用）收在一个容器里，便于样式化
   if (opts.meta && opts.meta.length) {
@@ -156,8 +157,17 @@ export function stopInlinePlayers() {
 function attachInlinePlay(opener, box, item) {
   let video = null;
   let stopBtn = null;
+  let note = null;
+  const clearNote = () => { if (note) { note.remove(); note = null; } };
+  // 放不了就把话说清楚（文件不在 / 流取不到），别静默什么都不发生
+  const say = (text) => {
+    clearNote();
+    note = el("div", { class: "inline-note", dataset: { role: "inline-note" }, text });
+    box.append(note);
+  };
   const stop = () => {
     inlineStops.delete(stop);
+    clearNote();
     if (!video) return;
     video.pause();
     video.remove();
@@ -167,8 +177,22 @@ function attachInlinePlay(opener, box, item) {
   };
   const toggle = () => {
     if (video) { stop(); return; }
+    if (note) { clearNote(); return; }
+    // 扫描已知文件不在：直接说明，别去点一个必然 404 的流
+    if (item.missing === true || item.file_exists === false) {
+      say("文件不在了（磁盘上找不到），只能删这条记录");
+      return;
+    }
     stopInlinePlayers();
     video = createMediaVideo(item, { class: "card-video", controls: true });
+    video.addEventListener("error", () => {
+      const v = video;
+      video = null;
+      if (v) v.remove();
+      if (stopBtn) { stopBtn.remove(); stopBtn = null; }
+      box.classList.remove("playing");
+      say("这个文件放不了（可能已改名/移动，重新扫描试试）");
+    });
     box.classList.add("playing");
     box.append(video);
     // 收起要有**明确**的按钮：视频自带控件会把点表面的点击吃掉（实测点第二下收不起来），
