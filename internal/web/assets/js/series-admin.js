@@ -6,6 +6,7 @@ import { el, clear, banner, setBanner, field, input, fmtDuration } from "./dom.j
 import { confirmDialog } from "./confirm.js";
 import { importDirIntoSeries } from "./series-import.js";
 import { uploadToSeries } from "./uploads.js";
+import { presetUploadTarget } from "./upload.js";
 
 export function mountSeriesAdmin(box, series, options) {
   const opts = options || {};
@@ -46,9 +47,20 @@ export function mountSeriesAdmin(box, series, options) {
 
   const episodes = el("div", { class: "ep-admin-list", dataset: { role: "series-episodes" } });
   const epOrderNote = el("div", { class: "muted small-note", hidden: true, dataset: { role: "episode-order-note" } });
+  // C7：缺集提示 + 一键补传（跳上传页并把投递目标预选成这个剧场）
+  const gapText = el("span", { dataset: { role: "series-gap-text" } });
+  const gapBtn = el("button", {
+    class: "btn small primary", type: "button", dataset: { role: "series-gap-fill" }, text: "补传缺的集",
+  });
+  const gapBox = el("div", { class: "muted small-note row hidden", dataset: { role: "series-gap" } },
+    gapText, gapBtn);
+  gapBtn.addEventListener("click", () => {
+    presetUploadTarget({ libraryId: series.library_id || "", seriesTitle: series.title || "" });
+    location.hash = "#/upload";
+  });
   const epPanel = el("div", { class: "panel" },
     el("div", { class: "muted small-note", text: "剧集顺序（↑↓ 调整，✕ 移出）" }),
-    epOrderNote, episodes);
+    epOrderNote, gapBox, episodes);
   // 补丁 R1：按文件名识别季/集号；先给变化清单，确认后才落库。
   const detectBtn = el("button", {
     class: "btn small", type: "button", text: "自动识别剧集", dataset: { role: "series-detect" },
@@ -173,6 +185,49 @@ export function mountSeriesAdmin(box, series, options) {
     });
     epOrderNote.hidden = unrecognized === 0;
     epOrderNote.textContent = unrecognized > 0 ? "未识别（按文件名排）共 " + unrecognized + " 集" : "";
+    paintGaps();
+  }
+
+  // 缺集 = 识别出来的集号里 1..最大 之间缺的那些（未识别的不猜）。
+  // 只按集号判断，不动文件、不动记录 —— 缺的集等用户补传，通过后自动挂回这个剧场。
+  function missingEpisodes() {
+    const numbers = [];
+    for (const id of ids) {
+      const n = Number(entryByID[id] && entryByID[id].episode);
+      if (Number.isInteger(n) && n > 0) numbers.push(n);
+    }
+    if (numbers.length < 2) return null;
+    const have = new Set(numbers);
+    let max = 0;
+    for (const n of numbers) if (n > max) max = n;
+    const missing = [];
+    for (let n = 1; n <= max; n++) if (!have.has(n)) missing.push(n);
+    if (!missing.length) return null;
+    return { max: max, have: have.size, missing: missing };
+  }
+
+  // 连续缺号压成区间：缺 3,4,5,9 → "3–5、9"
+  function formatRanges(list) {
+    const parts = [];
+    let start = list[0];
+    let prev = list[0];
+    const flush = () => { parts.push(start === prev ? String(start) : start + "–" + prev); };
+    for (let i = 1; i < list.length; i++) {
+      if (list[i] === prev + 1) { prev = list[i]; continue; }
+      flush(); start = prev = list[i];
+    }
+    flush();
+    return parts;
+  }
+
+  function paintGaps() {
+    const gap = missingEpisodes();
+    gapBox.classList.toggle("hidden", !gap);
+    if (!gap) return;
+    const parts = formatRanges(gap.missing);
+    const brief = parts.slice(0, 3).join("、") + (parts.length > 3 ? " 等 " + parts.length + " 段" : "");
+    gapText.textContent = "缺第 " + brief + " 集（共 " + gap.max + " 集，现有 " + gap.have + " 集）";
+    gapBtn.textContent = "补传这 " + gap.missing.length + " 集";
   }
 
   function moveButton(label, index, delta) {

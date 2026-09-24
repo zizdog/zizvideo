@@ -72,6 +72,12 @@ async function uploadOne(row, file, onTick) {
   return row;
 }
 
+// C7：剧场页「补传缺的集」跳过来时，把投递目标（库 + 剧场草稿名）预选好。
+// 名字别用 seed：剧场/连播相关代码里 "seed" 是随机播放标识符，有门禁盯着（见 series_test.go）。
+// 用同一个剧场标题 ⇒ 审核通过时按标题挂回**同一个**剧场（服务端 SeriesByTitle），不会新建重复剧场。
+let uploadPreset = null;
+export function presetUploadTarget(preset) { uploadPreset = preset || null; }
+
 export function mountUpload(view) {
   const note = banner();
   // A2：上传时可选"投递目标"（审核页会预填）。库列表只来自 /me/libraries（自己的可见库），
@@ -244,7 +250,21 @@ export function mountUpload(view) {
       const list = Array.isArray(libs) ? libs : ((libs && libs.list) || []);
       for (const lib of list) targetLib.append(el("option", { value: lib.id, text: lib.name || lib.id }));
       if (!list.length) targetNote.textContent = "你还没有可访问的媒体库：投递目标不可选，先让管理员授权。";
+      applySeed();
     } catch (err) { /* 读不到就不显示，不编 */ }
+  }
+
+  // 把 C7 带来的预选落进控件（库要真在可选项里才选，选不了就只预填剧场名）
+  function applySeed() {
+    const preset = uploadPreset;
+    if (!preset) return;
+    uploadPreset = null;
+    if (preset.libraryId) {
+      const has = Array.from(targetLib.options).some((o) => o.value === preset.libraryId);
+      if (has) targetLib.value = preset.libraryId;
+    }
+    if (preset.seriesTitle) targetSeries.value = preset.seriesTitle;
+    targetNote.textContent = "已预选：《" + (preset.seriesTitle || "剧场") + "》—— 审核通过后按这个名字挂回同一个剧场，不会新建。";
   }
 
   async function refreshQuota() {
