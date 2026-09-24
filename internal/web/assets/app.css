@@ -569,9 +569,26 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .feed.immersive.blank .imm-back { display: none; }
 /* 全屏里左上角只留返回键（"来自 X / 选库"让位，别两个挤一起） */
 .feed.immersive .ov-corner { display: none; }
-/* 全屏里 rail 多一个播放/暂停键；平时不显示 */
-.feed .rail-play { display: none; }
-.feed.immersive .rail-play { display: inline-flex; }
+/* 全屏里画面正中的播放/暂停键（用户 2026-09-24）：只在沉浸态且控件可见时出现。
+   圆形图标键（.center-btn 是文字药丸，这里覆盖成圆的）。 */
+.feed .center-pause {
+  display: none; width: 78px; height: 78px; padding: 0; border-radius: 50%;
+  align-items: center; justify-content: center;
+}
+.feed .center-pause svg { width: 40px; height: 40px; }
+.feed.immersive:not(.blank) .center-pause { display: flex; }
+/* 双击点赞的中央大拇指动画 */
+.like-burst {
+  position: absolute; z-index: 11; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  color: #fff; pointer-events: none; filter: drop-shadow(0 2px 10px rgba(0,0,0,.6));
+  animation: zv-like-burst .68s ease-out forwards;
+}
+.like-burst svg { width: 96px; height: 96px; }
+@keyframes zv-like-burst {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.5) rotate(-14deg); }
+  35% { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(6deg); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4) rotate(0deg); }
+}
 /* 全屏时控件贴到屏幕边（顶栏已收起，不用再躲那 52px） */
 body.rot-play .ov-corner { top: calc(10px + env(safe-area-inset-top, 0px)); }
 

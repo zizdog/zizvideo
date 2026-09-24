@@ -305,7 +305,8 @@ export function mountFeed(view, options = {}) {
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
       entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
-      playPauseButton(entry), fullscreenButton(entry), cleanButton(entry)));
+      fullscreenButton(entry), cleanButton(entry)));
+    layer.append(centerPlayPause(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
@@ -342,14 +343,32 @@ export function mountFeed(view, options = {}) {
     });
     video.addEventListener("pause", () => {
       if (entry.paintPlayPause) entry.paintPlayPause();
-      if (!entry.video.ended) showPlayButton(entry);
+      // 全屏里暂停要让中间的播放键看得见（收起状态下先展开控件）
+      if (immersiveOn()) { full.uiHidden = false; paintImmersive(); }
+      if (!entry.video.ended && !immersiveOn()) showPlayButton(entry);
     });
     video.addEventListener("ended", () => onEnded(entry));
     video.addEventListener("error", () => showBroken(entry));
+    // 单击：全屏切换控件显示 / 平时播放暂停；双击：点赞（用户 2026-09-24）。
+    // 单击要等 ~260ms 看有没有第二下 —— 这是双击手势的固有代价。
+    let tapTimer = 0;
     video.addEventListener("click", () => {
-      // 全屏（沉浸）时点屏幕 = 切换控件显示（用户 2026-09-24）；平时仍是播放/暂停
-      if (immersiveOn()) { full.uiHidden = !full.uiHidden; paintImmersive(); return; }
-      togglePlay(entry);
+      if (tapTimer) {
+        clearTimeout(tapTimer);
+        tapTimer = 0;
+        doubleTapLike(entry);
+        return;
+      }
+      tapTimer = setTimeout(() => {
+        tapTimer = 0;
+        if (immersiveOn()) { full.uiHidden = !full.uiHidden; paintImmersive(); return; }
+        togglePlay(entry);
+      }, 260); // 双击判定窗：安卓系统的双击超时是 300ms，取 260 兼顾"单击不拖沓"与"双击抓得住"
+    });
+    video.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      if (tapTimer) { clearTimeout(tapTimer); tapTimer = 0; }
+      doubleTapLike(entry);
     });
     stage.append(video);
     showLoading(entry); // 用户 2026-09-23：先给"加载中"，别一进来就是个大播放按钮
@@ -521,6 +540,7 @@ export function mountFeed(view, options = {}) {
   /** 暂停/播放失败时显示"播放"按钮；可反复出现（不再 latch 成一次性）。 */
   function showPlayButton(entry) {
     if (entry.destroyed || !entry.video || !entry.layer || entry.playBtn) return;
+    if (immersiveOn()) return; // 全屏时用画面正中的播放/暂停键，别两个叠一起
     hideLoading(entry); // 真正需要用户点播时才显示播放按钮
     entry.playBtn = el("button", {
       class: "center-btn", type: "button", text: "点击播放",
@@ -840,15 +860,26 @@ export function mountFeed(view, options = {}) {
     showToast(full.native ? "横屏全屏（点屏幕显隐控件）" : "已旋转横屏：把手机横过来看（点屏幕显隐控件）");
   }
 
-  async function exitFullscreen() {
+  // 离开播放页（返回/路由切换/清理）也要把全屏状态交还回去：用户 2026-09-24
+  // "全屏时点击返回应该同时退出全屏状态，而不是仅仅返回" —— 只清 class 不够，
+  // 系统横屏（原生桥）、方向锁、document 全屏都得释放。
+  // ⚠️ document.exitFullscreen 与 native 无关：浏览器那条路是我们自己 requestFullscreen 的（踩过）。
+  async function releaseSystemFullscreen() {
+    try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
+    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
+  }
+
+  async function releaseFullscreen() {
     full.rotated = false;
-    if (full.native) {
-      try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
-      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
-      try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
-    }
     full.native = false;
-    setImmersive(false);
+    full.uiHidden = false;
+    paintImmersive();
+    await releaseSystemFullscreen();
+  }
+
+  async function exitFullscreen() {
+    await releaseFullscreen();
     showToast("已退出横屏");
   }
 
@@ -859,12 +890,18 @@ export function mountFeed(view, options = {}) {
     return btn;
   }
 
-  // 全屏里没有别的暂停入口：加一个只在沉浸态出现的播放/暂停键
-  function playPauseButton(entry) {
-    const btn = el("button", { class: "icon-btn rail-play", type: "button", title: "播放/暂停",
-      dataset: { role: "rail-play" } }, icon("play"));
+  // 全屏里的暂停入口：**画面正中的播放/暂停键**（用户 2026-09-24："可以在视频中间显示暂停按钮"）。
+  // 只在沉浸态且控件可见时出现；点了就地暂停/继续。
+  function centerPlayPause(entry) {
+    const btn = el("button", { class: "center-btn center-pause", type: "button", title: "暂停/播放",
+      dataset: { role: "center-pause" } }, icon("pause"));
     const paint = () => setIcon(btn, entry.video && !entry.video.paused ? "pause" : "play");
-    btn.addEventListener("click", (event) => { event.stopPropagation(); togglePlay(entry); paint(); });
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePlay(entry);
+      paint();
+      if (entry.video && entry.video.paused) { full.uiHidden = false; paintImmersive(); }
+    });
     entry.paintPlayPause = paint;
     paint();
     return btn;
@@ -935,6 +972,34 @@ export function mountFeed(view, options = {}) {
       entry.later.classList.toggle("on", !next);
       showToast(err && err.message ? err.message : "操作失败");
     }
+  }
+
+  // 双击点赞：**只加不减**（再双击也不取消，和抖音一致），中间弹一个大拇指动画。
+  async function doubleTapLike(entry) {
+    if (entry.destroyed || !entry.item) return;
+    const item = entry.item;
+    burstLike(entry);
+    if (item.reaction === "like") return; // 已经赞过了：只给动画，不再打接口
+    entry.item.reaction = "like";
+    if (entry.like) entry.like.classList.add("on");
+    showToast("已喜欢");
+    try {
+      await api.addReaction(item.id, "like");
+    } catch (err) {
+      entry.item.reaction = null;
+      if (entry.like) entry.like.classList.remove("on");
+      showToast(err && err.message ? err.message : "点赞失败");
+    }
+  }
+
+  // burstLike：中央那个"赞"的放大淡出动画（只是反馈，不是按钮）。
+  function burstLike(entry) {
+    if (entry.destroyed || !entry.layer) return;
+    if (entry.burst) entry.burst.remove();
+    const node = el("div", { class: "like-burst", dataset: { role: "like-burst" } }, icon("thumb"));
+    entry.layer.append(node);
+    entry.burst = node;
+    setTimeout(() => { if (entry.burst === node) { node.remove(); entry.burst = null; } }, 700);
   }
 
   async function toggleLike(entry) {
@@ -1306,6 +1371,7 @@ export function mountFeed(view, options = {}) {
   }
 
   return function cleanup() {
+    releaseFullscreen(); // 返回/换页时把系统横屏与 document 全屏一并交还
     document.body.classList.remove("playing");
     document.body.classList.remove("rot-play");
     clearInterval(progressTimer);
