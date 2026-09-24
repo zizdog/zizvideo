@@ -302,12 +302,21 @@ class WebActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when {
                     customView != null -> customViewCallback?.onCustomViewHidden()
-                    // 全屏（沉浸）中：系统返回手势先只退出全屏，留在当前视频上
-                    // （用户 2026-09-24 报障："手机端滑动侧边返回不能退出全屏，只有左上角按钮行"）
-                    webImmersive -> web.evaluateJavascript(
-                        "window.__zvExitFullscreen && window.__zvExitFullscreen()", null)
-                    web.canGoBack() -> web.goBack()
-                    else -> finish()
+                    else -> {
+                        // 返回手势先问网页（用户 2026-09-24）：
+                        //   ① 有设置面板/选集面板开着 ⇒ 只关面板（播放内容不动）；
+                        //   ② 在全屏 ⇒ 退全屏；
+                        //   ③ 都没有 ⇒ 交给下面的路由逻辑（返回上一页/退出）。
+                        // 注意顺序：先问 __zvBackHandler；老版本网页没有它时退回 __zvExitFullscreen。
+                        web.evaluateJavascript(
+                            "(function(){var h=window.__zvBackHandler||window.__zvExitFullscreen;" +
+                                "return h?h():false;})()") { result ->
+                            val consumed = result == "true"
+                            if (!consumed) {
+                                if (web.canGoBack()) web.goBack() else finish()
+                            }
+                        }
+                    }
                 }
             }
         })

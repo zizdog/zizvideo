@@ -100,6 +100,16 @@
                 android:contentDescription="倍速"
                 android:text="1×" />
 
+            <!-- ④ 离线缓存：点一下下到本机（已缓存时点它=删缓存，带确认） -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/offline"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:minWidth="0dp"
+                android:contentDescription="离线缓存"
+                android:text="缓存" />
+
             <!-- B4 画中画：缩成浮窗继续放，可以边刷别的（安卓 8+） -->
             <ImageButton
                 android:id="@+id/pip"

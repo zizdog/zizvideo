@@ -198,13 +198,44 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 }
 .center-flash.fade { opacity: 0; }
 /* ⚙ 二级设置（从右下竖排栏的左侧弹出） */
+/* 设置面板（用户 2026-09-24：同抖音 —— 从下方弹出、宽度 100%、高度按内容适应） */
 .set-panel {
-  position: absolute; z-index: 9; right: 58px;
-  bottom: calc(92px + var(--sab)); width: min(74vw, 240px);
-  display: flex; flex-direction: column; gap: 9px; padding: 12px;
-  border-radius: var(--radius); background: rgba(18,22,28,.96);
-  border: 1px solid var(--line); color: #fff;
+  position: absolute; z-index: 12; left: 0; right: 0;
+  bottom: 0; width: 100%;
+  display: flex; flex-direction: column; gap: 9px; padding: 8px 16px calc(14px + var(--sab));
+  border-radius: 16px 16px 0 0; background: rgba(22,24,28,.98);
+  border: 0; border-top: 1px solid var(--line); color: #fff;
+  box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+  animation: zv-sheet-up .18s ease-out;
+  max-height: 78%; overflow: auto;
 }
+@keyframes zv-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.set-panel .sheet-handle {
+  width: 36px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.28);
+  margin: 2px auto 4px;
+}
+/* 面板工具区：小窗播放 / 投屏 / 稍后再看 */
+.sheet-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.sheet-tool {
+  font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: rgba(255,255,255,.06); color: #fff;
+}
+.sheet-tool:hover, .sheet-tool:active { background: rgba(255,255,255,.16); }
+/* 面板外的遮罩：吞掉点击（点外面只关面板，不触发播放/暂停） */
+.sheet-scrim { position: absolute; inset: 0; z-index: 11; background: rgba(0,0,0,.35); }
+/* 视频画面下方那排：全屏播放（+ 网页端才有的设置） */
+.below-row {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 14px; z-index: 8; pointer-events: none;
+}
+.below-row > * { pointer-events: auto; }
+.below-btn {
+  font: inherit; font-size: 14px; padding: 6px 14px; border: 0; cursor: pointer;
+  background: transparent; color: #fff; opacity: .5; transition: opacity .15s ease;
+}
+.below-btn:hover, .below-btn:active { opacity: 1; }
+/* 沉浸（全屏）/清屏时这排跟着藏起来 */
+.feed.immersive .below-row, .feed.clean .below-row, .feed.blank .below-row { display: none; }
 .set-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .set-row input { width: 16px; height: 16px; }
 .set-row input:disabled + span { opacity: .45; }

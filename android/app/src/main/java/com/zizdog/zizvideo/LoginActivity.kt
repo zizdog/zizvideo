@@ -23,6 +23,7 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var password: TextInputEditText
     private lateinit var login: MaterialButton
     private lateinit var status: TextView
+    private lateinit var splash: View
     private lateinit var tlsBox: android.widget.CheckBox
     private lateinit var rememberBox: android.widget.CheckBox
 
@@ -43,6 +44,7 @@ class LoginActivity : AppCompatActivity() {
         password = findViewById(R.id.password)
         login = findViewById(R.id.login)
         status = findViewById(R.id.status)
+        splash = findViewById(R.id.splash)
 
         tlsBox = findViewById(R.id.tls)
         rememberBox = findViewById(R.id.remember)
@@ -50,8 +52,11 @@ class LoginActivity : AppCompatActivity() {
         username.setText(prefs.username)
         tlsBox.isChecked = prefs.useTLS
         rememberBox.isChecked = prefs.remember
-        // 勾过"记住口令"就直接自动登录（用户 2026-09-23：不要每次都输）
-        if (prefs.remember && prefs.password.isNotBlank()) {
+        // 先试"静默进入"：有会话 cookie 就先探活，能过就直接进观看页
+        // —— 这期间只显示启动遮罩（黑底 + 图标），**不露任何登录信息**（用户 2026-09-24 要求无感）。
+        val silent = silentEntryIfPossible()
+        // 勾过"记住口令"就直接自动登录（用户 2026-09-23：不要每次都输）；静默验证中别重复点
+        if (!silent && prefs.remember && prefs.password.isNotBlank()) {
             login.performClick()
         }
         login.setOnClickListener { submit() }
@@ -83,12 +88,19 @@ class LoginActivity : AppCompatActivity() {
         autoEnterIfLoggedIn()
     }
 
-    private fun autoEnterIfLoggedIn() {
+    /**
+     * 有 cookie 就静默验证一次：
+     *   · 会话还有效 ⇒ 直接进观看页（登录界面从头到尾不显示）；
+     *   · 已过期 ⇒ 收起遮罩，露出登录表单（这时才需要用户输口令）。
+     * 返回 true 表示"已经在处理了，别再走下面那套自动登录"。
+     */
+    private fun silentEntryIfPossible(): Boolean {
         val base = prefs.baseUrl
-        if (base.isBlank()) return
+        if (base.isBlank()) return false
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
-        if (cookie.isBlank()) return
-        setBusy(true, "检查登录状态…")
+        if (cookie.isBlank()) return false
+        splash.visibility = View.VISIBLE
+        android.util.Log.i("zv-login", "silent probe base=" + base)
         Thread {
             val me = try {
                 ZvApi.get("$base/api/v1/auth/me", cookie)
@@ -96,10 +108,16 @@ class LoginActivity : AppCompatActivity() {
                 null
             }
             runOnUiThread {
-                if (me != null && me.ok) enterWeb(base, "已登录")
-                else setBusy(false, "登录已过期，请重新输入口令")
+                if (me != null && me.ok) enterWeb(base, "")
+                else splash.visibility = View.GONE
             }
         }.start()
+        return true
+    }
+
+    private fun autoEnterIfLoggedIn() {
+        // 静默通道已经处理过了（含"过期就露表单"），这里只负责别让遮罩卡住
+        splash.visibility = View.GONE
     }
 
     private fun submit() {

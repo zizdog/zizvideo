@@ -15,4 +15,5 @@
     <string name="allow_background">允许后台运行（后台听视频更稳）</string>
     <string name="use_tls">使用 HTTPS</string>
     <string name="remember_me">记住口令（下次自动登录，明文存本机）</string>
+    <string name="splash_entering">正在进入…</string>
 </resources>

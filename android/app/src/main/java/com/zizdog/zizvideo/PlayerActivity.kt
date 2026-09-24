@@ -49,8 +49,11 @@ class PlayerActivity : AppCompatActivity() {
 
     // B5：倍速 / 长按快进 / 双击点赞（与网页同一套语义，倍速设置也共用服务端那份）
     private lateinit var speedBtn: MaterialButton
+    private lateinit var offlineBtn: MaterialButton
     private lateinit var likeBurst: android.widget.ImageView
     private lateinit var ffHint: android.widget.TextView
+    private val offlineHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var offlineTick: Runnable? = null
     private var speed = 1.0f
     private var likedNow = false
     private var ffTimer: Runnable? = null
@@ -82,6 +85,10 @@ class PlayerActivity : AppCompatActivity() {
         findViewById<android.widget.ImageButton>(R.id.pip).setOnClickListener { enterPip() }
         // B5 倍速：点一下换一档（0.5→0.75→1→1.25→1.5→2→0.5…），并写回服务端
         speedBtn = findViewById(R.id.speed)
+        offlineBtn = findViewById(R.id.offline)
+        offlineBtn.visibility = if (offlineEnabled) android.view.View.VISIBLE else android.view.View.GONE
+        offlineBtn.setOnClickListener { onOfflineTap() }
+        startOfflineTicker()
         likeBurst = findViewById(R.id.likeBurst)
         ffHint = findViewById(R.id.ffHint)
         speedBtn.setOnClickListener { cycleSpeed() }
@@ -118,6 +125,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(metadata.title?.toString() ?: "")
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                     paint(item?.mediaMetadata?.title?.toString() ?: "")
+                    paintOffline()
                     refreshState(item?.mediaId ?: "")
                 }
             })
@@ -138,6 +146,77 @@ class PlayerActivity : AppCompatActivity() {
             stopService(Intent(this, PlaybackService::class.java))
             finish()
         }
+    }
+
+    // ---------- ④ 离线缓存（下载到本机看） ----------
+    // ⚠️ 实测（2026-09-24）：点「缓存」能排进系统 DownloadManager，但文件没落到预期路径
+    //    （`.../files/Movies/offline/<id>.mp4` 大小 0），还没查出原因 ⇒ **先把按钮藏起来**：
+    //    不给用户一个"点了没反应"的按钮。修好并验证通过后再打开（下一轮）。
+    private val offlineEnabled = false
+
+    /** 按钮反映真实状态：未缓存 / 缓存中 N% / 已缓存（再点一下可删，带确认）。 */
+    private fun paintOffline() {
+        if (!offlineEnabled) return
+        val id = currentId
+        if (id.isBlank()) {
+            offlineBtn.text = "缓存"
+            return
+        }
+        if (OfflineStore.downloaded(this, id) != null) {
+            offlineBtn.text = "已缓存"
+            return
+        }
+        val pct = OfflineStore.progress(this, id)
+        offlineBtn.text = if (pct != null) "缓存中 " + pct + "%" else "缓存"
+    }
+
+    private fun startOfflineTicker() {
+        stopOfflineTicker()
+        val r = object : Runnable {
+            override fun run() {
+                paintOffline()
+                offlineHandler.postDelayed(this, 2000)
+            }
+        }
+        offlineTick = r
+        offlineHandler.postDelayed(r, 2000)
+    }
+
+    private fun stopOfflineTicker() {
+        offlineTick?.let { offlineHandler.removeCallbacks(it) }
+        offlineTick = null
+    }
+
+    private fun onOfflineTap() {
+        val id = currentId
+        if (id.isBlank()) return
+        if (OfflineStore.downloaded(this, id) != null) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("删掉这一集的离线缓存？")
+                .setMessage("只删手机上的缓存文件，服务器上的视频不动。")
+                .setPositiveButton("删掉") { _, _ ->
+                    OfflineStore.delete(this, id)
+                    android.widget.Toast.makeText(this, "已删除离线缓存", android.widget.Toast.LENGTH_SHORT).show()
+                    paintOffline()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+        if (OfflineStore.progress(this, id) != null) {
+            android.widget.Toast.makeText(this, "正在缓存，进度看通知栏", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val title = controller?.currentMediaItem?.mediaMetadata?.title?.toString() ?: id
+        val downloadId = OfflineStore.enqueue(this, base(), id, title)
+        if (downloadId < 0) {
+            android.widget.Toast.makeText(this, "开始缓存失败（看通知栏或稍后再试）",
+                android.widget.Toast.LENGTH_LONG).show()
+        } else {
+            android.util.Log.i("zv-offline", "enqueue id=" + id + " download=" + downloadId)
+            android.widget.Toast.makeText(this, "开始缓存这一集，好了通知你", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        paintOffline()
     }
 
     // ---------- B5 倍速 / 长按快进 / 双击点赞 ----------
@@ -371,8 +450,11 @@ class PlayerActivity : AppCompatActivity() {
             }
             Log.i("zvplayer", "queue kind=$kind id=$mediaId 条数=" + list.size)
             val items = list.map { m ->
+                // ④ 有离线缓存就用本地文件（这条是"点卡片进原生播放页"的主路径）
+                val local = OfflineStore.localUri(this, m.id)
+                if (local != null) Log.i("zv-offline", "play local id=" + m.id)
                 MediaItem.Builder()
-                    .setUri(m.streamUrl)
+                    .setUri(local ?: m.streamUrl)
                     .setMediaId(m.id)
                     .setMediaMetadata(MediaMetadata.Builder().setTitle(m.title).build())
                     .build()
@@ -396,6 +478,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopOfflineTicker()
         // 只放掉控制器，**不**停服务：退到后台/锁屏继续放。
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null

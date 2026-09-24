@@ -8,4 +8,6 @@
         <item name="android:windowBackground">#FF101014</item>
     </style>
     <color name="zv_accent">#FFFF3B5B</color>
+    <!-- 启动遮罩底色：与观看页一致的黑，闪一下也是黑的（不是登录表单） -->
+    <color name="zv_splash_bg">#FF000000</color>
 </resources>

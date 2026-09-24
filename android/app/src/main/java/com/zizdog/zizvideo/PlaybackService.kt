@@ -186,8 +186,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun buildItems(ids: List<String>, titles: List<String>) = ids.mapIndexed { i, id ->
+        // ④ 有离线缓存就放本地文件：断网/服务器不在也能接着看（后台连播同样走这里）
+        val local = OfflineStore.localUri(this, id)
         MediaItem.Builder()
-            .setUri("$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
+            .setUri(local ?: "$base/api/v1/media/" + android.net.Uri.encode(id) + "/stream")
             .setMediaId(id)
             .setMediaMetadata(
                 androidx.media3.common.MediaMetadata.Builder()
@@ -227,8 +229,10 @@ class PlaybackService : MediaSessionService() {
             val list = ZvApi2.queue(base, kind, c)
             if (list.isEmpty()) return@Thread
             val items = list.map { m ->
+                val local = OfflineStore.localUri(this, m.id)
+                if (local != null) android.util.Log.i("zv-offline", "play local id=" + m.id)
                 MediaItem.Builder()
-                    .setUri(m.streamUrl)
+                    .setUri(local ?: m.streamUrl)
                     .setMediaId(m.id)
                     .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(m.title).build())
                     .build()

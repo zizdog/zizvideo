@@ -275,7 +275,8 @@ export function mountFeed(view, options = {}) {
 
     entry.fav = el("button", { class: "icon-btn", type: "button", title: "收藏" }, icon("heart"));
     entry.like = el("button", { class: "icon-btn", type: "button", title: "喜欢" }, icon("thumb"));
-    entry.later = el("button", { class: "icon-btn", type: "button", title: "稍后再看" }, icon("clock"));
+    // 稍后再看已移进设置面板：这里仍然保留节点（toggleWatchLater 要同步它的 .on 状态），只是不挂到边栏
+    entry.later = el("button", { class: "icon-btn hidden", type: "button", title: "稍后再看" }, icon("clock"));
     entry.fav.classList.toggle("on", !!item.favorite);
     entry.like.classList.toggle("on", item.reaction === "like");
     entry.later.classList.toggle("on", !!item.watch_later);
@@ -323,12 +324,13 @@ export function mountFeed(view, options = {}) {
 
     // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
+    // 边栏只留"高频互动"：收藏 / 喜欢 / 选集 / 声音 / 删除 / 清屏。
+    // 小窗播放、投屏、稍后再看、设置都收进**底部设置面板**；全屏播放按钮移到视频画面下方
+    // （用户 2026-09-24："小窗播放/稍后再看放设置面板，全屏按钮放视频下方"）。
     layer.append(el("div", { class: "ov-rail" },
-      entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
-      playable && pipAvailable() ? pipButton(entry) : null,
-      playable && castAvailable() ? castButton(entry) : null,
-      fullscreenButton(entry), cleanButton(entry)));
+      entry.fav, entry.like, entry.eps, soundButton(entry), entry.del, cleanButton(entry)));
     layer.append(centerPlayPause(entry));
+    if (playable) layer.append(belowVideoRow(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
@@ -352,10 +354,11 @@ export function mountFeed(view, options = {}) {
     const video = createMediaVideo(item, { muted: !state.soundOn, loop: loopEnabled() });
     entry.video = video;
     video.playbackRate = state.settings.playback_rate; // B5 倍速：造出来就按设置
-    // B5 长按快进：按住画面 350ms ⇒ 2×（松手还原），与单击/双击/滑动互不干扰
-    video.addEventListener("pointerdown", () => startFastForward(entry));
+    // 长按画面 = 弹设置面板（用户 2026-09-24，同抖音）。
+    // ⚠️ 这与原来的"长按 2× 快进"是同一个手势，二选一：按用户要求改成弹面板，长按快进随之取消。
+    video.addEventListener("pointerdown", () => startLongPress(entry));
     for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
-      video.addEventListener(ev, () => stopFastForward(entry));
+      video.addEventListener(ev, () => cancelLongPress(entry));
     }
     video.addEventListener("enterpictureinpicture", () => paintPip());
     video.addEventListener("leavepictureinpicture", () => paintPip());
@@ -440,9 +443,7 @@ export function mountFeed(view, options = {}) {
     entry.destroyed = true;
     if (entry.hintTimer) clearTimeout(entry.hintTimer);
     if (entry.ffTimer) clearTimeout(entry.ffTimer);
-    for (const btn of [entry.pipBtn, entry.castBtn]) {
-      if (btn && btn.__zvPaint) pipPaints.delete(btn.__zvPaint);
-    }
+    // 画中画/投屏的按钮已经不在边栏了（进设置面板），这里不再需要摘 paint
     if (entry.flashTimer) clearTimeout(entry.flashTimer);
     if (entry.video) {
       try { entry.video.pause(); } catch (err) { /* ignore */ }
@@ -560,42 +561,23 @@ export function mountFeed(view, options = {}) {
     }, 300);
   }
 
-  /* ---------- B5 长按快进 ---------- */
-  // 按住画面 350ms ⇒ 临时 2× 并提示；松手/移出/取消 ⇒ 回到用户设置的倍速（默认 1×）。
-  // 松手后 400ms 内那一次 click 要吞掉，否则"长按快进"会被当成单击把视频暂停（实测踩到）。
-  function startFastForward(entry) {
-    if (entry.destroyed || !entry.video || entry.ffTimer || entry.fastForward) return;
+  /* ---------- 长按画面 = 打开设置面板（用户 2026-09-24，同抖音） ---------- */
+  // 按下 350ms 没抬手就开面板；松手/移出/取消都取消这个计时器。
+  // 开面板后要吞掉随后的那次 click（否则长按会被当成单击把视频暂停）。
+  function startLongPress(entry) {
+    if (entry.destroyed || entry.ffTimer) return;
     entry.ffTimer = setTimeout(() => {
       entry.ffTimer = 0;
-      if (entry.destroyed || !entry.video || entry.video.paused) return;
-      entry.fastForward = true;
-      entry.video.playbackRate = 2;
-      showFastHint(entry, "2× 快进中");
+      if (entry.destroyed) return;
+      entry.suppressClick = true;
+      setTimeout(() => { entry.suppressClick = false; }, 400);
+      openPanel(entry);
+      if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* 不支持就算了 */ } }
     }, 350);
   }
 
-  function stopFastForward(entry) {
+  function cancelLongPress(entry) {
     if (entry.ffTimer) { clearTimeout(entry.ffTimer); entry.ffTimer = 0; }
-    if (!entry.fastForward) return;
-    entry.fastForward = false;
-    if (entry.video) entry.video.playbackRate = state.settings.playback_rate;
-    hideFastHint(entry);
-    entry.suppressClick = true;
-    setTimeout(() => { entry.suppressClick = false; }, 400);
-  }
-
-  function showFastHint(entry, text) {
-    if (entry.destroyed || !entry.layer) return;
-    if (!entry.ffHint) {
-      entry.ffHint = el("div", { class: "hint fast" });
-      entry.layer.append(entry.ffHint);
-    }
-    entry.ffHint.textContent = text;
-    entry.ffHint.classList.remove("hidden");
-  }
-
-  function hideFastHint(entry) {
-    if (entry.ffHint) entry.ffHint.classList.add("hidden");
   }
 
   function togglePlay(entry) {
@@ -670,6 +652,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function onMetadata(entry) {
+    paintBelow(entry);
     if (!entry.resumeDone) {
       entry.resumeDone = true;
       const progress = entry.item.progress || {};
@@ -781,6 +764,31 @@ export function mountFeed(view, options = {}) {
     if (entry.settingsForm) entry.settingsForm.paint(state.settings);
   }
 
+  // 面板外的遮罩：**吞掉点击**（点外面只关面板，不触发播放/暂停等外部操作 —— 用户明确要求）。
+  let sheetScrim = null;
+  function ensureScrim() {
+    if (sheetScrim) return sheetScrim;
+    sheetScrim = el("div", { class: "sheet-scrim hidden", dataset: { role: "sheet-scrim" } });
+    sheetScrim.addEventListener("pointerdown", (event) => event.stopPropagation(), true);
+    sheetScrim.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closePanels();
+    });
+    return sheetScrim;
+  }
+
+  function toolButton(label, onClick, extra) {
+    const btn = el("button", {
+      class: "sheet-tool" + (extra ? " " + extra : ""), type: "button", text: label,
+    });
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return btn;
+  }
+
+  // 底部设置面板（抖音式：从下方弹出、宽度 100%、高度按内容）
   function buildPanel(entry) {
     entry.settingsForm = createFeedSettingsForm({
       settings: state.settings,
@@ -788,9 +796,32 @@ export function mountFeed(view, options = {}) {
       // 剧场：自动连播写死开启且**不可设置**（用户要求），只留"跳转秒数"。
       lockAutoplay: !!playlist,
     });
-    entry.panel = el("div", { class: "set-panel hidden" }, entry.settingsForm.node);
+    const tools = el("div", { class: "sheet-tools" });
+    if (pipAvailable()) tools.append(toolButton("小窗播放", () => { closePanels(); togglePip(entry); }));
+    if (castAvailable()) tools.append(toolButton("投屏", () => { closePanels(); toggleCast(entry); }));
+    // 稍后再看：与边栏原来那个按钮同一份逻辑（一个开关）
+    const laterLabel = () => (entry.item && entry.item.watch_later ? "取消稍后再看" : "稍后再看");
+    const laterBtn = toolButton(laterLabel(), () => { toggleWatchLater(entry); laterBtn.textContent = laterLabel(); });
+    laterBtn.dataset.role = "sheet-later";
+    tools.append(laterBtn);
+    entry.panel = el("div", { class: "set-panel sheet hidden", dataset: { role: "settings-sheet" } },
+      el("div", { class: "sheet-handle" }),
+      tools,
+      entry.settingsForm.node);
     entry.panel.addEventListener("click", (event) => event.stopPropagation());
     return entry.panel;
+  }
+
+  function openPanel(entry) {
+    if (entry.destroyed || !entry.layer) return;
+    if (!entry.panel) entry.layer.append(ensureScrim(), buildPanel(entry));
+    closePanels();
+    paintPanel(entry);
+    ensureScrim().classList.remove("hidden");
+    entry.panel.classList.remove("hidden");
+    const laterBtn = entry.panel.querySelector('[data-role="sheet-later"]');
+    if (laterBtn) laterBtn.textContent = (entry.item && entry.item.watch_later) ? "取消稍后再看" : "稍后再看";
+    paintBelow(entry);
   }
 
   // 剧场「选集」面板：样式与剧场列表里的选集一致（.ep-list/.ep-item），点一集就跳过去。
@@ -818,20 +849,33 @@ export function mountFeed(view, options = {}) {
       if (entry.panel) entry.panel.classList.add("hidden");
       if (entry.epsPanel) entry.epsPanel.classList.add("hidden");
     }
+    if (sheetScrim) sheetScrim.classList.add("hidden");
     if (picker) picker.classList.add("hidden");
   }
 
-  function gearButton(entry) {
-    entry.gear = el("button", { class: "icon-btn", type: "button", title: "播放设置" }, icon("gear"));
-    entry.gear.addEventListener("click", (event) => {
+  // 有面板开着吗？（返回手势/App 返回键先关它，再管全屏）
+  function anyPanelOpen() {
+    for (const entry of state.built.values()) {
+      if (entry.panel && !entry.panel.classList.contains("hidden")) return true;
+      if (entry.epsPanel && !entry.epsPanel.classList.contains("hidden")) return true;
+    }
+    return !!(picker && !picker.classList.contains("hidden"));
+  }
+
+  // App 里的判定：原生桥在（window.ZvAndroid）或 URL 带 zv=app（WebActivity 会加）。
+  // App 不显示设置按钮 —— 抖音就是长按弹面板，用户 2026-09-24 明确要一致。
+  function inAppWebView() {
+    return !!window.ZvAndroid || /[?&]zv=app(&|#|$)/.test(location.search + location.hash);
+  }
+
+  function settingsButton(entry) {
+    const btn = el("button", { class: "below-btn", type: "button", text: "设置",
+      dataset: { role: "below-settings" } });
+    btn.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!entry.panel) entry.layer.append(buildPanel(entry));
-      const open = entry.panel.classList.contains("hidden");
-      closePanels();
-      paintPanel(entry);
-      if (open) entry.panel.classList.remove("hidden");
+      openPanel(entry);
     });
-    return entry.gear;
+    return btn;
   }
 
   function applySettings() {
@@ -1024,31 +1068,18 @@ export function mountFeed(view, options = {}) {
 
   /* ---------- B4 画中画 / 投屏 ---------- */
 
-  function pipButton(entry) {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "画中画",
-      dataset: { role: "rail-pip" } }, icon("pip"));
-    const paint = () => {
-      const on = pipOn();
-      btn.classList.toggle("on", on);
-      btn.title = on ? "退出画中画" : "画中画";
-    };
-    btn.__zvPaint = paint;
-    entry.pipBtn = btn;
-    pipPaints.add(paint);
-    btn.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      try {
-        if (nativePip) return; // 已经在原生小窗里（这时按钮也点不到）
-        if (document.pictureInPictureElement) await document.exitPictureInPicture();
-        else if (nativePipAvailable()) { window.ZvAndroid.enterPip(); return; }
-        else await entry.video.requestPictureInPicture();
-      } catch (err) {
-        showToast(pipFailText(err));
-      }
-      paintPip();
-    });
-    paint();
-    return btn;
+  /** 小窗播放开关（面板里的按钮调它；原来的边栏按钮已移除）。 */
+  async function togglePip(entry) {
+    try {
+      if (nativePip) return; // 已经在原生小窗里
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (nativePipAvailable()) { window.ZvAndroid.enterPip(); return; }
+      else if (entry.video) await entry.video.requestPictureInPicture();
+      else showToast("这条放不了，开不了小窗");
+    } catch (err) {
+      showToast(pipFailText(err));
+    }
+    paintPip();
   }
 
   function pipFailText(err) {
@@ -1058,49 +1089,54 @@ export function mountFeed(view, options = {}) {
     return "开不了画中画：" + (err && err.message ? err.message : "未知原因");
   }
 
-  function castButton(entry) {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "投屏",
-      dataset: { role: "rail-cast" } }, icon("cast"));
-    const paint = () => {
-      const remote = entry.video && entry.video.remote;
-      const on = !!remote && (remote.state === "connected" || remote.state === "connecting");
-      btn.classList.toggle("on", on);
-      btn.title = on ? "停止投屏" : "投屏";
-    };
-    btn.__zvPaint = paint;
-    entry.castBtn = btn;
-    btn.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const remote = entry.video && entry.video.remote;
-      if (!remote || typeof remote.prompt !== "function") { showToast("这个浏览器不支持投屏"); return; }
-      try {
-        await remote.prompt();
-      } catch (err) {
-        // 绝大多数是"附近没有可投屏的设备"——如实说，别装作投上了
-        showToast("没找到可投屏的设备（电视/盒子要和手机在同一 Wi-Fi）");
-      }
-      paint();
-    });
-    paint();
-    return btn;
+  /** 投屏（标准 Remote Playback；面板里的按钮调它）。 */
+  async function toggleCast(entry) {
+    const remote = entry.video && entry.video.remote;
+    if (!remote || typeof remote.prompt !== "function") { showToast("这个浏览器不支持投屏"); return; }
+    try {
+      await remote.prompt();
+    } catch (err) {
+      // 绝大多数是"附近没有可投屏的设备"——如实说，别装作投上了
+      showToast("没找到可投屏的设备（电视/盒子要和手机在同一 Wi-Fi）");
+    }
   }
 
-  function fullscreenButton() {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "旋转全屏",
-      dataset: { role: "rail-fullscreen" } }, icon("expand"));
-    const paint = () => {
-      const on = immersiveOn();
-      setIcon(btn, on ? "collapse" : "expand");
-      btn.title = on ? "退出横屏" : "旋转全屏";
-    };
-    btn.addEventListener("click", async (event) => {
+  // 视频画面下方那排：紧贴画面下沿 8px 居中（用户 2026-09-24）。
+  // 全屏播放按钮：横向文字、白色、默认 50% 不透明，hover/按下 100%。
+  function belowVideoRow(entry) {
+    const fs = el("button", { class: "below-btn", type: "button", text: "全屏播放",
+      dataset: { role: "below-fullscreen" } });
+    fs.addEventListener("click", async (event) => {
       event.stopPropagation();
       if (immersiveOn()) await exitFullscreen();
       else await enterFullscreen();
-      paint();
+      paintBelow(entry);
     });
-    paint();
-    return btn;
+    const row = el("div", { class: "below-row", dataset: { role: "below-row" } }, fs,
+      inAppWebView() ? null : settingsButton(entry));
+    entry.belowRow = row;
+    // 位置：算上"视频画面在容器里上下留的黑边"，贴画面下沿 +8px
+    requestAnimationFrame(() => paintBelow(entry));
+    return row;
+  }
+
+  function paintBelow(entry) {
+    const row = entry.belowRow;
+    if (!row || entry.destroyed) return;
+    if (immersiveOn() || feed.classList.contains("clean")) {
+      row.classList.add("hidden");
+      return;
+    }
+    row.classList.remove("hidden");
+    const v = entry.video;
+    const stageH = row.parentNode ? row.parentNode.clientHeight : 0;
+    let top = stageH - 64; // 还没拿到画面尺寸时的兜底：贴着底部一点
+    if (v && v.videoWidth > 0 && stageH > 0) {
+      const drawn = Math.min(stageH, v.clientWidth * (v.videoHeight / v.videoWidth));
+      top = (stageH - drawn) / 2 + drawn + 8; // 画面下沿 + 8px
+      top = Math.min(top, stageH - 40);
+    }
+    row.style.top = Math.round(top) + "px";
   }
 
   /* ---------- 反应 / 收藏 ---------- */
@@ -1555,11 +1591,17 @@ export function mountFeed(view, options = {}) {
   };
   window.zvPipMode = onPipMode;
 
+  // App 的返回手势/返回键先问这里：
+  //   ① 有面板开着 ⇒ 只关面板（播放内容一点不动）；
+  //   ② 在全屏 ⇒ 退全屏；
+  //   ③ 都没有 ⇒ 返回 false，交给路由（返回上一页）。
   window.__zvExitFullscreen = () => {
+    if (anyPanelOpen()) { closePanels(); return true; }
     if (!immersiveOn()) return false;
     exitFullscreen();
     return true;
   };
+  window.__zvBackHandler = window.__zvExitFullscreen;
 
   // 系统/浏览器自己退出了全屏（比如切走、按了系统的退出全屏）：同步收掉沉浸态，
   // 别让界面卡在"以为还在全屏"（顶栏底栏一直藏着）。
@@ -1569,9 +1611,17 @@ export function mountFeed(view, options = {}) {
   };
   document.addEventListener("fullscreenchange", onFullscreenChange);
 
+  // 转屏/改窗口大小：画面尺寸变了，视频下方那排要跟着重算
+  const onResize = () => {
+    for (const entry of state.built.values()) paintBelow(entry);
+  };
+  window.addEventListener("resize", onResize);
+
   return function cleanup() {
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     try { delete window.__zvExitFullscreen; } catch (err) { window.__zvExitFullscreen = null; }
+    try { delete window.__zvBackHandler; } catch (err) { window.__zvBackHandler = null; }
+    window.removeEventListener("resize", onResize);
     document.body.classList.remove("pip");
     if (window.zvPipMode === onPipMode) {
       try { delete window.zvPipMode; } catch (err) { window.zvPipMode = null; }
