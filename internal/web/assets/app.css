@@ -2,7 +2,7 @@
 :root {
   --bg: #0b0d10;
   --fg: #e9edf2;
-  --muted: #94a1b0;
+  --muted: #dedede;
   --line: #232a33;
   --panel: #141920;
   --panel2: #1c232c;
@@ -41,10 +41,10 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .top-btn {
   font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  border: 0; border-radius: 999px; background: transparent; color: var(--fg);
+  border: 0; border-radius: 999px; background: transparent; color: #fff;
 }
 .top-btn svg { width: 24px; height: 24px; }
-.top-btn:hover { background: var(--panel2); }
+.top-btn:hover { background: var(--panel2); color: #000;}
 /* 搜索页的输入条 */
 .search-bar { display: flex; gap: 8px; align-items: center; }
 .search-bar .input { flex: 1 1 auto; }
@@ -129,7 +129,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 /* 抖音式右侧竖排操作栏：右下角、竖向排列（用户 2026-09-22 要求） */
 .ov-rail {
   /* 用户 2026-09-24：图标栏**再靠右**（2px）、纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
-  position: absolute; z-index: 7; right: 2px;
+  position: absolute; z-index: 7; right: 0;
   bottom: calc(84px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; align-items: center; gap: 0;
   pointer-events: none;
@@ -163,7 +163,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
      浏览器/刘海屏这里再用 env() 兜一道（0 时无副作用）。 */
   position: absolute; z-index: 7; top: calc(10px + env(safe-area-inset-top, 0px));
   display: flex; gap: 8px; padding: 0 12px; align-items: center;
-  pointer-events: none; max-width: 100%;
+  pointer-events: none; max-width: 100%;opacity: 0.7;
 }
 .ov-corner.left { left: 0; }
 .ov-corner > * { pointer-events: auto; }
@@ -342,8 +342,8 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 /* 用户 2026-09-24：底栏**只留文字**（去掉图标）、高度降下来，别占播放画面 */
 .nav-item {
   flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
-  padding: 8px 4px calc(8px + env(safe-area-inset-bottom)); text-decoration: none;
-  color: var(--muted); font-size: 13px;
+  padding: 10px 4px calc(10px + env(safe-area-inset-bottom)); text-decoration: none;
+  color: var(--muted); font-size: 14px;
 }
 .nav-item.on { color: var(--accent); font-weight: 600; }
 
