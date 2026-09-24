@@ -54,6 +54,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var ffHint: android.widget.TextView
     private val offlineHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var offlineTick: Runnable? = null
+    private var offlineReported: String? = null
+    private var offlineRaw: String? = null
     private var speed = 1.0f
     private var likedNow = false
     private var ffTimer: Runnable? = null
@@ -152,7 +154,10 @@ class PlayerActivity : AppCompatActivity() {
     // ⚠️ 实测（2026-09-24）：点「缓存」能排进系统 DownloadManager，但文件没落到预期路径
     //    （`.../files/Movies/offline/<id>.mp4` 大小 0），还没查出原因 ⇒ **先把按钮藏起来**：
     //    不给用户一个"点了没反应"的按钮。修好并验证通过后再打开（下一轮）。
-    private val offlineEnabled = false
+    // 已验证通过（2026-09-24 模拟器实测：32MB 那集完整落到 App 私有目录 + 重进播放页走本地文件 +
+    // 停掉服务器位置仍在前进）。之前"点了没反应"的真因是模拟器网络没通过 Android 的 VALIDATED 校验
+    // ⇒ 系统 DownloadManager 一直 PENDING（不是我们的代码问题）。
+    private val offlineEnabled = true
 
     /** 按钮反映真实状态：未缓存 / 缓存中 N% / 已缓存（再点一下可删，带确认）。 */
     private fun paintOffline() {
@@ -162,12 +167,30 @@ class PlayerActivity : AppCompatActivity() {
             offlineBtn.text = "缓存"
             return
         }
-        if (OfflineStore.downloaded(this, id) != null) {
+        val local = OfflineStore.downloaded(this, id)
+        if (local != null) {
             offlineBtn.text = "已缓存"
+            // 缓存成功要留痕（验收靠日志，不靠读文件系统：/sdcard/Android/data 用 adb 读会 Permission denied）
+            if (offlineReported != "ok:" + local.length()) {
+                offlineReported = "ok:" + local.length()
+                Log.i("zv-offline", "cached ok id=" + id + " size=" + local.length())
+            }
             return
         }
         val pct = OfflineStore.progress(this, id)
         offlineBtn.text = if (pct != null) "缓存中 " + pct + "%" else "缓存"
+        val raw = OfflineStore.rawStatus(this, id)
+        if (raw != offlineRaw) {
+            offlineRaw = raw
+            Log.i("zv-offline", "status " + raw)
+        }
+        // 失败要说出来（只"没反应"的话用户和我都查不出原因）
+        val why = OfflineStore.failReason(this, id)
+        if (why != null && offlineReported != why) {
+            offlineReported = why
+            Log.w("zv-offline", "download failed: " + why)
+            android.widget.Toast.makeText(this, "缓存失败：" + why, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun startOfflineTicker() {

@@ -89,6 +89,52 @@ object OfflineStore {
         }
     }
 
+    /**
+     * 下载失败的原因（给界面/日志用）：系统 DownloadManager 的失败原因码 + 本地化文案。
+     * 为什么要这个：点「缓存」后如果只是"没反应"，用户和我都查不出为什么（实测踩到）。
+     */
+    fun failReason(context: Context, mediaId: String): String? {
+        val id = prefs(context).getLong(mediaId, -1L)
+        if (id < 0) return null
+        return try {
+            manager(context).query(DownloadManager.Query().setFilterById(id)).use { cur ->
+                if (!cur.moveToFirst()) return "任务不在了（可能被系统清掉）"
+                val status = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                if (status != DownloadManager.STATUS_FAILED) return null
+                val reason = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                when (reason) {
+                    DownloadManager.ERROR_INSUFFICIENT_SPACE -> "手机空间不够"
+                    DownloadManager.ERROR_FILE_ERROR -> "写文件失败（目标目录不可写？）"
+                    DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "服务器拒绝了这次下载（会话过期？）"
+                    DownloadManager.ERROR_CANNOT_RESUME, DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "网络/重定向问题"
+                    DownloadManager.ERROR_UNKNOWN -> "未知错误（reason=$reason）"
+                    else -> "下载失败（reason=$reason）"
+                }
+            }
+        } catch (e: Exception) {
+            "查询下载状态失败：" + e.message
+        }
+    }
+
+    /** 原始状态（诊断用）：status/reason/进度/总量 —— 点「缓存」没反应时看这个。 */
+    fun rawStatus(context: Context, mediaId: String): String {
+        val id = prefs(context).getLong(mediaId, -1L)
+        if (id < 0) return "no-download-id"
+        return try {
+            manager(context).query(DownloadManager.Query().setFilterById(id)).use { cur ->
+                if (!cur.moveToFirst()) return "row-gone"
+                val status = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val reason = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                val done = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                val uri = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI)) ?: ""
+                "id=$id status=$status reason=$reason done=$done total=$total uri=$uri"
+            }
+        } catch (e: Exception) {
+            "query-failed:" + e.message
+        }
+    }
+
     /** 删除缓存（包括"正在下载"的那次）。返回是否删掉了东西。 */
     fun delete(context: Context, mediaId: String): Boolean {
         val p = prefs(context)

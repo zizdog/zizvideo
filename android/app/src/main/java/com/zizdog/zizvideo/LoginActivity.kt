@@ -52,13 +52,6 @@ class LoginActivity : AppCompatActivity() {
         username.setText(prefs.username)
         tlsBox.isChecked = prefs.useTLS
         rememberBox.isChecked = prefs.remember
-        // 先试"静默进入"：有会话 cookie 就先探活，能过就直接进观看页
-        // —— 这期间只显示启动遮罩（黑底 + 图标），**不露任何登录信息**（用户 2026-09-24 要求无感）。
-        val silent = silentEntryIfPossible()
-        // 勾过"记住口令"就直接自动登录（用户 2026-09-23：不要每次都输）；静默验证中别重复点
-        if (!silent && prefs.remember && prefs.password.isNotBlank()) {
-            login.performClick()
-        }
         login.setOnClickListener { submit() }
 
         // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
@@ -84,7 +77,14 @@ class LoginActivity : AppCompatActivity() {
         if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")
         // zizvideo://upload：快捷方式直接进上传页并弹系统选择器（后台传、息屏不断）
         if (data.startsWith("zizvideo://upload")) pickUploads = true
-        // 上次登录留下的会话 cookie 还有效就直接进 —— 不然每次冷启动都要重输口令（用户预期是免登录）
+        // ⚠️ 顺序很重要：必须等 `login` 的点击监听器和 intent（listenKind/pickUploads）都就绪，
+        //    再来决定"怎么进" —— 否则 performClick() 没监听器（等于没点）、或 enterWeb 时 listenKind 还是空的
+        //    （实测：把这两句放在上面，就变成"记住了口令也不会自动登录"）。
+        val silent = silentEntryIfPossible()
+        if (!silent && prefs.remember && prefs.password.isNotBlank()) {
+            login.performClick()
+        }
+        // 静默通道已经处理过了；这里只保证遮罩不会卡在屏幕上
         autoEnterIfLoggedIn()
     }
 
@@ -109,7 +109,17 @@ class LoginActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (me != null && me.ok) enterWeb(base, "")
-                else splash.visibility = View.GONE
+                else {
+                    // 会话过期：记过口令就**直接自动登录**（用户要"打开就进"，不是再点一次登录）；
+                    // 没记口令才露表单。
+                    splash.visibility = View.GONE
+                    if (prefs.remember && prefs.password.isNotBlank()) {
+                        android.util.Log.i("zv-login", "session expired → auto login with saved password")
+                        login.performClick()
+                    } else {
+                        android.util.Log.i("zv-login", "form shown（会话过期且没记口令）")
+                    }
+                }
             }
         }.start()
         return true
@@ -197,7 +207,10 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
-    private fun fail(message: String) = setBusy(false, message)
+    private fun fail(message: String) {
+        android.util.Log.w("zv-login", "login failed: " + message)
+        setBusy(false, message)
+    }
 
     private fun enterWeb(base: String, note: String) {
         setBusy(false, note)
