@@ -79,6 +79,9 @@
 | 可破坏性操作 | 否（绝不重启） | 禁止（镜像目录写入除外） |
 
 - 构建必须 `export GOPROXY=https://goproxy.cn,direct`（本机 proxy.golang.org 不可达）。
+- **改前端样式别靠发版试**：前端是 `go:embed` 的，正常路径改了必须重建。调试用
+  `ZV_ASSETS_DIR=<repo>/internal/web/assets` 起一个**别的端口**的实例（`make build && ZV_ASSETS_DIR=... ./dist/zizvideo --config /tmp/dev.json`），
+  它会从磁盘读前端且 `no-store`，改 `app.css` 刷新即生效；不设这个变量就是内嵌（生产行为不变）。
 - 本机 zizvideo 默认**由面板托管**（`cn.zizpanel.zizvideo`，launchd 启动的是面板二进制）。
   独立部署模式会与它**互斥**（同一端口 7766，只能有一个在跑）。
 - 面板的「注册开关 / 剧场管理 / 市场更新」等入口都在面板后台；zizvideo 的**观看面不放管理操作**。

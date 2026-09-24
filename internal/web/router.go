@@ -5,6 +5,8 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/zizdog/zizvideo/internal/api"
@@ -159,25 +161,45 @@ func Router(s *api.Server) http.Handler {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"data":null,"meta":{},"error":{"code":"VALIDATION_NOT_FOUND","message":"接口不存在"}}`))
 	})
-	mux.Handle("/", staticHandler())
+	mux.Handle("/", staticHandler(s))
 
 	return s.Middleware(mux)
 }
 
-// staticHandler serves the embedded frontend. index.html is never cached so a
-// rebuilt binary is picked up on refresh.
+// staticHandler serves the frontend. 两条来源：
+//   · 默认：内嵌资源（go:embed）—— 生产行为；
+//   · ZV_ASSETS_DIR 设了且目录里有 index.html：**从磁盘读**（调试用，改 CSS 刷新即生效），
+//     并且不缓存、不打版本 ETag，免得"改了看不到"。
 //
 // 用户 2026-09-24 报障"顶栏还有背景 / 图标位置没改"——代码里其实早就改了，是**前端被缓存**：
 // 内嵌资源没有 Last-Modified，浏览器/WebView 只能按启发式缓存，升级后仍吃旧 CSS。
 // 现在所有资源都带"版本 ETag + no-cache"：同版本内浏览器 304 复用，换版本立刻拿到新字节，
 // 不再依赖用户手动清缓存（这正是"改了却像没改"的根因）。
-func staticHandler() http.Handler {
+func staticHandler(s *api.Server) http.Handler {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		panic(err)
 	}
-	fileServer := http.FileServerFS(sub)
+	fsys := http.FS(sub)
+	devMode := false
+	if dir := strings.TrimSpace(s.Cfg.AssetsDir); dir != "" {
+		// 目录不可用就退回内嵌（绝不因为一个调试开关把界面弄成 404）。
+		if st, serr := os.Stat(filepath.Join(dir, "index.html")); serr == nil && !st.IsDir() {
+			fsys = http.FS(os.DirFS(dir))
+			devMode = true
+			s.Log.Warn("前端从磁盘读取（调试模式：改 CSS 刷新即生效，别在生产开）", "dir", dir)
+		} else {
+			s.Log.Error("ZV_ASSETS_DIR 不可用，已退回内嵌前端", "dir", dir, "error", serr)
+		}
+	}
+	fileServer := http.FileServer(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if devMode {
+			// 调试模式：不缓存、不发版本 ETag（本地文件会立刻变，缓存只会添乱）
+			w.Header().Set("Cache-Control", "no-store")
+			fileServer.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-cache")
 		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
 			w.Header().Set("Cache-Control", "no-cache, no-store")

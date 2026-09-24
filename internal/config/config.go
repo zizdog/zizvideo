@@ -29,6 +29,9 @@ type Config struct {
 	FFmpegBin          string   `json:"ffmpeg_bin"`
 	FFprobeBin         string   `json:"ffprobe_bin"`
 	LogLevel           string   `json:"log_level"`
+	// AssetsDir 只在调试时用（ZV_ASSETS_DIR）：设了就从磁盘读前端，改 CSS 刷新即可，
+	// 不用重新 go build（前端是 go:embed 的，正常路径必须重建才生效）。空 = 走内嵌。
+	AssetsDir string `json:"assets_dir"`
 	TrustedProxies     []string `json:"trusted_proxies"`
 	SessionTTLHours    int      `json:"session_ttl_hours"`
 	LockoutThreshold   int      `json:"lockout_threshold"`
@@ -114,6 +117,7 @@ func applyEnv(c *Config) {
 	setStr(&c.FFmpegBin, "ZV_FFMPEG_BIN")
 	setStr(&c.FFprobeBin, "ZV_FFPROBE_BIN")
 	setStr(&c.LogLevel, "ZV_LOG_LEVEL")
+	setStr(&c.AssetsDir, "ZV_ASSETS_DIR")
 	setInt(&c.ScanWorkers, "ZV_SCAN_WORKERS")
 	setInt(&c.ProbeTimeoutSec, "ZV_PROBE_TIMEOUT_SECONDS")
 	setInt(&c.LockoutThreshold, "ZV_LOCKOUT_THRESHOLD")
