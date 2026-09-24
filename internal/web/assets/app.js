@@ -11,6 +11,7 @@ import { mountFavorites } from "./js/favorites.js";
 import { mountRecordPlay } from "./js/cards.js";
 import { mountMe } from "./js/me.js";
 import { mountSettings } from "./js/settings.js";
+import { mountUpload, mountMyUploads } from "./js/upload.js";
 import { mountSearch } from "./js/search.js";
 import { renderTopBar } from "./js/topbar.js";
 
@@ -150,6 +151,15 @@ function route() {
   }
   if (path === "/me") {
     show((view) => withNav(view, "me", () => mountMe(view, { onLogout })));
+    return;
+  }
+  // 用户上传（UGC）：上传页与「我的上传」；有没有权限由后端 403 说了算（这里不猜）。
+  if (path === "/upload") {
+    show((view) => withNav(view, "me", () => mountUpload(view)));
+    return;
+  }
+  if (path === "/me/uploads") {
+    show((view) => withNav(view, "me", () => mountMyUploads(view)));
     return;
   }
   if (path !== "/feed") { replace("#/feed"); return; }

@@ -41,6 +41,11 @@ export function mountMe(view, options) {
   const settings = el("div", { class: "panel", dataset: { role: "me-settings" } },
     el("div", { class: "panel-title", text: "设置" }));
   if (user.role === "admin") settings.append(cell("#/admin", "管理后台", "", "me-admin"));
+  // 用户上传（UGC）：只有开了白名单的账号才显示入口（管理员天然有）
+  if (user.role === "admin" || user.can_upload) {
+    settings.append(cell("#/upload", "上传视频", "进了待审区，管理员通过后入库", "me-upload"));
+    settings.append(cell("#/me/uploads", "我的上传", "状态 / 驳回原因", "me-uploads"));
+  }
 
   // 版本号就几个字，直接写在这一页（不再单独一个「关于」页）
   const version = el("div", { class: "muted small-note", dataset: { role: "app-version" }, text: "zizvideo" });

@@ -1,19 +1,32 @@
-// 二次确认弹窗：危险操作（清除记录/删除剧场）必须先确认再执行
+// 二次确认弹窗：危险操作（清除记录/删除剧场/驳回上传）必须先确认再执行。
+//
+// 返回值约定：不带 opts.input 时 resolve(true/false)；带 input 时 resolve(输入的字符串) 或 null（取消）。
+// 老调用方都不传 input，行为完全不变。
 
 import { el } from "./dom.js";
 
 export function confirmDialog(options) {
   const opts = options || {};
+  const inputOpt = opts.input || null;
   return new Promise((resolve) => {
     const overlay = el("div", { class: "modal-overlay", dataset: { role: "confirm-modal" } });
+    const field = inputOpt
+      ? el("input", { class: "input", type: "text", placeholder: inputOpt.placeholder || "",
+          value: inputOpt.value || "", dataset: { role: "confirm-input" } })
+      : null;
     let done = false;
 
     function close(ok) {
       if (done) return;
+      if (ok && field && inputOpt.required && !field.value.trim()) {
+        field.classList.add("invalid");
+        field.focus();
+        return;
+      }
       done = true;
       document.removeEventListener("keydown", onKey);
       overlay.remove();
-      resolve(!!ok);
+      resolve(field ? (ok ? field.value.trim() : null) : !!ok);
     }
 
     function onKey(event) {
@@ -31,11 +44,12 @@ export function confirmDialog(options) {
     overlay.append(el("div", { class: "modal", role: "dialog", "aria-modal": "true" },
       el("div", { class: "modal-title", text: opts.title || "确认操作" }),
       el("div", { class: "modal-text", text: opts.message || "" }),
+      field,
       el("div", { class: "actions modal-actions" }, cancel, ok)));
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(false); });
     document.addEventListener("keydown", onKey);
     document.body.append(overlay);
-    ok.focus();
+    if (field) field.focus(); else ok.focus();
   });
 }
 

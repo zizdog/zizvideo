@@ -166,6 +166,17 @@ export const api = {
   patchReaction: (id, kind) => request("PATCH", "/api/v1/media/" + encodeURIComponent(id) + "/reactions", { kind }),
   removeReaction: (id) => request("DELETE", "/api/v1/media/" + encodeURIComponent(id) + "/reactions"),
 
+  // 用户上传（UGC）：开会话 / 断点回读 / 定稿 / 取消 / 我的上传；PUT 用 XHR（见 upload.js）。
+  // 名字带 ugc 前缀，别和上面管理端那套 uploadStart/uploadFinish 撞车（撞了会互相覆盖）。
+  ugcStart: (name, size) => request("POST", "/api/v1/uploads", { name, size }),
+  ugcGet: (id) => request("GET", "/api/v1/uploads/" + encodeURIComponent(id)),
+  ugcFinish: (id) => request("POST", "/api/v1/uploads/" + encodeURIComponent(id) + "/finish"),
+  ugcCancel: (id) => request("DELETE", "/api/v1/uploads/" + encodeURIComponent(id)),
+  myUploads: () => request("GET", "/api/v1/me/uploads"),
+  pendingUploads: () => request("GET", "/api/v1/admin/uploads/pending"),
+  approveUpload: (id, body) => request("POST", "/api/v1/admin/uploads/" + encodeURIComponent(id) + "/approve", body),
+  rejectUpload: (id, note) => request("POST", "/api/v1/admin/uploads/" + encodeURIComponent(id) + "/reject", { note }),
+
   systemInfo: () => request("GET", "/api/v1/admin/system/info"),
 
   // 自动扫描：读写设置 + 立即触发一轮（202 + task_ids，扫描仍走任务中心）。

@@ -5,6 +5,7 @@ import { el, clear, banner, setBanner, field, input, fmtDuration, fmtBytes, fmtD
 import { openDirectoryPicker } from "./roots.js";
 import { uploadToLibrary } from "./uploads.js";
 import { mountSeriesTab } from "./admin-series.js";
+import { mountUploadsTab } from "./uploads-tab.js";
 import { videoCard, stopInlinePlayers } from "./cards.js";
 
 function button(label, onclick, extraClass) {
@@ -1287,6 +1288,7 @@ export function mountAdmin(view, initialTab) {
     { key: "media", label: "媒体", mount: mountMedia },
     { key: "series", label: "剧场", mount: mountSeriesTab },
     { key: "roots", label: "媒体允许根", mount: mountRoots },
+    { key: "uploads", label: "待审", mount: mountUploadsTab },
     { key: "users", label: "用户", mount: mountUsers },
     { key: "settings", label: "注册开关", mount: mountSettings },
     { key: "autoscan", label: "自动扫描", mount: mountAutoScan },
