@@ -854,7 +854,7 @@ function openUserLibrariesDrawer(user, onSaved) {
 
 function mountUsers(root) {
   const note = banner();
-  const { table, body } = gridOf(["用户名", "显示名", "角色", "状态", "最后登录", "操作"]);
+  const { table, body } = gridOf(["用户名", "显示名", "角色", "状态", "上传", "最后登录", "操作"]);
   const username = input({ placeholder: "用户名", required: true });
   const password = input({ type: "password", placeholder: "口令（至少 6 位）", required: true });
   const display = input({ placeholder: "显示名" });
@@ -873,7 +873,7 @@ function mountUsers(root) {
       const result = await api.users();
       const list = result && Array.isArray(result.list) ? result.list : [];
       clear(body);
-      if (!list.length) body.append(emptyRow(6, "暂无用户"));
+      if (!list.length) body.append(emptyRow(7, "暂无用户"));
       for (const user of list) body.append(userRow(user));
       await loadNoLibraryHint();
     } catch (err) {
@@ -913,7 +913,13 @@ function mountUsers(root) {
       button(user.status === "active" ? "禁用" : "启用", () => patch({ status: user.status === "active" ? "disabled" : "active" })),
       button("重置口令", () => resetBox.classList.remove("hidden")));
     const holder = el("td", null, actions, resetBox);
-    return rowOf([user.username, user.display_name, user.role, user.status, fmtDate(user.last_login_at), holder]);
+    // 上传白名单（用户 2026-09-24）：管理员天然能传，这里只管普通用户。
+    const uploadCell = user.role === "admin"
+      ? el("span", { class: "muted", text: "管理员" })
+      : button(user.can_upload ? "禁止上传" : "允许上传",
+        () => patch({ can_upload: !user.can_upload }));
+    return rowOf([user.username, user.display_name, user.role, user.status, uploadCell,
+      fmtDate(user.last_login_at), holder]);
   }
 
   form.addEventListener("submit", async (event) => {

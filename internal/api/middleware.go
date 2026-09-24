@@ -87,6 +87,21 @@ func (s *Server) RequireAdmin(h http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+// RequireUploader 是用户上传（UGC）的权限闸门：管理员天然可以，普通用户要白名单
+// （users.can_upload）且账号是 active。角色/状态每次请求都从库里重读，改权限立刻生效。
+func (s *Server) RequireUploader(h http.HandlerFunc) http.HandlerFunc {
+	return s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := UserFrom(r.Context())
+		if u == nil || (u.Role != domain.RoleAdmin &&
+			(!u.CanUpload || u.Status != domain.StatusActive)) {
+			s.fail(w, r, domain.New("UPLOAD_NOT_ALLOWED",
+				"这个账号没有上传权限，请联系管理员开通", 403))
+			return
+		}
+		h(w, r)
+	})
+}
+
 func isWriteMethod(m string) bool {
 	switch m {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:

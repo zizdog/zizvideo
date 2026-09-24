@@ -45,7 +45,38 @@ type User struct {
 	PasswordHash string `json:"-"`
 	LastLoginAt  string `json:"last_login_at"`
 	CreatedAt    string `json:"created_at"`
+	// CanUpload 是用户上传（UGC）白名单：管理员天然有权限，普通用户要显式开。
+	CanUpload bool `json:"can_upload"`
 }
+
+// UploadItem 是一条用户上传（UGC）。文件先落 inbox，审核通过才移进媒体库，
+// 所以 pending/rejected 的条目没有 media 行，普通列表也看不到。
+type UploadItem struct {
+	ID          string `json:"id"`
+	UploaderID  string `json:"uploader_id"`
+	Uploader    string `json:"uploader,omitempty"` // 只有后台待审列表会填用户名
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	Path        string `json:"-"` // 绝对路径不外发
+	Size        int64  `json:"size"`
+	Received    int64  `json:"received_bytes"`
+	ContentHash string `json:"content_hash,omitempty"`
+	State       string `json:"state"`
+	ReviewNote  string `json:"review_note,omitempty"`
+	MediaID     string `json:"media_id,omitempty"`
+	LibraryID   string `json:"library_id,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	ReviewedBy  string `json:"-"`
+	ReviewedAt  string `json:"-"`
+}
+
+// 上传条目状态：uploading → pending → approved / rejected。
+const (
+	UploadUploading = "uploading"
+	UploadPending   = "pending"
+	UploadApproved  = "approved"
+	UploadRejected  = "rejected"
+)
 
 // Library is a registered media root.
 type Library struct {

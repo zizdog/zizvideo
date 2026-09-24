@@ -79,6 +79,8 @@ type patchUserReq struct {
 	Role        *string `json:"role"`
 	Status      *string `json:"status"`
 	Password    *string `json:"password"`
+	// CanUpload 是用户上传白名单开关（管理员本来就有权限，这个开关只对普通用户有意义）。
+	CanUpload *bool `json:"can_upload"`
 }
 
 // HandlePatchUser updates role, status, display name or password.
@@ -125,7 +127,8 @@ func (s *Server) HandlePatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	patch := storage.UserPatch{DisplayName: req.DisplayName, Role: req.Role, Status: req.Status}
+	patch := storage.UserPatch{DisplayName: req.DisplayName, Role: req.Role, Status: req.Status,
+		CanUpload: req.CanUpload}
 	if req.Password != nil {
 		if len(*req.Password) < 6 {
 			s.fail(w, r, domain.New("VALIDATION_PASSWORD", "口令至少 6 位", 400))

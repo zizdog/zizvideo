@@ -352,23 +352,7 @@ func (s *Scanner) processFile(ctx context.Context, lib *domain.Library, e fileEn
 		return false
 	}
 
-	cover := filepath.Join(s.Cfg.CoversDir(), id+".jpg")
-	if err := os.MkdirAll(filepath.Dir(cover), 0o700); err != nil {
-		s.Log.Warn("创建封面目录失败", "error", err.Error())
-	}
-	if err := ffmpeg.ExtractCover(ctx, s.Runner, s.Cfg.FFmpegBin, e.Path, cover,
-		ffmpeg.CoverTime(probe.DurationMS), s.Cfg.CoverQuality, s.Cfg.ProbeTimeout()); err != nil {
-		// Probe data is still valid; /cover falls back to a placeholder.
-		s.Log.Warn("封面抽取失败", "library_id", lib.ID, "media_id", id)
-	}
-
-	m := &domain.Media{
-		ID: id, LibraryID: lib.ID, Path: e.Path, Title: title,
-		Size: e.Size, MtimeNS: e.MtimeNS, Container: probe.Container,
-		Codecs: domain.Codecs{Video: probe.VideoCodec, Audio: probe.AudioCodec},
-		Width:  probe.Width, Height: probe.Height, DurationMS: probe.DurationMS,
-		Bitrate: probe.Bitrate, FPS: probe.FPS, Status: domain.MediaReady,
-	}
+	m := s.readyMedia(ctx, id, lib, e, probe, title)
 	var err error
 	if prev.ID == "" {
 		err = s.DB.InsertMedia(m)
@@ -380,6 +364,51 @@ func (s *Scanner) processFile(ctx context.Context, lib *domain.Library, e fileEn
 		return false
 	}
 	return true
+}
+
+// readyMedia 抽出封面并拼出待入库的 ready 行（探测已经做完，失败路径不在这里）。
+// 上传审核通过也走这一份逻辑，避免出现两套封面/元数据口径。
+func (s *Scanner) readyMedia(ctx context.Context, id string, lib *domain.Library,
+	e fileEntry, probe *ffmpeg.ProbeResult, title string) *domain.Media {
+	cover := filepath.Join(s.Cfg.CoversDir(), id+".jpg")
+	if err := os.MkdirAll(filepath.Dir(cover), 0o700); err != nil {
+		s.Log.Warn("创建封面目录失败", "error", err.Error())
+	}
+	if err := ffmpeg.ExtractCover(ctx, s.Runner, s.Cfg.FFmpegBin, e.Path, cover,
+		ffmpeg.CoverTime(probe.DurationMS), s.Cfg.CoverQuality, s.Cfg.ProbeTimeout()); err != nil {
+		// Probe data is still valid; /cover falls back to a placeholder.
+		s.Log.Warn("封面抽取失败", "library_id", lib.ID, "media_id", id)
+	}
+	return &domain.Media{
+		ID: id, LibraryID: lib.ID, Path: e.Path, Title: title,
+		Size: e.Size, MtimeNS: e.MtimeNS, Container: probe.Container,
+		Codecs: domain.Codecs{Video: probe.VideoCodec, Audio: probe.AudioCodec},
+		Width:  probe.Width, Height: probe.Height, DurationMS: probe.DurationMS,
+		Bitrate: probe.Bitrate, FPS: probe.FPS, Status: domain.MediaReady,
+	}
+}
+
+// ProbePath 探测单个文件、抽封面并登记成 ready 行（用户上传审核通过后立刻可播）。
+// title 为空时按文件名取；探测失败返回错误，调用方负责别把坏文件塞进库。
+func (s *Scanner) ProbePath(ctx context.Context, lib *domain.Library, path string,
+	size int64, title string) (*domain.Media, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	probe, perr := s.probeWithRetry(ctx, path)
+	if perr != nil {
+		return nil, perr
+	}
+	e := fileEntry{Path: path, Size: size, MtimeNS: fi.ModTime().UnixNano()}
+	m := s.readyMedia(ctx, domain.NewID("med"), lib, e, probe, title)
+	if err := s.DB.InsertMedia(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (s *Scanner) probeWithRetry(ctx context.Context, path string) (*ffmpeg.ProbeResult, error) {

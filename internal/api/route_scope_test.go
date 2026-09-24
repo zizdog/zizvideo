@@ -67,15 +67,25 @@ func firstString(expr string) string {
 }
 
 // 登录但不带库范围：只动自己的数据、不返回媒体内容（ITERATION-2 B.4 尾部说明）。
+// UGC（/api/v1/uploads*、/api/v1/me/uploads）落在这一类：RequireUploader 挂在
+// RequireAuth 内层，读写的是上传者自己 inbox 里的条目，与媒体库范围无关。
 var authedUnscopedAllowlist = map[string]bool{
-	"POST /api/v1/auth/logout":      true,
-	"GET /api/v1/auth/me":           true,
-	"GET /api/v1/feed/settings":     true,
-	"PATCH /api/v1/feed/settings":   true,
-	"DELETE /api/v1/me/progress":    true,
-	"DELETE /api/v1/me/favorites":   true,
-	"DELETE /api/v1/me/likes":       true,
-	"DELETE /api/v1/me/watch-later": true,
+	"POST /api/v1/auth/logout":         true,
+	"GET /api/v1/auth/me":              true,
+	"GET /api/v1/feed/settings":        true,
+	"PATCH /api/v1/feed/settings":      true,
+	"DELETE /api/v1/me/progress":       true,
+	"DELETE /api/v1/me/favorites":      true,
+	"DELETE /api/v1/me/likes":          true,
+	"DELETE /api/v1/me/watch-later":    true,
+	"POST /api/v1/uploads":             true,
+	"PUT /api/v1/uploads/{id}":         true,
+	"GET /api/v1/uploads/{id}":         true,
+	"DELETE /api/v1/uploads/{id}":      true,
+	"POST /api/v1/uploads/{id}/finish": true,
+	"GET /api/v1/uploads/{id}/stream":  true,
+	"GET /api/v1/uploads/{id}/cover":   true,
+	"GET /api/v1/me/uploads":           true,
 }
 
 // 匿名可访问：新增公开接口必须显式登记，否则测试红（防止悄悄公开）。
@@ -91,21 +101,32 @@ var publicAllowlist = map[string]bool{
 
 var contentPathRe = regexp.MustCompile(`/(media|series|feed|me)(/|$)`)
 
+// RequireUploader 的实参必须是 s.RequireAuth(...)：白名单闸门不许绕过登录。
+var uploaderWrapsRe = regexp.MustCompile(`(?s)func \(s \*Server\) RequireUploader\(h http\.HandlerFunc\).*?return s\.RequireAuth\(`)
+
 // TestEveryRouteIsClassified：每条路由要么管理端、要么走 WithLibraryScope、
 // 要么在豁免表里；没分类就红（防止以后新增接口忘了过滤）。
 func TestEveryRouteIsClassified(t *testing.T) {
 	routes := routeRegistrations(t)
 	seen := map[string]bool{}
+	uploaderSeen := false
 	for _, r := range routes {
 		seen[r.key] = true
 		scoped := strings.Contains(r.expr, "s.WithLibraryScope(")
 		admin := strings.Contains(r.expr, "s.RequireAdmin(")
 		authed := strings.Contains(r.expr, "s.RequireAuth(")
+		uploader := strings.Contains(r.expr, "s.RequireUploader(")
 		switch {
 		case admin:
 			if scoped {
 				t.Errorf("%s：管理端路由不该包 WithLibraryScope（scope 恒 All）", r.key)
 			}
+		case uploader:
+			// RequireUploader 必须自己包 RequireAuth（见下），这里只要求显式登记。
+			if !authedUnscopedAllowlist[r.key] {
+				t.Errorf("路由 %s 走了 RequireUploader 但没登记为豁免", r.key)
+			}
+			uploaderSeen = true
 		case scoped:
 			if !authed {
 				t.Errorf("%s：WithLibraryScope 必须挂在 RequireAuth 内层", r.key)
@@ -122,6 +143,18 @@ func TestEveryRouteIsClassified(t *testing.T) {
 				t.Errorf("路由 %s 含媒体路径却匿名可访问", r.key)
 			}
 		}
+	}
+	if !uploaderSeen {
+		t.Errorf("没有任何路由走 RequireUploader：UGC 闸门可能被摘掉了")
+	}
+	// RequireUploader 自己必须包 RequireAuth，否则白名单闸门可以匿名命中
+	// （路由文本看不到这层，所以直接扫中间件源码）。
+	mw, err := os.ReadFile("middleware.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uploaderWrapsRe.Match(mw) {
+		t.Errorf("middleware.go 里的 RequireUploader 没有包 RequireAuth")
 	}
 	for key := range authedUnscopedAllowlist {
 		if !seen[key] {

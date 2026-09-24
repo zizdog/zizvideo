@@ -111,6 +111,21 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("PUT /api/v1/admin/uploads/{id}/{index}", s.RequireAdmin(s.HandleUploadPut))
 	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/finish", s.RequireAdmin(s.HandleUploadFinish))
 
+	// 用户上传（UGC，docs/上传设计.md）：白名单闸门 RequireUploader；文件先落 inbox，
+	// 审核通过才移进媒体库。PUT 与 /admin 那条一样单独放开读超时（见 handlers_ugc.go）。
+	mux.HandleFunc("POST /api/v1/uploads", s.RequireUploader(s.HandleUGCStart))
+	mux.HandleFunc("PUT /api/v1/uploads/{id}", s.RequireUploader(s.HandleUGCPut))
+	mux.HandleFunc("GET /api/v1/uploads/{id}", s.RequireUploader(s.HandleUGCGet))
+	mux.HandleFunc("DELETE /api/v1/uploads/{id}", s.RequireUploader(s.HandleUGCCancel))
+	mux.HandleFunc("POST /api/v1/uploads/{id}/finish", s.RequireUploader(s.HandleUGCFinish))
+	mux.HandleFunc("GET /api/v1/uploads/{id}/stream", s.RequireUploader(s.HandleUGCStream))
+	mux.HandleFunc("GET /api/v1/uploads/{id}/cover", s.RequireUploader(s.HandleUGCCover))
+	mux.HandleFunc("GET /api/v1/me/uploads", s.RequireUploader(s.HandleListMyUploads))
+	// 后台「待审」：列表 + 通过（选库）/ 驳回。
+	mux.HandleFunc("GET /api/v1/admin/uploads/pending", s.RequireAdmin(s.HandleAdminPendingUploads))
+	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/approve", s.RequireAdmin(s.HandleAdminApproveUpload))
+	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/reject", s.RequireAdmin(s.HandleAdminRejectUpload))
+
 	mux.HandleFunc("GET /api/v1/admin/system/info", s.RequireAdmin(s.HandleSystemInfo))
 	mux.HandleFunc("GET /api/v1/admin/audit", s.RequireAdmin(s.HandleAuditList))
 

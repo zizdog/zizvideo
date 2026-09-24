@@ -10,15 +10,17 @@ import (
 )
 
 const userCols = `id, username, display_name, password_hash, role, status,
-	COALESCE(last_login_at,''), created_at`
+	COALESCE(last_login_at,''), created_at, can_upload`
 
 func scanUser(s interface{ Scan(...any) error }) (*domain.User, error) {
 	var u domain.User
+	var canUpload int
 	err := s.Scan(&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.Role, &u.Status,
-		&u.LastLoginAt, &u.CreatedAt)
+		&u.LastLoginAt, &u.CreatedAt, &canUpload)
 	if err != nil {
 		return nil, err
 	}
+	u.CanUpload = canUpload != 0
 	return &u, nil
 }
 
@@ -117,6 +119,7 @@ type UserPatch struct {
 	Role         *string
 	Status       *string
 	PasswordHash *string
+	CanUpload    *bool
 }
 
 // UpdateUser applies a partial update and returns the fresh row.
@@ -132,6 +135,9 @@ func (db *DB) UpdateUser(id string, p UserPatch) (*domain.User, error) {
 	}
 	if p.Status != nil {
 		add("status", *p.Status)
+	}
+	if p.CanUpload != nil {
+		add("can_upload", boolToInt(*p.CanUpload))
 	}
 	if p.PasswordHash != nil {
 		add("password_hash", *p.PasswordHash)
