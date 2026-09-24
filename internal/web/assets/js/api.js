@@ -133,6 +133,26 @@ export const api = {
   scanTask: (id) => request("GET", "/api/v1/scan-tasks/" + encodeURIComponent(id)),
   detectAll: (body) => request("POST", "/api/v1/admin/series/detect-all", body),
   jobTask: (id) => request("GET", "/api/v1/admin/tasks/" + encodeURIComponent(id)),
+  // ③ 备份恢复：先预览（multipart 上传）→ 说口令确认
+  restorePreview: async (file) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const init = { method: "POST", credentials: "same-origin", cache: "no-store", body: form };
+    const token = readCookie(CSRF_COOKIE);
+    if (token) init.headers = { "X-CSRF-Token": token };
+    const response = await fetch("/api/v1/admin/backup/restore/preview", init);
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch (err) { payload = null; }
+    const error = payload && payload.error;
+    if (!response.ok || error) {
+      const message = error && error.message ? String(error.message) : ("请求失败（HTTP " + response.status + "）");
+      throw new ApiError(message, (error && error.code) || ("HTTP_" + response.status), response.status);
+    }
+    return payload && Object.prototype.hasOwnProperty.call(payload, "data") ? payload.data : payload;
+  },
+  restoreApply: (token, confirm) => request("POST", "/api/v1/admin/backup/restore", { token, confirm }),
+
   // ② 任务中心：列表 / 取消 / 重试（转码与扫描合并）
   taskList: (limit) => request("GET", "/api/v1/admin/tasks" + (limit ? ("?limit=" + limit) : "")),
   cancelTask: (id) => request("POST", "/api/v1/admin/tasks/" + encodeURIComponent(id) + "/cancel"),

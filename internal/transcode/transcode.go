@@ -334,6 +334,13 @@ func (q *Queue) worker() {
 }
 
 // runJob 串行处理一个任务的每一件：单件失败不影响其余，最后如实汇总。
+// Busy 报告有没有任务正在跑（备份恢复前要先确认没有写入者）。
+func (q *Queue) Busy() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.jobs) > 0
+}
+
 // Cancel 取消一个正在跑的任务：正在转的那条会被中止（原文件保持可用），
 // 剩下的不再开始。返回 false 表示这任务已经不在队列里（跑完了/不存在）。
 func (q *Queue) Cancel(jobID string) bool {

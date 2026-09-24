@@ -1532,6 +1532,68 @@ function mountSystem(root) {
       el("div", { class: "row" },
         el("a", { class: "btn small primary", href: "/api/v1/admin/backup",
           dataset: { role: "system-backup" }, text: "导出备份（.tar.gz）" })));
+
+    // ③ 从备份恢复：两段式（先看里面是什么 → 说口令确认），确认后自动备份当前库再替换
+    const restoreFile = el("input", { type: "file", accept: ".gz,.tar.gz,.db,application/gzip",
+      dataset: { role: "restore-file" } });
+    const restorePreviewBtn = el("button", { class: "btn small", type: "button",
+      dataset: { role: "restore-preview" }, text: "先看里面是什么" });
+    const restoreOut = el("div", { class: "muted small-note", dataset: { role: "restore-preview-out" } });
+    const restoreWord = el("input", { class: "input", placeholder: "在这里输入两个字确认",
+      dataset: { role: "restore-confirm" } });
+    const restoreApplyBtn = el("button", { class: "btn small danger", type: "button",
+      dataset: { role: "restore-apply" }, text: "确认恢复", disabled: true, hidden: true });
+    let restoreToken = "";
+    restorePreviewBtn.addEventListener("click", async () => {
+      const file = (restoreFile.files || [])[0];
+      if (!file) { setBanner(note, "先选一个备份文件（.tar.gz）"); return; }
+      restorePreviewBtn.disabled = true;
+      setBanner(note, "");
+      restoreOut.textContent = "正在读取备份…（大的备份要一会儿）";
+      try {
+        const data = await api.restorePreview(file);
+        restoreToken = (data && data.token) || "";
+        const c = (data && data.counts) || {};
+        clear(restoreOut);
+        restoreOut.append(
+          el("div", { text: "备份内容：账号 " + (c.users || 0) + " · 媒体库 " + (c.libraries || 0) +
+            " · 媒体 " + (c.media || 0) + " · 剧场 " + (c.series || 0) +
+            " · 库结构 v" + (c.schema_version || 0) }),
+          ...((data && data.warnings) || []).map((w) =>
+            el("div", { class: "danger small-note", text: "注意：" + w })),
+          el("div", { text: "确认后我会先把当前数据库备份一份，再整体替换。这一步会覆盖现有数据。" }));
+        restoreWord.placeholder = "输入「" + ((data && data.confirm_word) || "恢复") + "」两个字确认";
+        restoreApplyBtn.hidden = false;
+        restoreApplyBtn.disabled = false;
+      } catch (err) {
+        restoreOut.textContent = "";
+        setBanner(note, err && err.message ? err.message : "读取备份失败");
+      } finally {
+        restorePreviewBtn.disabled = false;
+      }
+    });
+    restoreApplyBtn.addEventListener("click", async () => {
+      if (!restoreToken) { setBanner(note, "先点「先看里面是什么」"); return; }
+      restoreApplyBtn.disabled = true;
+      try {
+        const data = await api.restoreApply(restoreToken, restoreWord.value.trim());
+        setBanner(note, "已恢复。恢复前的库备份在：" + ((data && data.safety_backup) || "") +
+          " —— 建议重启一次服务并重新登录。");
+        restoreApplyBtn.hidden = true;
+        restoreToken = "";
+      } catch (err) {
+        setBanner(note, err && err.message ? err.message : "恢复失败");
+      } finally {
+        restoreApplyBtn.disabled = false;
+      }
+    });
+    disksBox.append(
+      el("div", { class: "panel-title", text: "从备份恢复" }),
+      el("div", { class: "muted small-note",
+        text: "会整体替换数据库（用户/库/剧场/进度/上传记录）。恢复前自动备份当前库；有扫描或转码在跑时会拒绝。" }),
+      el("div", { class: "row" }, restoreFile, restorePreviewBtn),
+      restoreOut,
+      el("div", { class: "row" }, restoreWord, restoreApplyBtn));
   }).catch((err) => {
     clear(disksBox);
     disksBox.append(el("div", { class: "muted small-note",

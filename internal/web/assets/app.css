@@ -340,7 +340,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 @media (max-width: 480px) {
   .admin { padding: 8px; }
   .grid { font-size: 12px; }
-  .ov-title { max-width: 52%; font-size: 14px; }
+  .ov-title {font-size: 14px; }
   /* 手机上原来压到 34px，用户反馈"太小"⇒ 放大到 50/36；再收紧到 46/34 让 8 个图标排得下 */
   .icon-btn { width: 46px; height: 46px; }
   .icon-btn svg { width: 34px; height: 34px; }

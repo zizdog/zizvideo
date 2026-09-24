@@ -53,6 +53,13 @@ func Open(path string) (*DB, error) {
 	return db, nil
 }
 
+// Swap 用一份新打开的连接替换当前的连接（备份恢复用）。
+// 必须保持 **同一个 *DB 指针**：server / scanner / 转码队列都握着它，
+// 换指针会让它们指向已经关闭的旧连接（实测会变成"随机 500"）。
+func (db *DB) Swap(fresh *DB) {
+	db.DB = fresh.DB
+}
+
 // migration is one versioned SQL file.
 type migration struct {
 	version int

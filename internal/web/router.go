@@ -142,6 +142,9 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/system/info", s.RequireAdmin(s.HandleSystemInfo))
 	mux.HandleFunc("GET /api/v1/admin/system/disks", s.RequireAdmin(s.HandleSystemDisks))
 	mux.HandleFunc("GET /api/v1/admin/backup", s.RequireAdmin(s.HandleExportBackup))
+	// ③ 备份恢复：先看一遍（预览）→ 说口令确认 → 自动备份当前库再替换
+	mux.HandleFunc("POST /api/v1/admin/backup/restore/preview", s.RequireAdmin(s.HandleRestorePreview))
+	mux.HandleFunc("POST /api/v1/admin/backup/restore", s.RequireAdmin(s.HandleRestoreApply))
 	mux.HandleFunc("GET /api/v1/admin/audit", s.RequireAdmin(s.HandleAuditList))
 
 	// 条目 8：注册开关（默认关）+ 唯一公开自助注册入口。
