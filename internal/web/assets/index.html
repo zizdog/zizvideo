@@ -13,6 +13,9 @@
   <header id="header" class="header" hidden></header>
   <main id="view" class="view"></main>
 </div>
+<!-- 安卓 App 用 <base>/?zv=app#/... 打开：原生 Ui.padSystemBars 已经垫过系统栏，
+     安全区不能再叠加一遍（否则底栏文字偏高、"来自 X"偏低）。这里在 CSS 生效前打标记。 -->
+<script>if (location.search.indexOf("zv=app") >= 0) document.documentElement.classList.add("zv-app");</script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

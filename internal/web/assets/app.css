@@ -4,16 +4,23 @@
    并声明 color-scheme: dark（原生控件/滚动条/输入框也按暗色画）。 */
 :root {
   color-scheme: dark;
+  /* 安全区：网页/浏览器里用系统的 env()；**安卓 App 里必须归零** —— 原生 Ui.padSystemBars 已经把
+     WebView 垫到系统栏下面了，而 WebView 仍然会把系统栏高度报给 env()，两边一叠加就出现
+     "底栏文字偏高、来自 X 偏低"（用户 2026-09-24 手机截图，网页端正常）。 */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
   --bg: #0b0d10;
   --fg: #e9edf2;
   --muted: #dedede;
   --line: #232a33;
-  --panel: #141920;
+  --panel: rgba(20, 25, 32, 0.5);
   --panel2: #1c232c;
   --accent: #3ea6ff;
   --danger: #ff6b6b;
   --radius: 10px;
 }
+html.zv-app { --sat: 0px; --sab: 0px; }
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 /* JS 用 classList 切换 .hidden（chip/toast/set-panel 等），没有这条规则它们永远显示（坑 12） */
@@ -39,7 +46,7 @@ body.playing .header {
   position: absolute; top: 0; left: 0; right: 0; z-index: 12; background: transparent;
 }
 /* 顶栏浮起来后，「来自 X / 选库」落在它下沿 10px（用户 2026-09-24：距顶栏 10px）。 */
-body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
+body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .top-btn {
   font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
@@ -110,7 +117,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
   inset: 0; height: auto; z-index: 3; color: var(--muted); font-size: 14px;
 }
 .feed-chip {
-  position: absolute; z-index: 8; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 8; top: calc(12px + var(--sat)); left: 50%; transform: translateX(-50%);
   padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,.62); color: #fff; font-size: 12px;
 }
 .layer { position: absolute; inset: 0; }
@@ -119,7 +126,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .overlay {
   /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
-  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 8px 12px calc(10px + var(--sab));
   display: flex; flex-direction: column; gap: 4px;
   background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
 }
@@ -132,7 +139,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .ov-rail {
   /* 用户 2026-09-24：图标栏**再靠右**（2px）、纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
   position: absolute; z-index: 7; right: 0;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(84px + var(--sab));
   display: flex; flex-direction: column; align-items: center; gap: 0;
   pointer-events: none;
 }
@@ -163,7 +170,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .ov-corner {
   /* 顶部要躲开状态栏/刘海：安卓 App 里由原生把 WebView 垫到状态栏下方，
      浏览器/刘海屏这里再用 env() 兜一道（0 时无副作用）。 */
-  position: absolute; z-index: 7; top: calc(10px + env(safe-area-inset-top, 0px));
+  position: absolute; z-index: 7; top: calc(10px + var(--sat));
   display: flex; gap: 8px; padding: 0 12px; align-items: center;
   pointer-events: none; max-width: 100%;opacity: 0.7;
 }
@@ -185,7 +192,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 /* ⚙ 二级设置（从右下竖排栏的左侧弹出） */
 .set-panel {
   position: absolute; z-index: 9; right: 58px;
-  bottom: calc(92px + env(safe-area-inset-bottom)); width: min(74vw, 240px);
+  bottom: calc(92px + var(--sab)); width: min(74vw, 240px);
   display: flex; flex-direction: column; gap: 9px; padding: 12px;
   border-radius: var(--radius); background: rgba(18,22,28,.96);
   border: 1px solid var(--line); color: #fff;
@@ -339,12 +346,12 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 
 .bottom-nav {
   flex: 0 0 auto; display: flex; border-top: 1px solid var(--line);
-  background: var(--panel); padding-bottom: env(safe-area-inset-bottom); z-index: 15;
+  background: var(--panel); padding-bottom: var(--sab); z-index: 15;
 }
 /* 用户 2026-09-24：底栏**只留文字**（去掉图标）、高度降下来，别占播放画面 */
 .nav-item {
   flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
-  padding: 10px 4px calc(10px + env(safe-area-inset-bottom)); text-decoration: none;
+  padding: 10px 4px calc(10px + var(--sab)); text-decoration: none;
   color: var(--muted); font-size: 14px;
 }
 .nav-item.on { color: var(--accent); font-weight: 600; }
@@ -433,7 +440,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .sp-count { color: rgba(255,255,255,.88); font-size: 13px; white-space: nowrap; }
 .sp-bottom {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; flex-direction: column; gap: 7px;
-  padding: 10px 12px calc(14px + env(safe-area-inset-bottom)); color: #fff;
+  padding: 10px 12px calc(14px + var(--sab)); color: #fff;
   background: linear-gradient(to top, rgba(0,0,0,.78), rgba(0,0,0,0));
 }
 .sp-controls { align-items: center; }
@@ -561,7 +568,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 /* 左上角返回键（左箭头）：只在全屏且控件可见时出现，点了退出全屏 */
 .feed .imm-back {
   display: none; position: absolute; z-index: 9;
-  top: calc(10px + env(safe-area-inset-top, 0px)); left: 8px;
+  top: calc(10px + var(--sat)); left: 8px;
 }
 .feed.immersive .imm-back {
   display: inline-flex; background: rgba(0, 0, 0, .38); border-radius: 999px;
@@ -591,7 +598,7 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
   100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4) rotate(0deg); }
 }
 /* 全屏时控件贴到屏幕边（顶栏已收起，不用再躲那 52px） */
-body.rot-play .ov-corner { top: calc(10px + env(safe-area-inset-top, 0px)); }
+body.rot-play .ov-corner { top: calc(10px + var(--sat)); }
 
 /* 旋转全屏（用户 2026-09-24：**不许依赖系统自动旋转**）：整体转 90° 铺满竖屏视口。
    手机没开自动旋转、桌面浏览器、WebView 都一样能用；把手机横过来就是标准横屏。

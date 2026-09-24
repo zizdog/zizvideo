@@ -264,7 +264,11 @@ class WebActivity : AppCompatActivity() {
         ).buildAsync()
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         pickOnLoad = intent.getBooleanExtra(EXTRA_PICK, false)
-        web.loadUrl(base + path)
+        // 带 ?zv=app：告诉前端"原生已经垫过系统栏"，别再叠加 safe-area（见 Ui.padSystemBars）
+        val flagged = if (path.contains("#")) path.replaceFirst("#", "?zv=app#") else path + "?zv=app"
+        val url = base + flagged
+        android.util.Log.i("zv-nav", "loadUrl=$url")
+        web.loadUrl(url)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
