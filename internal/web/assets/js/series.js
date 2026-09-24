@@ -212,6 +212,9 @@ export function mountSeriesPlay(view, seriesID) {
       playlist: {
         title,
         items,
+        // 用户 2026-09-24：播放页要能"一键回剧场"（图3 的「合集 · … 更新至 N 集 >」）
+        seriesId: seriesID,
+        episodeCount: items.length,
         note: unrecognized > 0 ? ("未识别（按文件名排）共 " + unrecognized + " 集") : "",
       },
     });

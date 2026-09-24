@@ -324,11 +324,12 @@ export function mountFeed(view, options = {}) {
 
     // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
-    // 边栏只留"高频互动"：收藏 / 喜欢 / 选集 / 声音 / 删除 / 清屏。
-    // 小窗播放、投屏、稍后再看、设置都收进**底部设置面板**；全屏播放按钮移到视频画面下方
-    // （用户 2026-09-24："小窗播放/稍后再看放设置面板，全屏按钮放视频下方"）。
+    // 边栏（用户 2026-09-24：像抖音那样"多一点图标"）：喜欢 / 收藏 / 分享 / 缓存(App) / 选集 / 声音 / 删除。
+    // 小窗播放、投屏、稍后再看、清屏、播放设置都在底部面板里；全屏在视频画面下方。
     layer.append(el("div", { class: "ov-rail" },
-      entry.fav, entry.like, entry.eps, soundButton(entry), entry.del, cleanButton(entry)));
+      entry.like, entry.fav, shareButton(entry),
+      nativeCacheAvailable() ? cacheButton(entry) : null,
+      entry.eps, soundButton(entry), entry.del));
     layer.append(centerPlayPause(entry));
     if (playable) layer.append(belowVideoRow(entry));
 
@@ -399,11 +400,6 @@ export function mountFeed(view, options = {}) {
         if (immersiveOn()) { full.uiHidden = !full.uiHidden; paintImmersive(); return; }
         togglePlay(entry);
       }, 260); // 双击判定窗：安卓系统的双击超时是 300ms，取 260 兼顾"单击不拖沓"与"双击抓得住"
-    });
-    video.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      if (tapTimer) { clearTimeout(tapTimer); tapTimer = 0; }
-      doubleTapLike(entry);
     });
     stage.append(video);
     showLoading(entry); // 用户 2026-09-23：先给"加载中"，别一进来就是个大播放按钮
@@ -788,28 +784,85 @@ export function mountFeed(view, options = {}) {
     return btn;
   }
 
-  // 底部设置面板（抖音式：从下方弹出、宽度 100%、高度按内容）
+  // 底部设置面板（用户 2026-09-24：参考抖音 —— 分组卡片 + 每行"图标+文字+右侧值/开关"）
   function buildPanel(entry) {
     entry.settingsForm = createFeedSettingsForm({
       settings: state.settings,
       onChange: saveSettings,
       // 剧场：自动连播写死开启且**不可设置**（用户要求），只留"跳转秒数"。
       lockAutoplay: !!playlist,
+      variant: "sheet",
     });
-    const tools = el("div", { class: "sheet-tools" });
-    if (pipAvailable()) tools.append(toolButton("小窗播放", () => { closePanels(); togglePip(entry); }));
-    if (castAvailable()) tools.append(toolButton("投屏", () => { closePanels(); toggleCast(entry); }));
-    // 稍后再看：与边栏原来那个按钮同一份逻辑（一个开关）
-    const laterLabel = () => (entry.item && entry.item.watch_later ? "取消稍后再看" : "稍后再看");
-    const laterBtn = toolButton(laterLabel(), () => { toggleWatchLater(entry); laterBtn.textContent = laterLabel(); });
-    laterBtn.dataset.role = "sheet-later";
-    tools.append(laterBtn);
-    entry.panel = el("div", { class: "set-panel sheet hidden", dataset: { role: "settings-sheet" } },
-      el("div", { class: "sheet-handle" }),
-      tools,
-      entry.settingsForm.node);
+
+    // 第 1 组：投屏 / 小窗播放 / 缓存视频（能做才显示）
+    const tools = el("div", { class: "sheet-group" });
+    if (castAvailable()) tools.append(actionRow("cast", "投屏", () => { closePanels(); toggleCast(entry); }));
+    if (pipAvailable()) tools.append(actionRow("pip", "小窗播放", () => { closePanels(); togglePip(entry); }));
+    if (nativeCacheAvailable()) {
+      tools.append(actionRow("download", "缓存视频", () => {
+        try { window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || ""); showToast("开始缓存，看通知栏进度"); closePanels(); }
+        catch (err) { showToast("这台设备缓存不了"); }
+      }));
+    }
+
+    // 第 2 组：常用（清屏/稍后再看/分享 + 播放设置那一堆行，同一张卡片里）
+    const common = el("div", { class: "sheet-group" });
+    const cleanRow = actionRow("down", "清屏播放", () => { toggleClean(); paintCommon(); });
+    cleanRow.dataset.role = "sheet-clean";
+    common.append(cleanRow);
+    const laterRow = actionRow("clock", "稍后再看", () => { toggleWatchLater(entry); paintCommon(); });
+    laterRow.dataset.role = "sheet-later";
+    common.append(laterRow);
+    common.append(actionRow("share", "分享", () => shareItem(entry)));
+    common.append(entry.settingsForm.node);
+
+    const groups = [];
+    if (tools.childNodes.length) groups.push(tools);
+    groups.push(common);
+
+    // 第 3 组：剧场入口（图3 的「合集 · 这是一个小短剧 更新至 N 集 >」）
+    if (playlist && playlist.seriesId) {
+      const row = el("div", { class: "sheet-row sheet-series", dataset: { role: "sheet-series" } },
+        icon("theater"),
+        el("span", { class: "sheet-label", text: "剧场 · " + (playlist.title || "") }),
+        el("span", { class: "sheet-right muted", text: "共 " + (playlist.episodeCount || state.items.length) + " 集" }),
+        el("span", { class: "sheet-arrow", text: "›" }));
+      row.addEventListener("click", (event) => {
+        event.stopPropagation();
+        location.hash = "#/series/" + encodeURIComponent(playlist.seriesId);
+      });
+      groups.push(el("div", { class: "sheet-group" }, row));
+    }
+
+    // 门禁要求：展开只能用数组（groups 是数组没错，但为了可读性显式用循环拼）
+    const panel = el("div", { class: "set-panel sheet hidden", dataset: { role: "settings-sheet" } },
+      el("div", { class: "sheet-handle" }));
+    for (const g of groups) panel.append(g);
+    entry.panel = panel;
     entry.panel.addEventListener("click", (event) => event.stopPropagation());
+
+    // 行上的状态文字（清屏开/关、稍后再看已添加/未添加）跟着真实状态刷
+    function paintCommon() {
+      const cleanRow = common.querySelector('[data-role="sheet-clean"] .sheet-right');
+      if (cleanRow) cleanRow.textContent = feed.classList.contains("clean") ? "已开启" : "关闭";
+      const laterRight = common.querySelector('[data-role="sheet-later"] .sheet-right');
+      if (laterRight) laterRight.textContent = (entry.item && entry.item.watch_later) ? "已添加" : "未添加";
+    }
+    entry.paintSheet = paintCommon;
+    entry.panel.__zvPaintCommon = paintCommon;
     return entry.panel;
+  }
+
+  // 抖音式行：[图标] 标签 ………… 右侧值
+  function actionRow(iconName, label, onClick, rightText) {
+    const right = el("span", { class: "sheet-right muted", text: rightText || "" });
+    const row = el("div", { class: "sheet-row", dataset: { role: "sheet-action" } },
+      icon(iconName), el("span", { class: "sheet-label", text: label }), right);
+    row.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return row;
   }
 
   function openPanel(entry) {
@@ -819,8 +872,7 @@ export function mountFeed(view, options = {}) {
     paintPanel(entry);
     ensureScrim().classList.remove("hidden");
     entry.panel.classList.remove("hidden");
-    const laterBtn = entry.panel.querySelector('[data-role="sheet-later"]');
-    if (laterBtn) laterBtn.textContent = (entry.item && entry.item.watch_later) ? "取消稍后再看" : "稍后再看";
+    if (entry.paintSheet) entry.paintSheet();
     paintBelow(entry);
   }
 
@@ -964,17 +1016,59 @@ export function mountFeed(view, options = {}) {
     setIcon(btn, on ? "up" : "down");
   }
 
-  function cleanButton() {
-    const btn = el("button", {
-      class: "icon-btn rail-restore", type: "button", title: "清屏播放",
-      dataset: { role: "rail-clean" },
-    }, icon("down"));
-    applyClean(btn, readCleanPref()); // 进来就按记忆恢复
-    btn.addEventListener("click", () => {
-      const on = !feed.classList.contains("clean");
-      applyClean(btn, on);
-      writeCleanPref(on);
-      showToast(on ? "已清屏，点箭头还原" : "已显示图标");
+  /** 清屏开关（面板里的「清屏播放」行用它；边栏那个按钮已经收进面板）。 */
+  function toggleClean() {
+    const on = !feed.classList.contains("clean");
+    feed.classList.toggle("clean", on);
+    writeCleanPref(on);
+    applyClean(null, on);
+    for (const entry of state.built.values()) paintBelow(entry);
+    showToast(on ? "已清屏，长按画面可还原" : "已显示图标");
+    return on;
+  }
+
+  /** 分享：优先系统分享面板（手机），桌面退回复制链接。 */
+  async function shareItem(entry) {
+    const item = entry.item || {};
+    const url = location.origin + "/#/play/feed/" + encodeURIComponent(item.id || "");
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: item.title || "zizvideo", url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      showToast("链接已复制");
+    } catch (err) {
+      showToast("分享没成功（可手动复制地址）");
+    }
+  }
+
+  function shareButton(entry) {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "分享",
+      dataset: { role: "rail-share" } }, icon("share"));
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      shareItem(entry);
+    });
+    return btn;
+  }
+
+  // 缓存视频：只有 App 里有原生桥（ZvAndroid.cacheVideo）才显示 —— 网页端下不了"到本机离线看"
+  function nativeCacheAvailable() {
+    return !!(window.ZvAndroid && typeof window.ZvAndroid.cacheVideo === "function");
+  }
+
+  function cacheButton(entry) {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "缓存视频",
+      dataset: { role: "rail-cache" } }, icon("download"));
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      try {
+        window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || "");
+        showToast("开始缓存，进度看通知栏");
+      } catch (err) {
+        showToast("这台设备缓存不了");
+      }
     });
     return btn;
   }
@@ -1195,6 +1289,11 @@ export function mountFeed(view, options = {}) {
   // 写接口只有一条路（toggleLike），别在这里再写一份，免得两处状态对不上。
   async function doubleTapLike(entry) {
     if (entry.destroyed || !entry.item) return;
+    // 防抖：双击只允许翻转一次。指纹/触屏在某些浏览器里会既发 click 又发 dblclick，
+    // 两条路都调这里就变成"翻两次=没反应"（用户 2026-09-24 报障：双击不能取消点赞）。
+    const now = Date.now();
+    if (entry.lastDblTap && now - entry.lastDblTap < 500) return;
+    entry.lastDblTap = now;
     const willLike = entry.item.reaction !== "like";
     burstLike(entry, willLike);
     await toggleLike(entry);

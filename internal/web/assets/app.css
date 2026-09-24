@@ -134,13 +134,16 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .ov-title {
   color: #fff; font-size: 15px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.8);
   max-width: 83%; overflow: hidden; text-overflow: ellipsis;
+  /* 标题最多 3 行（用户 2026-09-24）：超了截断，别把画面糊满 */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
 }
 /* 抖音式右侧竖排操作栏：右下角、竖向排列（用户 2026-09-22 要求） */
 .ov-rail {
   /* 纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
   position: absolute; z-index: 7; right: 0;
   bottom: calc(84px + var(--sab));
-  display: flex; flex-direction: column; align-items: center; gap: 0;
+  /* 用户 2026-09-24：图标加大、上下间距也加大（"图标增加大小，上下增加距离"） */
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
@@ -155,13 +158,13 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 }
 /* 实心矢量、无圆圈底、白图标 + 投影；选中/点亮变强调色（像抖音点赞变红）。 */
 .icon-btn {
-  width: 54px; height: 54px; padding: 0; line-height: 0; cursor: pointer;
+  width: 62px; height: 62px; padding: 0; line-height: 0; cursor: pointer;
   border: 0; background: transparent; color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
   filter: drop-shadow(0 1px 3px rgba(0,0,0,.55));
   transition: transform .12s ease, color .12s ease;
 }
-.icon-btn svg { width: 38px; height: 38px; }
+.icon-btn svg { width: 44px; height: 44px; }
 .icon-btn:hover { transform: scale(1.06); }
 .icon-btn.on { color: var(--accent); }
 .icon-btn.on svg { filter: drop-shadow(0 0 6px rgba(255,59,91,.45)); }
@@ -203,7 +206,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   position: absolute; z-index: 12; left: 0; right: 0;
   bottom: 0; width: 100%;
   display: flex; flex-direction: column; gap: 9px; padding: 8px 16px calc(14px + var(--sab));
-  border-radius: 16px 16px 0 0; background: rgba(22,24,28,.98);
+  border-radius: 18px 18px 0 0; background: rgba(28,29,33,.99);
   border: 0; border-top: 1px solid var(--line); color: #fff;
   box-shadow: 0 -8px 30px rgba(0,0,0,.5);
   animation: zv-sheet-up .18s ease-out;
@@ -214,13 +217,51 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   width: 36px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.28);
   margin: 2px auto 4px;
 }
-/* 面板工具区：小窗播放 / 投屏 / 稍后再看 */
-.sheet-tools { display: flex; flex-wrap: wrap; gap: 8px; }
-.sheet-tool {
-  font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--line); background: rgba(255,255,255,.06); color: #fff;
+/* 抖音式分组卡片（参考用户给的图1/图2：内缩圆角卡片 + 每行"图标+文字+右侧值/开关"） */
+.sheet-group {
+  display: flex; flex-direction: column;
+  margin: 8px 10px; border-radius: 12px; overflow: hidden;
+  background: rgba(255,255,255,.07);
 }
-.sheet-tool:hover, .sheet-tool:active { background: rgba(255,255,255,.16); }
+.sheet-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; cursor: pointer; font-size: 15px; color: #fff;
+}
+.sheet-row + .sheet-row { border-top: 1px solid rgba(255,255,255,.06); }
+.sheet-row:active { background: rgba(255,255,255,.06); }
+.sheet-row svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.sheet-label { flex: 1 1 auto; }
+.sheet-right { color: rgba(255,255,255,.55); font-size: 14px; }
+.sheet-arrow { color: rgba(255,255,255,.35); font-size: 18px; line-height: 1; }
+/* 开关：亮=强调红，灭=灰（抖音同款观感） */
+.sheet-switch { display: inline-flex; align-items: center; }
+.sheet-switch-input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sheet-switch::before {
+  content: ""; display: block; width: 44px; height: 26px; border-radius: 999px;
+  background: rgba(255,255,255,.25); transition: background .15s ease; position: relative;
+}
+.sheet-switch::after {
+  content: ""; position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; transform: translateX(3px); transition: transform .15s ease;
+}
+.sheet-switch.on::before { background: var(--accent); }
+.sheet-switch.on::after { transform: translateX(19px); }
+.sheet-switch.off::after { transform: translateX(3px); }
+/* 倍速分段（图2：0.75 / 1.0 / 1.25 … 当前档红色） */
+.sheet-seg { display: flex; gap: 14px; }
+.sheet-seg-btn {
+  font: inherit; font-size: 15px; padding: 0; border: 0; background: transparent;
+  color: rgba(255,255,255,.6); cursor: pointer;
+}
+.sheet-seg-btn.on { color: var(--accent); font-weight: 600; }
+/* sheet 变体里的设置行：把"标签+控件"排成抖音那样一行 */
+.set-form.sheet-form { gap: 0; }
+.sheet-form .set-row {
+  justify-content: space-between; padding: 14px 16px; font-size: 15px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.sheet-form .set-row:first-child { border-top: 0; }
+.sheet-form .set-note { padding: 0 16px 10px; }
 /* 面板外的遮罩：吞掉点击（点外面只关面板，不触发播放/暂停） */
 .sheet-scrim { position: absolute; inset: 0; z-index: 11; background: rgba(0,0,0,.35); }
 /* 视频画面下方那排：全屏播放（+ 网页端才有的设置） */
@@ -373,8 +414,9 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   .grid { font-size: 12px; }
   .ov-title {font-size: 14px; }
   /* 手机上原来压到 34px，用户反馈"太小"⇒ 放大到 50/36；再收紧到 46/34 让 8 个图标排得下 */
-  .icon-btn { width: 46px; height: 46px; }
-  .icon-btn svg { width: 34px; height: 34px; }
+  /* 手机上也要大一点（抖音那种量级） */
+  .icon-btn { width: 54px; height: 54px; }
+  .icon-btn svg { width: 40px; height: 40px; }
   .kv { flex-direction: column; gap: 0; }
   .kv .k { min-width: 0; }
 }

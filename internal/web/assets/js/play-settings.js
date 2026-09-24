@@ -2,6 +2,7 @@
 // 三项：自动播放下一个 / 循环播放 / 左右键跳转秒数。
 
 import { el } from "./dom.js";
+import { icon } from "./icons.js";
 
 export const FEED_SETTINGS_DEFAULTS = {
   loop_play: false, autoplay_next: true, seek_seconds: 10, autoplay_enter: true,
@@ -30,6 +31,12 @@ export function normalizeFeedSettings(data) {
     playback_rate: PLAYBACK_RATES.some((r) => Math.abs(r - Number(src.playback_rate)) < 0.01)
       ? Number(src.playback_rate) : FEED_SETTINGS_DEFAULTS.playback_rate,
   };
+}
+
+// trimRate：抖音那排是 0.75 / 1.0 / 1.25 这种写法（整数也带一位小数）
+function trimRate(r) {
+  const n = Number(r);
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
 }
 
 export function seekSecondsOf(settings) {
@@ -62,14 +69,74 @@ export function createFeedSettingsForm(options) {
   const loopRow = el("label", { class: "set-row" }, loop, el("span", { text: "循环播放" }));
   const seekRow = el("label", { class: "set-row" }, el("span", { text: "左右键跳转" }), seek, el("span", { text: "秒" }));
   const rateRow = el("label", { class: "set-row" }, el("span", { text: "播放倍速" }), rate);
-  const form = el("div", { class: "set-form" },
-    lockAutoplay ? null : hideSeriesRow,
-    lockAutoplay ? null : enterRow,
-    lockAutoplay ? null : autoRow,
-    lockAutoplay ? null : loopRow,
-    rateRow,
-    seekRow,
-    lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note);
+
+  // ---- 抖音式行（variant: "sheet"）：[图标] 标签 ……… 右侧控件/值 ----
+  //
+  // 为什么要两套：面板要"抖音样式"（分组卡片 + 行 + 开关），而「我的→设置」页沿用列表式。
+  // 逻辑（emit/paint）只有一份，只是 DOM 不同 —— 别写第二份设置逻辑。
+  const sheet = opts.variant === "sheet";
+  function sheetRow(iconName, labelText, right) {
+    return el("div", { class: "sheet-row" },
+      icon(iconName),
+      el("span", { class: "sheet-label", text: labelText }),
+      el("span", { class: "sheet-right" }, right));
+  }
+  function switchEl(input) {
+    const box = el("span", { class: "sheet-switch" }, input);
+    input.classList.add("sheet-switch-input");
+    return box;
+  }
+  function paintSwitch(input) {
+    input.parentNode.classList.toggle("on", !!input.checked);
+    input.parentNode.classList.toggle("off", !input.checked);
+  }
+  // 倍速：抖音是一排数字（点一下就切），不是下拉框
+  const rateSeg = el("div", { class: "sheet-seg", dataset: { role: "sheet-rate" } });
+  for (const r of PLAYBACK_RATES) {
+    const b = el("button", { class: "sheet-seg-btn", type: "button", text: trimRate(r),
+      dataset: { rate: String(r) } });
+    b.addEventListener("click", (event) => {
+      event.stopPropagation();
+      emit({ playback_rate: r });
+    });
+    rateSeg.append(b);
+  }
+  const rateSheetRow = sheetRow("speed", "倍速", rateSeg);
+
+  const form = sheet
+    ? el("div", { class: "set-form sheet-form" },
+        rateSheetRow,
+        seekRow,
+        lockAutoplay ? null : loopRow,
+        lockAutoplay ? null : autoRow,
+        lockAutoplay ? null : enterRow,
+        lockAutoplay ? null : hideSeriesRow,
+        lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note)
+    : el("div", { class: "set-form" },
+        lockAutoplay ? null : hideSeriesRow,
+        lockAutoplay ? null : enterRow,
+        lockAutoplay ? null : autoRow,
+        lockAutoplay ? null : loopRow,
+        rateRow,
+        seekRow,
+        lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note);
+
+  // sheet 变体：把"开关行"换成抖音风格的行（同一个 input，事件/状态都不变）
+  if (sheet) {
+    const pairs = [
+      [rateSheetRow, null],
+      [seekRow, sheetRow("seek", "左右键跳转", seek)],
+      [loopRow, sheetRow("repeat", "循环播放", switchEl(loop))],
+      [autoRow, sheetRow("next", "自动播放下一个", switchEl(auto))],
+      [enterRow, sheetRow("play", "进入自动播放", switchEl(enter))],
+      [hideSeriesRow, sheetRow("theater", "首页不显示剧场内容", switchEl(hideSeries))],
+    ];
+    // 原节点换成行式节点（顺序按上面的数组；rateSheetRow/seekRow 已在 form 里，不动）
+    for (const [oldNode, newNode] of pairs) {
+      if (!newNode) continue;
+      if (oldNode && oldNode.parentNode) oldNode.parentNode.replaceChild(newNode, oldNode);
+    }
+  }
 
   function emit(partial) {
     if (opts.onChange) opts.onChange(partial);
@@ -99,6 +166,11 @@ export function createFeedSettingsForm(options) {
     loop.disabled = !!last.autoplay_next;
     seek.value = String(last.seek_seconds);
     note.classList.toggle("hidden", !last.autoplay_next);
+    // 抖音式：倍速高亮当前档；开关跟着亮灭
+    for (const b of rateSeg.querySelectorAll(".sheet-seg-btn")) {
+      b.classList.toggle("on", Math.abs(Number(b.dataset.rate) - last.playback_rate) < 0.01);
+    }
+    for (const input of [loop, auto, enter, hideSeries]) paintSwitch(input);
   }
 
   paint();

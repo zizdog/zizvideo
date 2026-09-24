@@ -133,6 +133,25 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /**
+         * 网页的「缓存视频」调这个：把这一集下到本机（离线看）。
+         * 复用 OfflineStore（系统 DownloadManager + App 私有目录），与原生播放页那个按钮同一份实现。
+         */
+        @android.webkit.JavascriptInterface
+        fun cacheVideo(mediaId: String, title: String): Boolean {
+            if (mediaId.isBlank()) return false
+            runOnUiThread {
+                val id = OfflineStore.enqueue(this@WebActivity, base, mediaId, title)
+                if (id < 0) {
+                    android.widget.Toast.makeText(this@WebActivity, "开始缓存失败（看通知栏或稍后再试）",
+                        android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    android.util.Log.i("zv-offline", "web cache id=" + mediaId)
+                }
+            }
+            return true
+        }
+
         /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
         @android.webkit.JavascriptInterface
         fun setImmersive(on: Boolean) {
