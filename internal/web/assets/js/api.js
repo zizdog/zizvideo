@@ -133,6 +133,10 @@ export const api = {
   scanTask: (id) => request("GET", "/api/v1/scan-tasks/" + encodeURIComponent(id)),
   detectAll: (body) => request("POST", "/api/v1/admin/series/detect-all", body),
   jobTask: (id) => request("GET", "/api/v1/admin/tasks/" + encodeURIComponent(id)),
+  // ② 任务中心：列表 / 取消 / 重试（转码与扫描合并）
+  taskList: (limit) => request("GET", "/api/v1/admin/tasks" + (limit ? ("?limit=" + limit) : "")),
+  cancelTask: (id) => request("POST", "/api/v1/admin/tasks/" + encodeURIComponent(id) + "/cancel"),
+  retryTask: (id) => request("POST", "/api/v1/admin/tasks/" + encodeURIComponent(id) + "/retry"),
   // 按目录建剧场：A=剧场内导入一个目录，B=按一级子目录批量建。
   seriesDirPreview: (id, body) =>
     request("POST", "/api/v1/admin/series/" + encodeURIComponent(id) + "/import-dir/preview", body),

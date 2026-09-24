@@ -8,13 +8,14 @@ import (
 )
 
 const taskCols = `id, library_id, kind, status, total, scanned, updated, failed, missing,
-	suspected, renamed, error, COALESCE(started_at,''), COALESCE(finished_at,''), updated_at`
+	suspected, renamed, error, COALESCE(started_at,''), COALESCE(finished_at,''), updated_at,
+	created_at`
 
 func scanTask(s interface{ Scan(...any) error }) (*domain.ScanTask, error) {
 	var t domain.ScanTask
 	if err := s.Scan(&t.ID, &t.LibraryID, &t.Kind, &t.Status, &t.Total, &t.Scanned, &t.Updated,
 		&t.Failed, &t.Missing, &t.Suspected, &t.Renamed, &t.Error, &t.StartedAt, &t.FinishedAt,
-		&t.UpdatedAt); err != nil {
+		&t.UpdatedAt, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -58,6 +59,28 @@ func (db *DB) FinishScanTask(id, status, errMsg string, missing, suspected, rena
 		renamed = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
 		status, truncate(errMsg, 500), missing, suspected, renamed, now, now, id)
 	return err
+}
+
+// ListScanTasks 最近的扫描任务（任务中心用）：新的在前。
+func (db *DB) ListScanTasks(limit int) ([]domain.ScanTask, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := db.Query(`SELECT `+taskCols+` FROM scan_tasks
+		ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.ScanTask{}
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
 }
 
 // LatestScanTask returns the most recent task of a library, or nil.

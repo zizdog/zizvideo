@@ -25,6 +25,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	active map[string]bool
+	// cancels：扫描任务 id → 取消这次扫描（任务中心点「取消」用它）。
+	// 扫描器认 ctx（scanner.go 里有 ctx.Done() 分支），所以取消是真停，不是假装。
+	cancels map[string]context.CancelFunc
 	// afterScan 在扫描协程写出终态后被调用（只用于扫描成功后的自动识别）。
 	afterScan func(libraryID, scanTaskID, status string)
 	wg        sync.WaitGroup
@@ -37,6 +40,7 @@ func NewManager(cfg *config.Config, db *storage.DB, roots *config.Roots,
 	return &Manager{
 		cfg: cfg, db: db, Roots: roots, scanner: sc, log: log,
 		baseCtx: ctx, cancel: cancel, active: map[string]bool{},
+		cancels: map[string]context.CancelFunc{},
 	}
 }
 
@@ -125,22 +129,43 @@ func (m *Manager) StartScan(libraryID, kind string) (*domain.ScanTask, error) {
 		return nil, err
 	}
 
+	// 每个任务一个可取消的 ctx：任务中心能单独停掉这一次扫描（不影响别的库）
+	ctx, cancel := context.WithCancel(m.baseCtx)
+	m.mu.Lock()
+	m.cancels[t.ID] = cancel
+	m.mu.Unlock()
+
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
 		defer func() {
+			cancel()
 			if r := recover(); r != nil {
 				m.log.Error("扫描协程崩溃", "task_id", t.ID, "library_id", libraryID)
 				_ = m.db.FinishScanTask(t.ID, domain.TaskFailed, "扫描协程异常退出", 0, 0, 0)
 			}
 			m.mu.Lock()
 			delete(m.active, libraryID)
+			delete(m.cancels, t.ID)
 			m.mu.Unlock()
 		}()
-		m.scanner.Run(m.baseCtx, t, lib)
+		m.scanner.Run(ctx, t, lib)
 		m.notifyAfterScan(libraryID, t.ID)
 	}()
 	return t, nil
+}
+
+// Cancel 取消一次正在跑的扫描（扫描器认 ctx，会停在下一个检查点）。
+// 返回 false 表示这个任务已经不在跑（跑完了/进程重启过）。
+func (m *Manager) Cancel(taskID string) bool {
+	m.mu.Lock()
+	cancel, ok := m.cancels[taskID]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
 }
 
 // Get returns a task by id.

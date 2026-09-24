@@ -104,6 +104,10 @@ func Router(s *api.Server) http.Handler {
 	// P2：批量一键识别（confirm 两段式）+ 跨库任务进度（job_tasks，迁移 0008）。
 	mux.HandleFunc("POST /api/v1/admin/series/detect-all", s.RequireAdmin(s.HandleDetectAll))
 	mux.HandleFunc("GET /api/v1/admin/tasks/{id}", s.RequireAdmin(s.HandleGetJobTask))
+	// ② 任务中心：列表 / 取消 / 重试（转码与扫描合并展示，取消是真停 ctx）
+	mux.HandleFunc("GET /api/v1/admin/tasks", s.RequireAdmin(s.HandleListTasks))
+	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.RequireAdmin(s.HandleCancelTask))
+	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/retry", s.RequireAdmin(s.HandleRetryTask))
 	// P1 转码队列：选中若干 media 排队转码（进度看 /admin/tasks/{id} 的 percent）。
 	mux.HandleFunc("POST /api/v1/admin/transcodes", s.RequireAdmin(s.HandleStartTranscode))
 	// P4：按目录建剧场。A=剧场内导入一个目录；B=按一级子目录批量建剧场（走任务中心）。

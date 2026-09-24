@@ -236,8 +236,9 @@ type Queue struct {
 	runner ffmpeg.Runner
 	log    *slog.Logger
 
-	mu      sync.Mutex
-	jobs    map[string]chan struct{} // jobID → 取消信号
+	mu   sync.Mutex
+	jobs map[string]context.CancelFunc // jobID → 取消这次任务（任务中心点「取消」用它）
+	// 取消的终态不靠额外的标记：runJob 结束时看 ctx.Err() 就能如实写 interrupted。
 	pending chan *job
 	started bool
 	stop    chan struct{}
@@ -260,7 +261,8 @@ type job struct {
 func NewQueue(cfg *config.Config, db *storage.DB, roots *config.Roots,
 	r ffmpeg.Runner, log *slog.Logger) *Queue {
 	return &Queue{cfg: cfg, db: db, roots: roots, runner: r, log: log,
-		jobs: map[string]chan struct{}{}, pending: make(chan *job, 64), stop: make(chan struct{})}
+		jobs:    map[string]context.CancelFunc{},
+		pending: make(chan *job, 64), stop: make(chan struct{})}
 }
 
 // Start 起工作协程；重复调用无副作用。
@@ -293,8 +295,18 @@ func (q *Queue) Enqueue(items []Item, trigger string) (string, error) {
 	if len(items) == 0 {
 		return "", errors.New("没有要转码的内容")
 	}
+	// 参数存库：任务中心「重试」就靠它（只存重试必需的信息，路径重试时按 id 现取）
+	ids := make([]string, 0, len(items))
+	maxH := 0
+	for i, it := range items {
+		ids = append(ids, strconv.Quote(it.MediaID))
+		if i == 0 {
+			maxH = it.MaxHeight
+		}
+	}
 	t := &domain.JobTask{ID: domain.NewID("job"), Kind: domain.JobKindTranscode,
-		Trigger: trigger, Total: len(items)}
+		Trigger: trigger, Total: len(items),
+		Params: fmt.Sprintf(`{"media_ids":[%s],"max_height":%d}`, strings.Join(ids, ","), maxH)}
 	if err := q.db.CreateJobTask(t); err != nil {
 		return "", err
 	}
@@ -322,18 +334,29 @@ func (q *Queue) worker() {
 }
 
 // runJob 串行处理一个任务的每一件：单件失败不影响其余，最后如实汇总。
+// Cancel 取消一个正在跑的任务：正在转的那条会被中止（原文件保持可用），
+// 剩下的不再开始。返回 false 表示这任务已经不在队列里（跑完了/不存在）。
+func (q *Queue) Cancel(jobID string) bool {
+	q.mu.Lock()
+	cancel, ok := q.jobs[jobID]
+	q.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
 func (q *Queue) runJob(j *job) {
 	ctx, cancel := context.WithCancel(context.Background())
 	q.mu.Lock()
-	q.jobs[j.ID] = make(chan struct{})
-	done := q.jobs[j.ID]
+	q.jobs[j.ID] = cancel
 	q.mu.Unlock()
 	defer func() {
 		cancel()
 		q.mu.Lock()
 		delete(q.jobs, j.ID)
 		q.mu.Unlock()
-		close(done)
 	}()
 
 	succeeded, failed, skipped := 0, 0, 0
@@ -364,6 +387,11 @@ func (q *Queue) runJob(j *job) {
 	if failed > 0 {
 		status = domain.TaskFailed
 		errMsg = fmt.Sprintf("%d/%d 条转码失败（原文件保持可用）", failed, len(j.Items))
+	}
+	// 取消要如实说：进行中的那条已中止（one() 里 ctx 断了 ffmpeg），剩下的没开始
+	if ctx.Err() != nil {
+		status = domain.TaskInterrupted
+		errMsg = "已取消：进行中的那条已中止（原文件保持可用），其余未开始"
 	}
 	if err := q.db.FinishJobTask(j.ID, status, errMsg, summary, 0, false, ""); err != nil {
 		q.log.Error("写转码任务终态失败", "job", j.ID, "error", err.Error())

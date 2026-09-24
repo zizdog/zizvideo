@@ -12,14 +12,16 @@ import (
 // NOT NULL + 外键指向单库，装不下跨库识别任务。
 const jobTaskCols = `id, kind, trigger, status, total, processed, updated, failed,
 	manual_skipped, unidentified, degraded, degrade_reason, error, summary,
-	COALESCE(started_at,''), COALESCE(finished_at,''), created_at, updated_at, percent`
+	COALESCE(started_at,''), COALESCE(finished_at,''), created_at, updated_at, percent,
+	COALESCE(params,'')`
 
 func scanJobTask(s interface{ Scan(...any) error }) (*domain.JobTask, error) {
 	var t domain.JobTask
 	var degraded int
 	if err := s.Scan(&t.ID, &t.Kind, &t.Trigger, &t.Status, &t.Total, &t.Processed, &t.Updated,
 		&t.Failed, &t.ManualSkipped, &t.Unidentified, &degraded, &t.DegradeReason, &t.Error,
-		&t.Summary, &t.StartedAt, &t.FinishedAt, &t.CreatedAt, &t.UpdatedAt, &t.Percent); err != nil {
+		&t.Summary, &t.StartedAt, &t.FinishedAt, &t.CreatedAt, &t.UpdatedAt, &t.Percent,
+		&t.Params); err != nil {
 		return nil, err
 	}
 	t.Degraded = degraded == 1
@@ -33,10 +35,32 @@ func (db *DB) CreateJobTask(t *domain.JobTask) error {
 	t.StartedAt, t.CreatedAt, t.UpdatedAt = now, now, now
 	_, err := db.Exec(`INSERT INTO job_tasks
 		(id, kind, trigger, status, total, processed, updated, failed, manual_skipped,
-		 unidentified, degraded, degrade_reason, error, summary, started_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,0,0,0,0,0,0,'','','',?,?,?)`,
-		t.ID, t.Kind, t.Trigger, domain.TaskPending, t.Total, now, now, now)
+		 unidentified, degraded, degrade_reason, error, summary, params, started_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,0,0,0,0,0,0,'','','',?,?,?,?)`,
+		t.ID, t.Kind, t.Trigger, domain.TaskPending, t.Total, t.Params, now, now, now)
 	return err
+}
+
+// ListJobTasks 最近的任务（任务中心用）：新的在前。limit <=0 或过大都会被钳住。
+func (db *DB) ListJobTasks(limit int) ([]domain.JobTask, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := db.Query(`SELECT `+jobTaskCols+` FROM job_tasks
+		ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.JobTask{}
+	for rows.Next() {
+		t, err := scanJobTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
 }
 
 // GetJobTask loads one job by id.

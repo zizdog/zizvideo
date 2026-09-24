@@ -78,6 +78,8 @@ if [ "$1" = "-version" ]; then echo "ffmpeg version 9.0.1-fake Copyright"; exit 
 if [ "$1" = "-hide_banner" ]; then echo " V....D h264_videotoolbox fake encoder"; exit 0; fi
 out=""
 for a in "$@"; do out="$a"; done
+# 文件名带 slow 就慢一点：任务中心的"取消正在跑的任务"要靠它才测得出来
+case "$out" in *slow*) sleep 5;; esac
 echo fake-jpeg > "$out"
 `)
 

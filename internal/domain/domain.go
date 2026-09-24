@@ -69,8 +69,8 @@ type UploadItem struct {
 	// 上传者填的"投递目标"（审核页预填用；只是建议，是否采纳由管理员在审核时定）。
 	TargetLibraryID   string `json:"target_library_id,omitempty"`
 	TargetSeriesTitle string `json:"target_series_title,omitempty"`
-	ReviewedBy  string `json:"-"`
-	ReviewedAt  string `json:"-"`
+	ReviewedBy        string `json:"-"`
+	ReviewedAt        string `json:"-"`
 }
 
 // 上传条目状态：uploading → pending → approved / rejected。
@@ -191,6 +191,7 @@ type ScanTask struct {
 	Error      string `json:"error"`
 	StartedAt  string `json:"started_at"`
 	FinishedAt string `json:"finished_at"`
+	CreatedAt  string `json:"created_at"`
 	UpdatedAt  string `json:"updated_at"`
 }
 
@@ -200,9 +201,9 @@ const (
 	JobKindSeriesImport  = "series_import"
 	JobKindTranscode     = "transcode"
 
-	JobTriggerManualBatch  = "manual_batch"
-	JobTriggerScanFinished = "scan_finished"
-	JobTriggerDirBatch     = "dir_batch"
+	JobTriggerManualBatch   = "manual_batch"
+	JobTriggerScanFinished  = "scan_finished"
+	JobTriggerDirBatch      = "dir_batch"
 	JobTriggerUploadApprove = "upload_approve"
 	JobTriggerManualMedia   = "manual_media"
 )
@@ -225,10 +226,12 @@ type JobTask struct {
 	DegradeReason string `json:"degrade_reason"`
 	Error         string `json:"error"`
 	Summary       string `json:"-"`
-	StartedAt     string `json:"started_at"`
-	FinishedAt    string `json:"finished_at"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	// Params 是"怎么重试"需要的入参（JSON），不外发（raw 内容对界面没意义）。
+	Params     string `json:"-"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 // AutoScan 触发来源与运行终态（迁移 0009）。status 的四种取值必须能区分
