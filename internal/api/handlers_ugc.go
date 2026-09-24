@@ -36,7 +36,29 @@ const (
 	ugcInboxName     = "inbox"
 )
 
-func (s *Server) inboxRoot() string { return filepath.Join(s.Cfg.DataDir, ugcInboxName) }
+// inboxRoot 是待审文件的落点：默认 <数据目录>/inbox，可用 upload_inbox_dir 指到别的盘
+// （媒体库在外置盘时，指到同一个卷上，审核通过就一直是瞬时 rename 而不是跨卷复制）。
+func (s *Server) inboxRoot() string {
+	if dir := strings.TrimSpace(s.Cfg.UploadInboxDir); dir != "" {
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(s.Cfg.DataDir, ugcInboxName)
+}
+
+// inboxUnsafe 检查收件箱是不是落在"媒体允许根"里面 —— 那样扫描器会把待审文件当正式内容入库。
+// 配置错了只在启动时大声报一次，并退回默认位置（宁可慢一点，也不能让待审内容漏进库）。
+func (s *Server) inboxUnsafe() bool {
+	root := s.inboxRoot()
+	for _, allow := range s.Roots.List() {
+		if allow == "" {
+			continue
+		}
+		if media.Within(root, allow) {
+			return true
+		}
+	}
+	return false
+}
 
 // inboxPath 只用服务端生成的值拼路径：用户 id + 日期 + 清理过的文件名。
 func (s *Server) inboxPath(uploaderID, name string) (string, error) {
@@ -506,6 +528,8 @@ type ugcApproveReq struct {
 	Title string `json:"title"`
 	// Transcode 可选：通过后顺手排队转码（P1 兼容优先，原文件在转码成功前一直是可播的）。
 	Transcode bool `json:"transcode"`
+	// TranscodeHeight：转码输出高度上限（0=保持原分辨率；2026-09-24 起界面可选尺寸）。
+	TranscodeHeight int `json:"transcode_height"`
 }
 
 // HandleAdminApproveUpload 通过：把文件从 inbox 移进选定的媒体库并登记 media（立刻可播）。
@@ -571,9 +595,10 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 	out := map[string]any{"media_id": mediaID, "library_id": lib.ID,
 		"path": dest, "title": title}
 	// 顺手转码：排队失败不影响"已经通过"这个事实，如实把错误一起带回去。
-	if req.Transcode && s.Transcodes != nil {
+	if req.Transcode && s.Transcodes != nil && transcodeHeightOK(req.TranscodeHeight) {
 		jobID, terr := s.Transcodes.Enqueue([]transcode.Item{
-			{MediaID: mediaID, Source: domain.JobTriggerUploadApprove}},
+			{MediaID: mediaID, Source: domain.JobTriggerUploadApprove,
+				MaxHeight: req.TranscodeHeight}},
 			domain.JobTriggerUploadApprove)
 		if terr != nil {
 			out["transcode_error"] = terr.Error()

@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"path/filepath"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -24,7 +25,7 @@ import (
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.1.28-mvp"
+var Version = "0.1.29-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {
@@ -78,6 +79,14 @@ func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Mana
 	roots *config.Roots, r ffmpeg.Runner, log *slog.Logger) *Server {
 	s := &Server{Cfg: cfg, DB: db, Auth: a, Tasks: t, Roots: roots, Runner: r, Log: log,
 		Uploads: newUploadStore(), StartedAt: time.Now()}
+	// 收件箱配错（落在媒体允许根里）就退回默认位置并大声报错：不能让待审文件被扫描器入库。
+	if s.inboxUnsafe() {
+		s.Log.Error("upload_inbox_dir 落在媒体允许根内，已退回默认收件箱",
+			"configured", cfg.UploadInboxDir, "fallback", filepath.Join(cfg.DataDir, "inbox"))
+		cfg.UploadInboxDir = ""
+	} else if cfg.UploadInboxDir != "" {
+		s.Log.Info("用户上传收件箱", "dir", s.inboxRoot())
+	}
 	s.Transcodes = transcode.NewQueue(cfg, db, roots, r, log)
 	// 范围判据只在这里构造（scopeAll 是唯一构造点）：转码队列拿到的永远是"能查到的这条"。
 	s.Transcodes.LoadMedia = func(id string) (*domain.Media, error) {

@@ -16,22 +16,22 @@ func TestBuildPlanDecidesRemuxVsTranscode(t *testing.T) {
 		mustNot  []string
 	}{
 		{
-			name: "HEVC + AC3 竖屏 → 重编视频与音频",
-			opts: Options{VideoCodec: "hevc", AudioCodec: "ac3", Height: 1280, Out: base.Out},
+			name: "HEVC + AC3 → 重编视频与音频（选 720p 上限）",
+			opts: Options{VideoCodec: "hevc", AudioCodec: "ac3", Height: 1280, MaxHeight: 720, Out: base.Out},
 			wantMode: "transcode",
 			mustHave: []string{"libx264", "aac", "scale=-2:'min(720,ih)'", "+faststart"},
 		},
 		{
 			name: "有 videotoolbox 就用硬件编码（码率模式，不是 crf）",
-			opts: Options{VideoCodec: "hevc", AudioCodec: "aac", Height: 1080,
+			opts: Options{VideoCodec: "hevc", AudioCodec: "aac", Height: 1080, MaxHeight: 720,
 				VideoToolbox: true, Out: base.Out},
 			wantMode: "transcode",
 			mustHave: []string{"h264_videotoolbox", "-b:v"},
 			mustNot:  []string{"libx264", "-crf"},
 		},
 		{
-			name:     "H.264+AAC 且 ≤720p → 只换容器（-c copy）",
-			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 640, Out: base.Out},
+			name:     "H.264+AAC 且不缩尺寸 → 只换容器（-c copy）",
+			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 1080, MaxHeight: 0, Out: base.Out},
 			wantMode: "remux",
 			mustHave: []string{"-c", "copy"},
 			mustNot:  []string{"libx264", "-crf"},
@@ -44,16 +44,31 @@ func TestBuildPlanDecidesRemuxVsTranscode(t *testing.T) {
 			mustNot:  []string{"libx264"},
 		},
 		{
-			name:     "720p 以上即使 H.264 也要缩到 720",
-			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 1080, Out: base.Out},
+			name:     "选了 720p 上限：1080p 的 H.264 也要缩",
+			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 1080, MaxHeight: 720, Out: base.Out},
 			wantMode: "transcode",
 			mustHave: []string{"libx264", "scale=-2:'min(720,ih)'"},
+		},
+		{
+			name: "源码率更低时按源来 —— 不许把已压过的重编大（用户 2026-09-24 报障）",
+			opts: Options{VideoCodec: "hevc", AudioCodec: "aac", Height: 1080, MaxHeight: 720,
+				SourceBitrate: 300000, Out: base.Out},
+			wantMode: "transcode",
+			mustHave: []string{"-b:v 300k", "-maxrate 450k", "-bufsize 600k"},
+			mustNot:  []string{"2500k", "4500k", "-crf"},
+		},
+		{
+			name: "源没给码率就按档位上限（480p → 1200kbps 上限）",
+			opts: Options{VideoCodec: "mpeg4", AudioCodec: "aac", Height: 480, MaxHeight: 480, Out: base.Out},
+			wantMode: "transcode",
+			mustHave: []string{"scale=trunc(iw/2)*2:trunc(ih/2)*2", "-maxrate 1200k"},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			plan := BuildPlan(Options{In: base.In, VideoCodec: c.opts.VideoCodec,
 				AudioCodec: c.opts.AudioCodec, Height: c.opts.Height,
+				MaxHeight: c.opts.MaxHeight, SourceBitrate: c.opts.SourceBitrate,
 				DurationMS: 60000, VideoToolbox: c.opts.VideoToolbox, Out: base.Out})
 			if plan.Mode != c.wantMode {
 				t.Fatalf("mode = %s，期望 %s（args=%v）", plan.Mode, c.wantMode, plan.Args)

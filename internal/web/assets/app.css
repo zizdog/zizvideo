@@ -133,19 +133,18 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .ov-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .ov-title {
   color: #fff; font-size: 15px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.8);
-  max-width: 64%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 83%; overflow: hidden; text-overflow: ellipsis;
 }
 /* 抖音式右侧竖排操作栏：右下角、竖向排列（用户 2026-09-22 要求） */
 .ov-rail {
-  /* 用户 2026-09-24：图标栏**再靠右**（2px）、纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
+  /* 纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
   position: absolute; z-index: 7; right: 0;
   bottom: calc(84px + var(--sab));
   display: flex; flex-direction: column; align-items: center; gap: 0;
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
-/* 抖音式图标栏（用户 2026-09-23："参考抖音的图标样式，字符图标太难看"）：
-   实心矢量、无圆圈底、白图标 + 投影；选中/点亮变强调色（像抖音点赞变红）。 */
+/* 实心矢量、无圆圈底、白图标 + 投影；选中/点亮变强调色（像抖音点赞变红）。 */
 .icon-btn {
   width: 54px; height: 54px; padding: 0; line-height: 0; cursor: pointer;
   border: 0; background: transparent; color: #fff;

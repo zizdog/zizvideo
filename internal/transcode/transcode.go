@@ -40,6 +40,12 @@ type Options struct {
 	AudioCodec string
 	Height     int
 	DurationMS int64
+	// MaxHeight 是**输出高度上限**（用户 2026-09-24："转码应可以选择尺寸，很多视频本身已经
+	// 压缩到极限了，想再压缩只能画面缩小"）。0 = 不缩放（保持原分辨率）。
+	MaxHeight int
+	// SourceBitrate 是源文件码率（bps）。用来定"目标码率不超过源" —— 否则会把已经压到
+	// 极限的小文件重新编大（用户实测：转完体积反而大很多，那就没意义了）。
+	SourceBitrate int64
 	// VideoToolbox：本机 ffmpeg 有 h264_videotoolbox（Mac 上硬件编码，快很多）。
 	VideoToolbox bool
 }
@@ -51,12 +57,50 @@ type Plan struct {
 	Note string
 }
 
-func needsVideoReencode(codec string, height int) bool {
+// targetHeight 是这次的目标高度上限：MaxHeight=0 表示不缩放（sources 多高就多高）。
+func targetHeight(o Options) int {
+	if o.MaxHeight > 0 {
+		return o.MaxHeight
+	}
+	return 0
+}
+
+func needsVideoReencode(codec string, height, maxHeight int) bool {
 	switch strings.ToLower(codec) {
 	case "h264", "avc1":
-		return height > maxHeight
+		return maxHeight > 0 && height > maxHeight
 	}
 	return true
+}
+
+// bitrateCap 按目标高度给一个"够看但不浪费"的码率上限（H.264 的常见经验值）。
+func bitrateCap(height int) int64 {
+	switch {
+	case height <= 0:
+		return 2500_000
+	case height <= 240:
+		return 400_000
+	case height <= 360:
+		return 700_000
+	case height <= 480:
+		return 1_200_000
+	case height <= 720:
+		return 2_500_000
+	case height <= 1080:
+		return 4_500_000
+	default:
+		return 6_000_000
+	}
+}
+
+// pickBitrate：目标码率取 min(上限, 源码率) —— 源码率更低就按源来（不再编大）；
+// 源码率未知（0）才用上限。
+func pickBitrate(o Options, outHeight int) int64 {
+	cap := bitrateCap(outHeight)
+	if o.SourceBitrate > 0 && o.SourceBitrate < cap {
+		return o.SourceBitrate
+	}
+	return cap
 }
 
 func needsAudioReencode(codec string) bool {
@@ -70,8 +114,16 @@ func needsAudioReencode(codec string) bool {
 // BuildPlan 决定"重编还是只换容器"，并给出可复现的 ffmpeg 参数。
 // 判据只看编解码与分辨率，**不看浏览器 UA**（服务端不该为某个客户端做决定）。
 func BuildPlan(o Options) Plan {
-	video := needsVideoReencode(o.VideoCodec, o.Height)
+	maxH := targetHeight(o)
+	outHeight := o.Height
+	if maxH > 0 && (outHeight <= 0 || outHeight > maxH) {
+		outHeight = maxH
+	}
+	video := needsVideoReencode(o.VideoCodec, o.Height, maxH)
 	audio := needsAudioReencode(o.AudioCodec)
+	if outHeight <= 0 {
+		outHeight = maxHeight // 分辨率未知：按 720p 的目标码率上限来
+	}
 
 	args := []string{"-nostdin", "-y", "-i", o.In}
 	note := ""
@@ -84,27 +136,45 @@ func BuildPlan(o Options) Plan {
 		args = append(args, audioArgs()...)
 		note = "视频已兼容（H.264），只重编音频为 AAC"
 	default:
-		args = append(args, videoArgs(o.VideoToolbox, o.Height)...)
+		bitrate := pickBitrate(o, outHeight)
+		// 源码率比档位上限还低 ⇒ 走 ABR 贴着源码率编（CRF 可能反而编大，用户实测过"转完更大"）。
+		abr := o.SourceBitrate > 0 && o.SourceBitrate < bitrateCap(outHeight)
+		args = append(args, videoArgs(o.VideoToolbox, o.Height, maxH, bitrate, abr)...)
 		if audio {
 			args = append(args, audioArgs()...)
 		} else {
 			args = append(args, "-c:a", "copy")
 		}
-		note = "转成 H.264" + toolNote(o.VideoToolbox) + " + AAC，" + heightNote(o.Height) + " 封顶"
+		note = "转成 H.264" + toolNote(o.VideoToolbox) + " + AAC，" + heightNote2(o.Height, maxH, outHeight) +
+			"·" + fmt.Sprintf("%dkbps", bitrate/1000) + " 封顶"
 	}
 	args = append(args, "-movflags", "+faststart", "-f", "mp4",
 		"-progress", "pipe:1", "-nostats", o.Out)
 	return Plan{Args: args, Mode: map[bool]string{true: "transcode", false: "remux"}[video], Note: note}
 }
 
+// heightNote2 把"源 → 目标"说清楚（界面/记录里要看得懂为什么变小了）。
+func heightNote2(srcHeight, maxH, outHeight int) string {
+	if srcHeight <= 0 {
+		if maxH > 0 {
+			return fmt.Sprintf("≤%dp", maxH)
+		}
+		return "保持原分辨率"
+	}
+	if maxH <= 0 {
+		return fmt.Sprintf("%dp（保持原分辨率）", srcHeight)
+	}
+	if srcHeight <= maxH {
+		return fmt.Sprintf("%dp（不缩）", srcHeight)
+	}
+	return fmt.Sprintf("%dp→%dp", srcHeight, outHeight)
+}
+
 func heightNote(h int) string {
 	if h <= 0 {
 		return "分辨率未知"
 	}
-	if h <= maxHeight {
-		return fmt.Sprintf("%dp", h)
-	}
-	return fmt.Sprintf("%dp→%dp", h, maxHeight)
+	return fmt.Sprintf("%dp", h)
 }
 
 func toolNote(vt bool) string {
@@ -114,23 +184,35 @@ func toolNote(vt bool) string {
 	return ""
 }
 
-// videoArgs：videotoolbox 不吃 -crf，用码率；libx264 用 crf + veryfast（个人库够快够好）。
-func videoArgs(vt bool, height int) []string {
-	out := []string{"-vf", scaleFilter(height)}
-	if vt {
-		out = append(out, "-c:v", "h264_videotoolbox", "-b:v", "2500k", "-maxrate", "3500k", "-bufsize", "7000k")
-	} else {
-		out = append(out, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23")
+// videoArgs：videotoolbox 不吃 -crf（一律 ABR）；libx264 平时 CRF + 码率上限，
+// 但源码率更低时（abr=true）也走 ABR —— 否则会把已经压到极限的小文件重编大。
+func videoArgs(vt bool, height, maxHeight int, bitrate int64, abr bool) []string {
+	out := []string{"-vf", scaleFilter(height, maxHeight)}
+	kbps := fmt.Sprintf("%dk", bitrate/1000)
+	switch {
+	case abr || vt:
+		codec := "libx264"
+		if vt {
+			codec = "h264_videotoolbox"
+		}
+		out = append(out, "-c:v", codec, "-b:v", kbps,
+			"-maxrate", fmt.Sprintf("%dk", bitrate*3/2000), "-bufsize", fmt.Sprintf("%dk", bitrate/500))
+		if !vt {
+			out = append(out, "-preset", "veryfast")
+		}
+	default:
+		out = append(out, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+			"-maxrate", kbps, "-bufsize", fmt.Sprintf("%dk", bitrate/500))
 	}
 	return append(out, "-pix_fmt", "yuv420p")
 }
 
-// scaleFilter 只降不升：高度超过 720 才缩，宽度按比例取偶数（编码器要求偶数）。
-func scaleFilter(height int) string {
-	if height <= maxHeight {
-		return "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+// scaleFilter 只降不升：给了上限且源更高才缩，宽高都取偶数（编码器要求偶数）。
+func scaleFilter(height, maxHeight int) string {
+	if maxHeight > 0 && height > maxHeight {
+		return fmt.Sprintf("scale=-2:'min(%d,ih)'", maxHeight)
 	}
-	return "scale=-2:'min(720,ih)'"
+	return "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 }
 
 func audioArgs() []string {
@@ -142,6 +224,8 @@ type Item struct {
 	MediaID string
 	// Source 是触发来源（upload_approve / manual_media），只用于审计与任务说明。
 	Source string
+	// MaxHeight 是这次转码的输出高度上限（0 = 保持原分辨率）。管理员在界面上选尺寸（用户 2026-09-24）。
+	MaxHeight int
 }
 
 // Queue 是单工作协程的转码队列：转码吃满 CPU/GPU，串行才是对的。
@@ -308,10 +392,12 @@ func (q *Queue) one(ctx context.Context, jobID string, item Item) outcome {
 	}
 	plan := BuildPlan(Options{In: m.Path, Out: m.Path + tempSuffix, VideoCodec: m.Codecs.Video,
 		AudioCodec: m.Codecs.Audio, Height: m.Height, DurationMS: m.DurationMS,
+		MaxHeight: item.MaxHeight, SourceBitrate: m.Bitrate,
 		VideoToolbox: q.VideoToolbox})
 
 	_ = q.db.SetMediaTranscode(m.ID, domain.TranscodeRunning, plan.Note)
 	tmp := m.Path + tempSuffix
+	beforeSize := fileSizeOf(m.Path)
 	_ = os.Remove(tmp)
 	started := time.Now()
 	err = ffmpeg.RunStreaming(ctx, q.runner, func(line string) {
@@ -345,10 +431,43 @@ func (q *Queue) one(ctx context.Context, jobID string, item Item) outcome {
 		_ = q.db.SetMediaTranscode(m.ID, domain.TranscodeDone, plan.Note+"；重新探测失败，请手动扫描")
 		return outcome{Kind: "done", Text: m.Title + "：已转码（重新探测失败）"}
 	}
-	note := plan.Note + fmt.Sprintf("；耗时 %s", shortDuration(time.Since(started)))
+	note := plan.Note + sizeNote(beforeSize, fileSizeOf(m.Path)) +
+		fmt.Sprintf("；耗时 %s", shortDuration(time.Since(started)))
 	_ = q.db.SetMediaTranscode(m.ID, domain.TranscodeDone, note)
 	q.log.Info("转码完成", "media", m.ID, "mode", plan.Mode, "elapsed", time.Since(started).String())
 	return outcome{Kind: "done", Text: m.Title + "：" + note}
+}
+
+// sizeNote 如实报告体积变化（用户 2026-09-24："转完反而变大就没意义"）。
+func sizeNote(before, after int64) string {
+	if before <= 0 || after <= 0 {
+		return ""
+	}
+	delta := after - before
+	pct := float64(delta) * 100 / float64(before)
+	if delta < 0 {
+		return fmt.Sprintf("；体积 %s→%s（小 %.0f%%）", mb(before), mb(after), -pct)
+	}
+	return fmt.Sprintf("；体积 %s→%s（大 %.0f%%）", mb(before), mb(after), pct)
+}
+
+// mb 按量级选单位：小文件别显示成 0.0MB（自测时踩到，等于什么也没说）。
+func mb(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2fGB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%.0fKB", float64(n)/(1<<10))
+	}
+}
+
+func fileSizeOf(path string) int64 {
+	if st, err := os.Stat(path); err == nil {
+		return st.Size()
+	}
+	return 0
 }
 
 func (q *Queue) libraryRoot(libraryID string) string {

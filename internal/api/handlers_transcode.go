@@ -14,6 +14,17 @@ import (
 
 type transcodeReq struct {
 	MediaIDs []string `json:"media_ids"`
+	// MaxHeight 输出高度上限：0=保持原分辨率，其它常见 720/480/360（用户 2026-09-24 要能选尺寸）。
+	MaxHeight int `json:"max_height"`
+}
+
+// transcodeHeightOK：只接受 0（原样）与几个常用档位，别让任意数字进来。
+func transcodeHeightOK(h int) bool {
+	switch h {
+	case 0, 240, 360, 480, 720, 1080:
+		return true
+	}
+	return false
 }
 
 // HandleStartTranscode 排队转码：一次最多 dirImportMaxFiles 条（与批量识别同口径）。
@@ -26,6 +37,10 @@ func (s *Server) HandleStartTranscode(w http.ResponseWriter, r *http.Request) {
 	if len(req.MediaIDs) == 0 || len(req.MediaIDs) > dirImportMaxFiles {
 		s.fail(w, r, domain.New("VALIDATION_TRANSCODE",
 			"请选择 1-"+strconv.Itoa(dirImportMaxFiles)+" 个媒体", 400))
+		return
+	}
+	if !transcodeHeightOK(req.MaxHeight) {
+		s.fail(w, r, domain.New("VALIDATION_TRANSCODE_HEIGHT", "不支持的转码尺寸", 400))
 		return
 	}
 	if s.Transcodes == nil {
@@ -45,7 +60,8 @@ func (s *Server) HandleStartTranscode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[id] = true
-		items = append(items, transcode.Item{MediaID: id, Source: domain.JobTriggerManualMedia})
+		items = append(items, transcode.Item{MediaID: id, Source: domain.JobTriggerManualMedia,
+			MaxHeight: req.MaxHeight})
 	}
 	if len(items) == 0 {
 		s.fail(w, r, domain.New("VALIDATION_TRANSCODE", "没有有效的媒体 id", 400))
@@ -57,5 +73,6 @@ func (s *Server) HandleStartTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "media.transcode", "job:"+jobID, true, "media:"+strconv.Itoa(len(items)))
-	respond(w, http.StatusAccepted, map[string]any{"job_id": jobID, "total": len(items)}, nil)
+	respond(w, http.StatusAccepted, map[string]any{"job_id": jobID, "total": len(items),
+		"max_height": req.MaxHeight}, nil)
 }

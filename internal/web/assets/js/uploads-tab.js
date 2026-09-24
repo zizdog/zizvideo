@@ -25,6 +25,29 @@ export function mountUploadsTab(root) {
     } catch (err) { libraries = []; }
   }
 
+  // 每个上传者能访问的库（缓存）：审核通过后视频要进"上传者自己也能看到"的库，
+  // 否则会出现"自己传的、审核过了、自己看不见"。用户 2026-09-24 明确要求这么筛。
+  const accessCache = new Map();
+  async function uploaderLibraries(item) {
+    const uid = item.uploader_id || "";
+    if (!uid) return { list: libraries, note: "" };
+    if (accessCache.has(uid)) return accessCache.get(uid);
+    let result = { list: libraries, note: "" };
+    try {
+      const data = await api.userLibraries(uid);
+      const ids = new Set((data && data.library_ids) || []);
+      const mine = libraries.filter((lib) => ids.has(String(lib.id)));
+      if (mine.length) {
+        result = { list: mine, note: "只列出 " + (item.uploader || "该用户") + " 能访问的库（" + mine.length + " 个）" };
+      } else {
+        // 没授权（普通用户 0 授权 = 什么都看不到）：如实说明，并把全部库留一个出口给管理员。
+        result = { list: libraries, note: (item.uploader || "该用户") + " 还没有可访问的媒体库，先到「用户」页授权（下面列出全部库）" };
+      }
+    } catch (err) { /* 读不到授权就退回全部库，但不说成"已按权限筛选" */ }
+    accessCache.set(uid, result);
+    return result;
+  }
+
   // 转码任务进度（复用任务中心 /admin/tasks/{id} 的 percent）
   let transcodeTimer = 0;
   function pollTranscode(jobId) {
@@ -66,7 +89,7 @@ export function mountUploadsTab(root) {
         listBox.append(el("div", { class: "muted", text: "没有待审的上传" }));
         return;
       }
-      for (const item of list) listBox.append(rowFor(item));
+      for (const item of list) listBox.append(await rowFor(item));
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "加载失败");
     }
@@ -88,14 +111,26 @@ export function mountUploadsTab(root) {
     document.body.append(overlay);
   }
 
-  function rowFor(item) {
+  // 转码尺寸（用户 2026-09-24）：很多源已经压到极限，再压只能缩画面。
+  function sizeSelect(role) {
+    return el("select", { class: "input", dataset: { role } },
+      ...[["", "保持原分辨率"], ["720", "720p"], ["480", "480p"], ["360", "360p"], ["240", "240p"]]
+        .map(([value, label]) => el("option", { value, text: label })));
+  }
+
+  async function rowFor(item) {
     const cover = el("img", {
       class: "upload-cover", alt: "",
       src: "/api/v1/uploads/" + encodeURIComponent(item.id) + "/cover",
       onclick: () => preview(item),
     });
+    const access = await uploaderLibraries(item);
     const libSelect = el("select", { class: "input", dataset: { role: "pending-library" } });
-    for (const lib of libraries) libSelect.append(el("option", { value: lib.id, text: lib.name }));
+    for (const lib of access.list) libSelect.append(el("option", { value: lib.id, text: lib.name }));
+    const accessNote = access.note
+      ? el("div", { class: "muted small-note", dataset: { role: "pending-libs-note" }, text: access.note })
+      : null;
+    const tSize = sizeSelect("pending-transcode-size");
     const titleInput = el("input", { class: "input", placeholder: "标题（可改）", value: item.title || "" });
     const approve = el("button", { class: "btn primary small", type: "button", text: "通过并入库",
       dataset: { role: "pending-approve" } });
@@ -119,7 +154,8 @@ export function mountUploadsTab(root) {
       approveTranscode.disabled = true;
       try {
         const data = await api.approveUpload(item.id, { library_id: libSelect.value,
-          title: titleInput.value.trim(), transcode: true });
+          title: titleInput.value.trim(), transcode: true,
+          transcode_height: Number(tSize.value) || 0 });
         await reload();
         if (data && data.transcode_error) setBanner(note, "已通过，但转码没排上：" + data.transcode_error);
         else if (data && data.transcode_job_id) pollTranscode(data.transcode_job_id);
@@ -152,7 +188,8 @@ export function mountUploadsTab(root) {
         el("div", { class: "upload-name" }, el("span", { text: item.name }),
           el("span", { class: "muted small-note", text: " " + fmtBytes(item.size) })),
         el("div", { class: "muted small-note", text: "上传者 " + (item.uploader || "-") + " · " + fmtDate(item.created_at) }),
-        el("div", { class: "row" }, libSelect, titleInput),
+        el("div", { class: "row" }, libSelect, titleInput, tSize),
+        accessNote,
         el("div", { class: "actions" }, approve, approveTranscode, reject)));
   }
 

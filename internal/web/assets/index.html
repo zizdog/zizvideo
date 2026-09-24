@@ -6,6 +6,11 @@
 <!-- 只有暗色（用户 2026-09-24："去掉亮色，只保留暗色。同抖音。"）：别跟随系统浅色 -->
 <meta name="color-scheme" content="dark">
 <title>Zizvideo</title>
+<!-- favicon：文件放在 internal/web/assets/ 下（会一起嵌进二进制，改完要重建二进制）。
+     现在放的是占位 SVG；你有自己的图就直接覆盖 favicon.svg，
+     或者放 favicon.png / apple-touch-icon.png（180×180）再把下面两行换成对应文件名。 -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- <link rel="apple-touch-icon" href="/apple-touch-icon.png"> -->
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>

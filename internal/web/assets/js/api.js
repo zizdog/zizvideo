@@ -180,7 +180,9 @@ export const api = {
   systemInfo: () => request("GET", "/api/v1/admin/system/info"),
 
   // P1 转码队列：排队转码（进度看 jobTask）。
-  transcode: (mediaIds) => request("POST", "/api/v1/admin/transcodes", { media_ids: mediaIds }),
+  // maxHeight：输出高度上限（0/不传 = 保持原分辨率）
+  transcode: (mediaIds, maxHeight) =>
+    request("POST", "/api/v1/admin/transcodes", { media_ids: mediaIds, max_height: Number(maxHeight) || 0 }),
 
   // 自动扫描：读写设置 + 立即触发一轮（202 + task_ids，扫描仍走任务中心）。
   autoScan: () => request("GET", "/api/v1/admin/autoscan"),

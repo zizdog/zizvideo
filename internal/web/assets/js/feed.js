@@ -815,17 +815,36 @@ export function mountFeed(view, options = {}) {
   }
   function immersiveOn() { return full.rotated || full.native; }
 
+  // 清屏状态记在本机（用户 2026-09-24："右侧工具栏折叠样式加记忆功能"）：
+  // 下次进来、切条目都保持上次的选择，不用每次手点。
+  const CLEAN_KEY = "zv_clean";
+  function readCleanPref() {
+    try { return localStorage.getItem(CLEAN_KEY) === "on"; } catch (err) { return false; }
+  }
+  function writeCleanPref(on) {
+    try {
+      if (on) localStorage.setItem(CLEAN_KEY, "on");
+      else localStorage.removeItem(CLEAN_KEY);
+    } catch (err) { /* 隐私模式忽略 */ }
+  }
+  function applyClean(btn, on) {
+    feed.classList.toggle("clean", on);
+    if (!btn) return;
+    btn.title = on ? "显示图标" : "清屏播放";
+    // 清屏后显示**反向（向上）箭头**：换 expand 那种四角图标会被看成"箭头没了"（用户报障）
+    setIcon(btn, on ? "up" : "down");
+  }
+
   function cleanButton() {
     const btn = el("button", {
       class: "icon-btn rail-restore", type: "button", title: "清屏播放",
       dataset: { role: "rail-clean" },
     }, icon("down"));
+    applyClean(btn, readCleanPref()); // 进来就按记忆恢复
     btn.addEventListener("click", () => {
-      feed.classList.toggle("clean");
-      const on = feed.classList.contains("clean");
-      btn.title = on ? "显示图标" : "清屏播放";
-      // 清屏后显示**反向（向上）箭头**：换 expand 那种四角图标会被看成"箭头没了"（用户报障）
-      setIcon(btn, on ? "up" : "down");
+      const on = !feed.classList.contains("clean");
+      applyClean(btn, on);
+      writeCleanPref(on);
       showToast(on ? "已清屏，点箭头还原" : "已显示图标");
     });
     return btn;

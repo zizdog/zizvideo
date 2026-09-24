@@ -32,6 +32,12 @@ type Config struct {
 	// AssetsDir 只在调试时用（ZV_ASSETS_DIR）：设了就从磁盘读前端，改 CSS 刷新即可，
 	// 不用重新 go build（前端是 go:embed 的，正常路径必须重建才生效）。空 = 走内嵌。
 	AssetsDir string `json:"assets_dir"`
+	// UploadInboxDir 是用户上传的收件箱（待审文件的落点）。空 = <data_dir>/inbox。
+	// 为什么要能配：审核通过要把文件"移进媒体库"，同卷是瞬时 rename、跨卷要整份复制
+	// （又慢又占双份空间）。媒体库在外置盘（如 /Volumes/ZPMirror/video）时，
+	// 把收件箱也放到同一个卷上（如 /Volumes/ZPMirror/zv-inbox）就能一直是 rename。
+	// ⚠️ 不能放在任何"媒体允许根"里面：否则待审文件会被扫描器当成正式内容入库。
+	UploadInboxDir string `json:"upload_inbox_dir"`
 	TrustedProxies     []string `json:"trusted_proxies"`
 	SessionTTLHours    int      `json:"session_ttl_hours"`
 	LockoutThreshold   int      `json:"lockout_threshold"`
@@ -118,6 +124,7 @@ func applyEnv(c *Config) {
 	setStr(&c.FFprobeBin, "ZV_FFPROBE_BIN")
 	setStr(&c.LogLevel, "ZV_LOG_LEVEL")
 	setStr(&c.AssetsDir, "ZV_ASSETS_DIR")
+	setStr(&c.UploadInboxDir, "ZV_UPLOAD_INBOX_DIR")
 	setInt(&c.ScanWorkers, "ZV_SCAN_WORKERS")
 	setInt(&c.ProbeTimeoutSec, "ZV_PROBE_TIMEOUT_SECONDS")
 	setInt(&c.LockoutThreshold, "ZV_LOCKOUT_THRESHOLD")

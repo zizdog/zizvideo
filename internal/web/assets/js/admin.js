@@ -646,7 +646,8 @@ function mountMedia(root) {
         transcodeBtn.addEventListener("click", async () => {
           transcodeBtn.disabled = true;
           try {
-            const data = await api.transcode([item.id]);
+            const height = Number(transcodeSize.value) || 0;
+            const data = await api.transcode([item.id], height);
             setBanner(note, "");
             pollTranscode(data.job_id);
           } catch (err) {
@@ -675,8 +676,14 @@ function mountMedia(root) {
     }
   }
 
-  // 转码进度：任务中心里的 percent 就是"当前这一件"的百分比（转码是分钟级动作，得看得见）
+  // 转码进度：任务中心里的 percent 就是"当前这一件"的百分比（转码是分钟级动作，得看得见）。
+  // timers 是本页自己的定时器集合（原来忘了声明 ⇒ 点转码报 "Can't find variable: timers"）。
+  const timers = [];
   const transcodeInfo = el("div", { class: "muted small-note", dataset: { role: "transcode-progress" } });
+  // 转码尺寸（用户 2026-09-24）：很多视频已经压到极限，再压只能缩画面。
+  const transcodeSize = el("select", { class: "input", dataset: { role: "transcode-size" } },
+    ...[["", "保持原分辨率"], ["720", "720p 上限"], ["480", "480p 上限"], ["360", "360p 上限"], ["240", "240p 上限"]]
+      .map(([value, label]) => el("option", { value, text: label })));
   let transcodeTimer = 0;
   function pollTranscode(jobId) {
     if (transcodeTimer) clearInterval(transcodeTimer);
@@ -701,13 +708,17 @@ function mountMedia(root) {
       let text = (task.status === "success" ? "转码完成：" : "转码有失败：")
         + "成功 " + (Number(summary.succeeded) || 0) + " / 失败 " + (Number(summary.failed) || 0);
       if (task.error) text += "；" + task.error;
+      // 每条结论都带上"体积变化"（用户要看"到底压小没有"）
+      if (Array.isArray(summary.results) && summary.results.length) {
+        text += "（" + summary.results.join("；") + "）";
+      }
       transcodeInfo.textContent = text;
       refresh();
     }, 1200);
     timers.push(transcodeTimer);
   }
 
-  const filters = el("div", { class: "row" }, librarySelect, query, statusSelect);
+  const filters = el("div", { class: "row" }, librarySelect, query, statusSelect, transcodeSize);
   // 清理缺失记录（用户 2026-09-22 报障）：整库改名后缺失比例会超过扫描的自动删除阈值，
   // 自动路径按设计不删，必须给一个明确的、要确认的清理入口。只删记录、不动文件。
   const purgeBtn = el("button", {
@@ -745,6 +756,7 @@ function mountMedia(root) {
       transcodeInfo),
     el("div", { class: "actions" }, prev, next, info), table);
   loadLibraries().then(refresh);
+  return () => { for (const timer of timers) if (timer) clearInterval(timer); };
 }
 
 /* ---------- 用户可访问库（P3，整体替换 + 回读） ---------- */
