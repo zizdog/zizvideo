@@ -8,18 +8,49 @@
     android:background="#FF000000"
     android:orientation="vertical">
 
-    <!-- surface_type=texture_view：画中画（B4）要用 TextureView —— SurfaceView 在小窗里不参与合成
+    <!-- 画面 + 浮在上面的反馈（双击点赞的大拇指、长按快进的提示）。
+         surface_type=texture_view：画中画（B4）要用 TextureView —— SurfaceView 在小窗里不参与合成
          （实测 Android 15 模拟器：小窗起来了但画面全黑，换成 TextureView 才有画面）。 -->
-    <androidx.media3.ui.PlayerView
-        android:id="@+id/player"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        app:use_controller="true"
-        app:show_buffering="when_playing"
-        app:resize_mode="fit"
-        app:surface_type="texture_view"
-        xmlns:app="http://schemas.android.com/apk/res-auto" />
+        android:layout_weight="1">
+
+        <com.zizdog.zizvideo.GesturePlayerView
+            android:id="@+id/player"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:use_controller="true"
+            app:show_buffering="when_playing"
+            app:resize_mode="fit"
+            app:surface_type="texture_view"
+            xmlns:app="http://schemas.android.com/apk/res-auto" />
+
+        <!-- 双击点赞/取消的中央大拇指（与网页 .like-burst 同义） -->
+        <ImageView
+            android:id="@+id/likeBurst"
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:layout_gravity="center"
+            android:alpha="0"
+            android:contentDescription="点赞反馈"
+            android:src="@drawable/ic_thumb" />
+
+        <!-- 长按快进的提示（小窗里会跟着 chrome 一起收起） -->
+        <TextView
+            android:id="@+id/ffHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="16dp"
+            android:background="#99000000"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="4dp"
+            android:text="2× 快进中"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/chrome"
@@ -58,6 +89,16 @@
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="稍后再看"
                 android:src="@drawable/ic_clock" />
+
+            <!-- B5 倍速：点一下换一档（与网页同一个 user_prefs.playback_rate） -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/speed"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:minWidth="0dp"
+                android:contentDescription="倍速"
+                android:text="1×" />
 
             <!-- B4 画中画：缩成浮窗继续放，可以边刷别的（安卓 8+） -->
             <ImageButton

@@ -47,6 +47,21 @@ class PlayerActivity : AppCompatActivity() {
     private var controller: MediaController? = null
     private var resumed = false // 本条是从上次位置接着放的（标题上要标出来，与网页端同义）
 
+    // B5：倍速 / 长按快进 / 双击点赞（与网页同一套语义，倍速设置也共用服务端那份）
+    private lateinit var speedBtn: MaterialButton
+    private lateinit var likeBurst: android.widget.ImageView
+    private lateinit var ffHint: android.widget.TextView
+    private var speed = 1.0f
+    private var likedNow = false
+    private var ffTimer: Runnable? = null
+    private val ffHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    // 双击前的播放状态：控件条的点击可能顺手把播放/暂停翻了，双击达成时要还原（不然"点个赞把片子点了暂停"）
+    private var preTapPlaying = false
+    private var tapWindow = false
+    // 双击后要还原的播放状态（null=不用还原）：控件条把两次点击各翻了一次播放/暂停，
+    // 必须在**第二次抬手之后**还原，不然还原又被第二次点击翻回去（实测：双击会变成暂停）
+    private var restorePlaying: Boolean? = null
+
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 拒了也能放，只是没有通知 */ }
 
@@ -65,6 +80,12 @@ class PlayerActivity : AppCompatActivity() {
         laterBtn.setOnClickListener { toggle("later") }
         // B4 画中画：把播放页缩成浮窗（原生播放器继续放，退出页面也不停）
         findViewById<android.widget.ImageButton>(R.id.pip).setOnClickListener { enterPip() }
+        // B5 倍速：点一下换一档（0.5→0.75→1→1.25→1.5→2→0.5…），并写回服务端
+        speedBtn = findViewById(R.id.speed)
+        likeBurst = findViewById(R.id.likeBurst)
+        ffHint = findViewById(R.id.ffHint)
+        speedBtn.setOnClickListener { cycleSpeed() }
+        setupGestures()
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -100,6 +121,9 @@ class PlayerActivity : AppCompatActivity() {
                     refreshState(item?.mediaId ?: "")
                 }
             })
+            refreshState(c.currentMediaItem?.mediaId ?: "") // 监听器挂上前就设好的条目也要对齐
+            loadSpeed() // 服务端存着的倍速（网页改过也跟着）
+            c.setPlaybackSpeed(speed)
             if (kind == "feed") {
                 loadQueue(base, kind, "", c, query)     // 首页队列：没有"起点"，从头播
             } else if (kind.isNotEmpty() && mediaId.isNotEmpty()) {
@@ -114,6 +138,146 @@ class PlayerActivity : AppCompatActivity() {
             stopService(Intent(this, PlaybackService::class.java))
             finish()
         }
+    }
+
+    // ---------- B5 倍速 / 长按快进 / 双击点赞 ----------
+
+    private val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+
+    private fun trimNum(v: Float): String =
+        if (Math.abs(v - Math.round(v)) < 0.01f) Math.round(v).toString()
+        else String.format(java.util.Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
+
+    private fun speedLabel(v: Float): String =
+        if (Math.abs(v - 1f) < 0.01f) "1×" else trimNum(v) + "×"
+
+    private fun applySpeed(v: Float, persist: Boolean) {
+        speed = v
+        controller?.setPlaybackSpeed(v)
+        speedBtn.text = speedLabel(v)
+        Log.i("zv-speed", "rate=" + trimNum(v))
+        if (!persist) return
+        Thread {
+            val b = base()
+            val c = android.webkit.CookieManager.getInstance().getCookie(b) ?: return@Thread
+            ZvApi2.setPlaybackRate(b, c, v.toDouble())
+        }.start()
+    }
+
+    /** 进页面就读服务端的倍速（网页里改过，手机上跟着变）。 */
+    private fun loadSpeed() {
+        Thread {
+            val b = base()
+            val c = android.webkit.CookieManager.getInstance().getCookie(b) ?: return@Thread
+            val v = ZvApi2.playbackRate(b, c).toFloat()
+            runOnUiThread { if (v > 0.01f) applySpeed(v, false) }
+        }.start()
+    }
+
+    private fun cycleSpeed() {
+        val idx = speeds.indexOfFirst { Math.abs(it - speed) < 0.01f }
+        val next = speeds[(if (idx < 0) 2 else idx + 1) % speeds.size]
+        applySpeed(next, true)
+    }
+
+    /**
+     * 手势：按住画面 350ms ⇒ 2× 快进（松手回到设置的倍速）；双击 ⇒ 点赞/取消点赞。
+     * 监听器只**观察**触摸（返回 false），PlayerView 自己的控件/拖动条照常工作。
+     */
+    private fun setupGestures() {
+        val detector = android.view.GestureDetector(this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onDoubleTap(e: android.view.MotionEvent): Boolean {
+                    // 双击是"点赞手势"，不该顺带暂停：把双击前的播放状态记下来，等手势结束再还原
+                    val c = controller
+                    if (c != null && c.isPlaying != preTapPlaying) restorePlaying = preTapPlaying
+                    doubleTapLike()
+                    return true
+                }
+            })
+        // 观察层换成 GesturePlayerView.dispatchTouchEvent（见该类注释：控件条会吃掉触摸）
+        val gestureView = view as? GesturePlayerView
+        gestureView?.onGesture = { event ->
+            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                Log.i("zv-touch", "down " + event.x.toInt() + "," + event.y.toInt())
+            }
+            detector.onTouchEvent(event)
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    if (!tapWindow) {
+                        preTapPlaying = controller?.isPlaying ?: false
+                        tapWindow = true
+                        ffHandler.postDelayed({ tapWindow = false }, 320)
+                    }
+                    val r = Runnable {
+                        val c = controller ?: return@Runnable
+                        if (c.isPlaying) {
+                            c.setPlaybackSpeed(2f)
+                            ffHint.visibility = android.view.View.VISIBLE
+                            Log.i("zv-speed", "ff=on")
+                        }
+                    }
+                    ffTimer = r
+                    ffHandler.postDelayed(r, 350)
+                }
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    ffTimer?.let { ffHandler.removeCallbacks(it) }
+                    ffTimer = null
+                    if (ffHint.visibility == android.view.View.VISIBLE) {
+                        ffHint.visibility = android.view.View.GONE
+                        controller?.setPlaybackSpeed(speed)
+                        Log.i("zv-speed", "ff=off rate=" + trimNum(speed))
+                    }
+                    // 双击的手势结束后再还原播放状态（控件条在这两次点击里各翻了一次）
+                    val want = restorePlaying
+                    if (want != null) {
+                        restorePlaying = null
+                        ffHandler.postDelayed({
+                            val c = controller
+                            if (c != null && c.isPlaying != want) {
+                                if (want) c.play() else c.pause()
+                                Log.i("zv-like", "restore playing=" + want)
+                            }
+                        }, 180)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 双击 = 点赞开关（用户 2026-09-24：双击也能取消）。写接口与图标按钮是同一条。 */
+    private fun doubleTapLike() {
+        val id = currentId
+        Log.i("zv-like", "double-tap id=" + (if (id.isBlank()) "(空)" else id))
+        if (id.isBlank()) return
+        val willLike = !likedNow
+        burstLike(willLike)
+        Thread {
+            val b = base()
+            val c = android.webkit.CookieManager.getInstance().getCookie(b) ?: return@Thread
+            if (!ZvApi2.toggleLike(b, c, id, willLike)) return@Thread
+            val after = ZvApi2.state(b, c, id) ?: return@Thread
+            Log.i("zv-like", "like=" + after.liked)
+            runOnUiThread {
+                paintState(after, id)
+                android.widget.Toast.makeText(this,
+                    if (after.liked) "已喜欢" else "已取消喜欢", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }.start()
+    }
+
+    /** 中央大拇指动画：点赞是亮的，取消是灰的（与网页 .like-burst / .like-burst.off 同义）。 */
+    private fun burstLike(on: Boolean) {
+        likeBurst.setColorFilter(if (on) 0xFFFFFFFF.toInt() else 0xFFB9BEC6.toInt())
+        likeBurst.alpha = 0f
+        likeBurst.scaleX = 0.5f
+        likeBurst.scaleY = 0.5f
+        likeBurst.animate().cancel()
+        likeBurst.animate().alpha(1f).scaleX(1.15f).scaleY(1.15f).setDuration(140)
+            .withEndAction {
+                likeBurst.animate().alpha(0f).scaleX(1.4f).scaleY(1.4f).setDuration(320).start()
+            }.start()
     }
 
     /** B4：进小窗后把互动栏/标题/按钮都收起来 —— 小窗里只该有画面。 */
@@ -183,6 +347,7 @@ class PlayerActivity : AppCompatActivity() {
         val on = androidx.core.content.ContextCompat.getColor(this, R.color.zv_accent)
         val off = androidx.core.content.ContextCompat.getColor(this, android.R.color.white)
         favBtn.setColorFilter(if (st.favorite) on else off)
+        likedNow = st.liked
         likeBtn.setColorFilter(if (st.liked) on else off)
         laterBtn.setColorFilter(if (st.watchLater) on else off)
     }

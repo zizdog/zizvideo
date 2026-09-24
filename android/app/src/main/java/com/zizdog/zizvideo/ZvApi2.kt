@@ -111,6 +111,19 @@ object ZvApi2 {
         if (on) write(base, cookie, "POST", "/api/v1/media/" + enc(mediaId) + "/reactions", "{\"kind\":\"like\"}")
         else write(base, cookie, "DELETE", "/api/v1/media/" + enc(mediaId) + "/reactions", null)
 
+    /** B5：原生页也要跟着用户设置的倍速 —— 读的就是网页那份 user_prefs.playback_rate。 */
+    fun playbackRate(base: String, cookie: String): Double {
+        val data = ZvApi.get(base + "/api/v1/feed/settings", cookie).data() ?: return 1.0
+        val rate = data.optDouble("playback_rate", 1.0)
+        return if (rate > 0.01) rate else 1.0
+    }
+
+    /** 改倍速就写回服务端：网页与手机看到的是同一个设置（同一个 PATCH 接口）。 */
+    fun setPlaybackRate(base: String, cookie: String, rate: Double): Boolean {
+        val body = "{\"playback_rate\":" + String.format(java.util.Locale.US, "%.2f", rate) + "}"
+        return write(base, cookie, "PATCH", "/api/v1/feed/settings", body)
+    }
+
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
 
     private fun write(base: String, cookie: String, method: String, path: String, body: String?): Boolean {
