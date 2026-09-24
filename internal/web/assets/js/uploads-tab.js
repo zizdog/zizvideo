@@ -12,6 +12,7 @@ export function mountUploadsTab(root) {
   // 转码进度行放面板里：reload() 会清空 listBox，放在里面会被"通过后刷新"顺手清掉。
   const transcodeLine = el("div", { class: "muted small-note", dataset: { role: "transcode-progress" } });
   let libraries = [];
+  let seriesList = [];
 
   root.append(el("div", { class: "panel" },
     el("div", { class: "panel-title" }, el("span", { text: "待审上传" }), count),
@@ -23,6 +24,11 @@ export function mountUploadsTab(root) {
       const data = await api.libraries();
       libraries = (data && (data.list || data)) || [];
     } catch (err) { libraries = []; }
+    // 剧场草稿（P1）：通过时可以顺手归入一个剧场（已有 / 按标题新建）
+    try {
+      const data = await api.request("GET", "/api/v1/series");
+      seriesList = (data && Array.isArray(data.list)) ? data.list : [];
+    } catch (err) { seriesList = []; }
   }
 
   // 每个上传者能访问的库（缓存）：审核通过后视频要进"上传者自己也能看到"的库，
@@ -131,14 +137,35 @@ export function mountUploadsTab(root) {
       ? el("div", { class: "muted small-note", dataset: { role: "pending-libs-note" }, text: access.note })
       : null;
     const tSize = sizeSelect("pending-transcode-size");
+    // 归入剧场：不归入（默认）/ 现有剧场 / ＋新建剧场草稿（集号按文件名识别）
+    const seriesPick = el("select", { class: "input", dataset: { role: "pending-series" } },
+      el("option", { value: "", text: "不归入剧场" }),
+      ...seriesList.map((x) => el("option", { value: "id:" + x.id, text: "归入：" + (x.title || x.id) })),
+      el("option", { value: "new", text: "＋新建剧场草稿…" }));
+    const seriesName = el("input", { class: "input hidden", placeholder: "新剧场名（集号按文件名识别）",
+      dataset: { role: "pending-series-name" } });
+    seriesPick.addEventListener("change", () => {
+      seriesName.classList.toggle("hidden", seriesPick.value !== "new");
+    });
     const titleInput = el("input", { class: "input", placeholder: "标题（可改）", value: item.title || "" });
     const approve = el("button", { class: "btn primary small", type: "button", text: "通过并入库",
       dataset: { role: "pending-approve" } });
+    function seriesPayload() {
+      if (seriesPick.value === "new") {
+        const t = seriesName.value.trim();
+        return t ? { series_title: t } : null;
+      }
+      if (seriesPick.value.startsWith("id:")) return { series_id: seriesPick.value.slice(3) };
+      return {};
+    }
     approve.addEventListener("click", async () => {
       if (!libSelect.value) { setBanner(note, "先选一个媒体库"); return; }
+      if (seriesPick.value === "new" && !seriesName.value.trim()) { setBanner(note, "填一下新剧场名"); return; }
       approve.disabled = true;
       try {
-        await api.approveUpload(item.id, { library_id: libSelect.value, title: titleInput.value.trim() });
+        const payload = Object.assign({ library_id: libSelect.value, title: titleInput.value.trim() },
+          seriesPayload());
+        await api.approveUpload(item.id, payload);
         await reload();
       } catch (err) {
         setBanner(note, err && err.message ? err.message : "通过失败");
@@ -151,11 +178,12 @@ export function mountUploadsTab(root) {
       dataset: { role: "pending-approve-transcode" } });
     approveTranscode.addEventListener("click", async () => {
       if (!libSelect.value) { setBanner(note, "先选一个媒体库"); return; }
+      if (seriesPick.value === "new" && !seriesName.value.trim()) { setBanner(note, "填一下新剧场名"); return; }
       approveTranscode.disabled = true;
       try {
-        const data = await api.approveUpload(item.id, { library_id: libSelect.value,
-          title: titleInput.value.trim(), transcode: true,
-          transcode_height: Number(tSize.value) || 0 });
+        const data = await api.approveUpload(item.id, Object.assign({
+          library_id: libSelect.value, title: titleInput.value.trim(), transcode: true,
+          transcode_height: Number(tSize.value) || 0 }, seriesPayload()));
         await reload();
         if (data && data.transcode_error) setBanner(note, "已通过，但转码没排上：" + data.transcode_error);
         else if (data && data.transcode_job_id) pollTranscode(data.transcode_job_id);
@@ -189,6 +217,7 @@ export function mountUploadsTab(root) {
           el("span", { class: "muted small-note", text: " " + fmtBytes(item.size) })),
         el("div", { class: "muted small-note", text: "上传者 " + (item.uploader || "-") + " · " + fmtDate(item.created_at) }),
         el("div", { class: "row" }, libSelect, titleInput, tSize),
+        el("div", { class: "row" }, seriesPick, seriesName),
         accessNote,
         el("div", { class: "actions" }, approve, approveTranscode, reject)));
   }

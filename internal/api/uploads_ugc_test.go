@@ -292,3 +292,101 @@ func TestUGCWhitelistAndReviewFlow(t *testing.T) {
 		t.Fatalf("驳回后文件应该被删掉: %v", err)
 	}
 }
+
+// P1「剧场草稿」门禁：审核通过时可以顺手归入剧场 —— 已有剧场 id，或按标题找/建草稿；
+// 集号用**文件名识别**，并且批量乱序通过后要按 (season, episode) 重排（否则播放顺序是审核顺序）。
+func TestUGCApproveIntoSeriesDraft(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	libRoot := filepath.Join(e.Root, "draft-lib")
+	if err := os.MkdirAll(libRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib := e.newLibrary("草稿库", libRoot)
+	client, userID := e.ugcUser(t, "uploader")
+	// 这个测试只关心"归入剧场"，先把上传白名单开了（别的门禁在另一个测试里）
+	if res, _, raw := e.write(http.MethodPatch, "/api/v1/users/"+userID,
+		map[string]any{"can_upload": true}); res.StatusCode != http.StatusOK {
+		t.Fatalf("开白名单失败 %d: %s", res.StatusCode, raw)
+	}
+
+	send := func(name string) string {
+		t.Helper()
+		// 内容按文件名派生：既满足"声明大小 = 实发字节"，又让每个文件内容不同（避开内容去重）
+		body := []byte("zv-" + name)
+		res, start, raw := e.ugcStart(t, client, name, len(body))
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("开会话失败 %d: %s", res.StatusCode, raw)
+		}
+		id := start.Item.ID
+		if p, b := e.uploadRaw(t, client, http.MethodPut, "/api/v1/uploads/"+id, body, nil); p.StatusCode != http.StatusOK {
+			t.Fatalf("上传失败 %d: %s", p.StatusCode, b)
+		}
+		if r, _, b := e.writeAs(client, http.MethodPost, "/api/v1/uploads/"+id+"/finish", nil); r.StatusCode != http.StatusOK {
+			t.Fatalf("定稿失败 %d: %s", r.StatusCode, b)
+		}
+		return id
+	}
+	approve := func(id string, body map[string]any) map[string]any {
+		t.Helper()
+		res, env, raw := e.write(http.MethodPost, "/api/v1/admin/uploads/"+id+"/approve", body)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("通过失败 %d: %s", res.StatusCode, raw)
+		}
+		var out map[string]any
+		decodeInto(t, env.Data, &out)
+		return out
+	}
+
+	// 先通过"第 2 集"，再通过"第 1 集"：都归入同一个新建草稿 ⇒ 顺序必须被改成 1、2。
+	second := send("我的短剧 第2集.mp4")
+	got := approve(second, map[string]any{"library_id": lib.ID, "series_title": "我的短剧"})
+	seriesID, _ := got["series_id"].(string)
+	if seriesID == "" {
+		t.Fatalf("通过时没建出剧场草稿: %+v", got)
+	}
+	first := send("我的短剧 第1集.mp4")
+	got2 := approve(first, map[string]any{"library_id": lib.ID, "series_title": "我的短剧"})
+	if got2["series_id"] != seriesID {
+		t.Fatalf("同名剧场应复用，实际 %v ≠ %s", got2["series_id"], seriesID)
+	}
+
+	eps, _, err := e.DB.ListSeriesEpisodes(domain.LibraryScope{All: true}, seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 2 {
+		t.Fatalf("剧场里应有 2 集，实际 %d", len(eps))
+	}
+	// 顺序 = 第1集、第2集（按识别出的集号重排过），而不是审核顺序（2 在前）
+	if eps[0].Episode == nil || *eps[0].Episode != 1 || eps[1].Episode == nil || *eps[1].Episode != 2 {
+		t.Fatalf("集号识别不对：%+v / %+v", eps[0].Episode, eps[1].Episode)
+	}
+	items, err := e.DB.GetSeries(seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items.EpisodeCount != 2 || items.LibraryID != lib.ID {
+		t.Fatalf("剧场草稿状态不对: %+v", items)
+	}
+	episodes, _, err := e.DB.ListSeriesEpisodes(domain.LibraryScope{All: true}, seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if episodes[0].MediaID == episodes[1].MediaID {
+		t.Fatal("两集不该是同一条 media")
+	}
+	// 明确给了 series_id 时也要能挂进去
+	third := send("我的短剧 第3集.mp4")
+	got3 := approve(third, map[string]any{"library_id": lib.ID, "series_id": seriesID})
+	if got3["series_id"] != seriesID {
+		t.Fatalf("显式 series_id 应挂同一个剧场: %+v", got3)
+	}
+	eps3, _, err := e.DB.ListSeriesEpisodes(domain.LibraryScope{All: true}, seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps3) != 3 || eps3[2].Episode == nil || *eps3[2].Episode != 3 {
+		t.Fatalf("第三集应排到最后：%+v", eps3[2])
+	}
+}

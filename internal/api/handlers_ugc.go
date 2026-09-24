@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sort"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/zizdog/zizvideo/internal/domain"
 	"github.com/zizdog/zizvideo/internal/media"
+	"github.com/zizdog/zizvideo/internal/storage"
 	"github.com/zizdog/zizvideo/internal/transcode"
 )
 
@@ -530,6 +532,10 @@ type ugcApproveReq struct {
 	Transcode bool `json:"transcode"`
 	// TranscodeHeight：转码输出高度上限（0=保持原分辨率；2026-09-24 起界面可选尺寸）。
 	TranscodeHeight int `json:"transcode_height"`
+	// SeriesID：通过后把这条挂进已有剧场；SeriesTitle：按标题找/建"剧场草稿"（P1）。
+	// 集号用文件名识别（detect.EpisodesFor），所以"我的剧 第2集.mp4"会直接成为第 2 集。
+	SeriesID    string `json:"series_id"`
+	SeriesTitle string `json:"series_title"`
 }
 
 // HandleAdminApproveUpload 通过：把文件从 inbox 移进选定的媒体库并登记 media（立刻可播）。
@@ -590,10 +596,17 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 		s.fail(w, r, domain.New("UPLOAD_STATE_INVALID", "这条上传已经被别人审过了", 409))
 		return
 	}
-	s.audit(r, "upload.ugc.approve", "upload:"+it.ID, true,
-		fmt.Sprintf("media:%s library:%s transcode:%v", mediaID, lib.ID, req.Transcode))
 	out := map[string]any{"media_id": mediaID, "library_id": lib.ID,
 		"path": dest, "title": title}
+	// P1：顺手归入剧场（已有 or 按标题新建的草稿）。失败只如实带回错误，不影响"已经通过"这件事。
+	if seriesID, serr := s.linkApprovedSeries(r, req, lib, mediaID); serr != nil {
+		out["series_error"] = serr.Error()
+	} else if seriesID != "" {
+		out["series_id"] = seriesID
+	}
+	s.audit(r, "upload.ugc.approve", "upload:"+it.ID, true,
+		fmt.Sprintf("media:%s library:%s transcode:%v series:%v",
+			mediaID, lib.ID, req.Transcode, out["series_id"]))
 	// 顺手转码：排队失败不影响"已经通过"这个事实，如实把错误一起带回去。
 	if req.Transcode && s.Transcodes != nil && transcodeHeightOK(req.TranscodeHeight) {
 		jobID, terr := s.Transcodes.Enqueue([]transcode.Item{
@@ -607,6 +620,101 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 		}
 	}
 	respond(w, http.StatusOK, out, nil)
+}
+
+// linkApprovedSeries 把刚通过的 media 挂进剧场（P1 剧场草稿）：
+//   · 给了 series_id 就挂现有的；给了 series_title 就按标题找，找不到就用这个库新建一个；
+//   · 集号/季号用**文件名识别**（与后台"识别"同一套 detect.EpisodesFor）；
+//   · 挂完按 (season, episode) 重排一次 —— 批量审核很可能乱序通过，不重排播放顺序就乱了。
+// 返回挂上的剧场 id（没要求归入剧场时返回空串）。
+func (s *Server) linkApprovedSeries(r *http.Request, req ugcApproveReq, lib *domain.Library, mediaID string) (string, error) {
+	wantID := strings.TrimSpace(req.SeriesID)
+	wantTitle := strings.TrimSpace(req.SeriesTitle)
+	if wantID == "" && wantTitle == "" {
+		return "", nil
+	}
+	var series *domain.Series
+	var err error
+	if wantID != "" {
+		series, err = s.DB.GetSeries(wantID)
+		if err != nil {
+			return "", domain.New("SERIES_NOT_FOUND", "选择的剧场不存在了", 404)
+		}
+	} else {
+		series, err = s.DB.SeriesByTitle(wantTitle)
+		if err != nil {
+			return "", err
+		}
+		if series == nil {
+			series, err = s.createSeriesNamed(wantTitle, lib.ID)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	m, err := s.DB.GetMediaIn(scopeAll(), mediaID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.DB.AddSeriesMedia(series.ID, []storage.SeriesMediaInput{seriesMediaFromMedia(*m)}); err != nil {
+		return "", err
+	}
+	if err := s.reorderSeriesByEpisode(r.Context(), series.ID); err != nil {
+		s.Log.Warn("剧场草稿重排失败", "series", series.ID, "error", err.Error())
+	}
+	return series.ID, nil
+}
+
+// reorderSeriesByEpisode 把剧场按 (season, episode, 当前 position) 重排：
+// 有集号的按集号在前，没识别出集号的保持原相对顺序排在后面。只在不同才写库。
+func (s *Server) reorderSeriesByEpisode(ctx context.Context, seriesID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	eps, _, err := s.DB.ListSeriesEpisodes(scopeAll(), seriesID)
+	if err != nil {
+		return err
+	}
+	if len(eps) < 2 {
+		return nil
+	}
+	ordered := make([]domain.SeriesEpisode, len(eps))
+	copy(ordered, eps)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		an, bn := a.Episode != nil, b.Episode != nil
+		if an != bn {
+			return an // 有集号的在前
+		}
+		if an && bn {
+			as, bs := 0, 0
+			if a.Season != nil {
+				as = *a.Season
+			}
+			if b.Season != nil {
+				bs = *b.Season
+			}
+			if as != bs {
+				return as < bs
+			}
+			if *a.Episode != *b.Episode {
+				return *a.Episode < *b.Episode
+			}
+		}
+		return a.Position < b.Position
+	})
+	changed := false
+	ids := make([]string, 0, len(ordered))
+	for i, e := range ordered {
+		ids = append(ids, e.MediaID)
+		if eps[i].MediaID != e.MediaID {
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.DB.ReorderSeries(seriesID, ids)
 }
 
 // probeApproved 登记 media：已经扫描过的路径直接复用，否则探测+抽封面后插入。
