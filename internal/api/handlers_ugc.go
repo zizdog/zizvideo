@@ -149,6 +149,10 @@ func (s *Server) ugcItemFor(r *http.Request, id string) (*domain.UploadItem, err
 type ugcStartReq struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+	// A2：上传者可选的"投递目标"（只是建议，审核页会预填；能不能用还是管理员说了算）。
+	// 目标库必须是**他自己能访问的库** —— 否则传完自己也看不见，等于白传。
+	TargetLibraryID   string `json:"target_library_id"`
+	TargetSeriesTitle string `json:"target_series_title"`
 }
 
 // HandleUGCStart 校验白名单、扩展名、单文件上限、配额与磁盘阈值，然后开一条上传条目。
@@ -218,9 +222,28 @@ func (s *Server) HandleUGCStart(w http.ResponseWriter, r *http.Request) {
 		}
 		path = filepath.Join(filepath.Dir(path), uniqueName(filepath.Dir(path), filepath.Base(path)))
 	}
+	// A2：投递目标要落在"他自己能访问的库"里（scope 是唯一判据）。
+	targetLib := strings.TrimSpace(req.TargetLibraryID)
+	if targetLib != "" {
+		sc, serr := s.resolveScope(u)
+		if serr != nil {
+			s.fail(w, r, serr)
+			return
+		}
+		if !sc.Allows(targetLib) {
+			s.fail(w, r, domain.New("UPLOAD_TARGET_FORBIDDEN",
+				"这个媒体库你没有访问权限，换个库或让管理员授权", 403))
+			return
+		}
+		if _, lerr := s.DB.GetLibrary(targetLib); lerr != nil {
+			s.fail(w, r, domain.ErrNotFound)
+			return
+		}
+	}
 	item := &domain.UploadItem{ID: domain.NewID("upl"), UploaderID: u.ID, Name: filepath.Base(path),
 		Title: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
-		Path:  path, Size: req.Size, State: domain.UploadUploading}
+		Path:  path, Size: req.Size, State: domain.UploadUploading,
+		TargetLibraryID: targetLib, TargetSeriesTitle: strings.TrimSpace(req.TargetSeriesTitle)}
 	if err := s.DB.CreateUploadItem(item); err != nil {
 		s.fail(w, r, err)
 		return

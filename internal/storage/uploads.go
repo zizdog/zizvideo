@@ -12,18 +12,19 @@ import (
 
 const uploadCols = `id, uploader_id, name, title, path, size, received_bytes, content_hash,
 	state, review_note, media_id, library_id, reviewed_by, COALESCE(reviewed_at,''),
-	created_at`
+	created_at, target_library_id, target_series_title`
 
 // uploadColsQ 是 JOIN users 时的限定写法（id/created_at 会撞名）。
 const uploadColsQ = `it.id, it.uploader_id, it.name, it.title, it.path, it.size, it.received_bytes,
 	it.content_hash, it.state, it.review_note, it.media_id, it.library_id, it.reviewed_by,
-	COALESCE(it.reviewed_at,''), it.created_at`
+	COALESCE(it.reviewed_at,''), it.created_at, it.target_library_id, it.target_series_title`
 
 func scanUploadItem(s interface{ Scan(...any) error }) (*domain.UploadItem, error) {
 	var it domain.UploadItem
 	if err := s.Scan(&it.ID, &it.UploaderID, &it.Name, &it.Title, &it.Path, &it.Size,
 		&it.Received, &it.ContentHash, &it.State, &it.ReviewNote, &it.MediaID,
-		&it.LibraryID, &it.ReviewedBy, &it.ReviewedAt, &it.CreatedAt); err != nil {
+		&it.LibraryID, &it.ReviewedBy, &it.ReviewedAt, &it.CreatedAt,
+		&it.TargetLibraryID, &it.TargetSeriesTitle); err != nil {
 		return nil, err
 	}
 	return &it, nil
@@ -38,9 +39,11 @@ func (db *DB) CreateUploadItem(it *domain.UploadItem) error {
 	}
 	_, err := db.Exec(`INSERT INTO upload_items
 		(id, uploader_id, name, title, path, size, received_bytes, content_hash, state,
-		 review_note, media_id, library_id, reviewed_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,0,'',?, '', '', '', '', ?, ?)`,
-		it.ID, it.UploaderID, it.Name, it.Title, it.Path, it.Size, it.State, now, now)
+		 review_note, media_id, library_id, reviewed_by, created_at, updated_at,
+		 target_library_id, target_series_title)
+		VALUES (?,?,?,?,?,?,0,'',?, '', '', '', '', ?, ?, ?, ?)`,
+		it.ID, it.UploaderID, it.Name, it.Title, it.Path, it.Size, it.State, now, now,
+		it.TargetLibraryID, it.TargetSeriesTitle)
 	return err
 }
 
@@ -188,7 +191,8 @@ func scanUploadItemWithUploader(s interface{ Scan(...any) error }) (*domain.Uplo
 	var it domain.UploadItem
 	if err := s.Scan(&it.ID, &it.UploaderID, &it.Name, &it.Title, &it.Path, &it.Size,
 		&it.Received, &it.ContentHash, &it.State, &it.ReviewNote, &it.MediaID,
-		&it.LibraryID, &it.ReviewedBy, &it.ReviewedAt, &it.CreatedAt, &it.Uploader); err != nil {
+		&it.LibraryID, &it.ReviewedBy, &it.ReviewedAt, &it.CreatedAt,
+		&it.TargetLibraryID, &it.TargetSeriesTitle, &it.Uploader); err != nil {
 		return nil, err
 	}
 	return &it, nil

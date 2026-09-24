@@ -23,7 +23,13 @@ export function mountUploadsTab(root) {
     note, transcodeLine,
     el("div", { class: "row", dataset: { role: "batch-bar" } },
       el("button", { class: "btn small", type: "button", text: "全选待审", dataset: { role: "batch-all" },
-        onclick: () => { for (const box of listBox.querySelectorAll('[data-role="pending-pick"]')) { box.checked = true; picked.add(box.dataset.id); } paintBatch(); } }),
+        onclick: () => {
+          for (const box of listBox.querySelectorAll('[data-role="pending-pick"]')) {
+            box.checked = true; picked.add(box.dataset.id);
+          }
+          paintBatch();
+          prefillBatchFromPicks(lastItems);
+        } }),
       el("button", { class: "btn small", type: "button", text: "清空选择", dataset: { role: "batch-none" },
         onclick: () => { for (const box of listBox.querySelectorAll('[data-role="pending-pick"]')) box.checked = false; picked.clear(); paintBatch(); } }),
       batchInfo)), listBox);
@@ -66,6 +72,27 @@ export function mountUploadsTab(root) {
   function paintBatch() {
     batchInfo.textContent = "已选 " + picked.size + " 条";
   }
+
+  // 勾选后按"第一条勾选项的投递目标"预填批量工具条（A2）：上传者已经说过要进哪，别再让管理员选一遍。
+  function prefillBatchFromPicks(items) {
+    const first = (items || []).find((x) => picked.has(x.id));
+    if (!first) return;
+    if (first.target_library_id && Array.from(batchLib.options).some((o) => o.value === first.target_library_id)) {
+      batchLib.value = first.target_library_id;
+    }
+    if (first.target_series_title) {
+      const exist = seriesList.find((x) => (x.title || "") === first.target_series_title);
+      if (exist) {
+        batchSeries.value = "id:" + exist.id;
+        batchSeriesName.classList.add("hidden");
+      } else {
+        batchSeries.value = "new";
+        batchSeriesName.value = first.target_series_title;
+        batchSeriesName.classList.remove("hidden");
+      }
+    }
+  }
+  let lastItems = [];
 
   // 批量工具条上的控件：目标库 / 剧场 / 尺寸 / 原因，一次选好套用到全部勾选项
   const batchLib = el("select", { class: "input", dataset: { role: "batch-library" } });
@@ -170,6 +197,7 @@ export function mountUploadsTab(root) {
     try {
       const data = await api.pendingUploads();
       const list = Array.isArray(data.list) ? data.list : [];
+      lastItems = list;
       count.textContent = list.length ? (list.length + " 条待审") : "";
       if (!list.length) {
         listBox.append(el("div", { class: "muted", text: "没有待审的上传" }));
@@ -213,6 +241,10 @@ export function mountUploadsTab(root) {
     const access = await uploaderLibraries(item);
     const libSelect = el("select", { class: "input", dataset: { role: "pending-library" } });
     for (const lib of access.list) libSelect.append(el("option", { value: lib.id, text: lib.name }));
+    // A2：上传者填过"投递目标"就预填（管理员仍可改；目标库必须在他的可见列表里才预选）
+    if (item.target_library_id && access.list.some((l) => String(l.id) === String(item.target_library_id))) {
+      libSelect.value = item.target_library_id;
+    }
     const accessNote = access.note
       ? el("div", { class: "muted small-note", dataset: { role: "pending-libs-note" }, text: access.note })
       : null;
@@ -224,6 +256,17 @@ export function mountUploadsTab(root) {
       el("option", { value: "new", text: "＋新建剧场草稿…" }));
     const seriesName = el("input", { class: "input hidden", placeholder: "新剧场名（集号按文件名识别）",
       dataset: { role: "pending-series-name" } });
+    // A2：上传者指定的剧场草稿名预填；同名剧场已存在就直接选中它
+    if (item.target_series_title) {
+      const exist = seriesList.find((x) => (x.title || "") === item.target_series_title);
+      if (exist) {
+        seriesPick.value = "id:" + exist.id;
+      } else {
+        seriesPick.value = "new";
+        seriesName.value = item.target_series_title;
+        seriesName.classList.remove("hidden");
+      }
+    }
     seriesPick.addEventListener("change", () => {
       seriesName.classList.toggle("hidden", seriesPick.value !== "new");
     });
@@ -295,6 +338,8 @@ export function mountUploadsTab(root) {
     pick.addEventListener("change", () => {
       if (pick.checked) picked.add(item.id); else picked.delete(item.id);
       paintBatch();
+      // 勾上就按"这条的投递目标"预填批量工具条（A2）
+      if (pick.checked) prefillBatchFromPicks(lastItems);
     });
     return el("div", { class: "upload-row review", dataset: { role: "pending-row", id: item.id } },
       el("span", { class: "video-lead" }, pick),

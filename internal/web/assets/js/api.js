@@ -168,7 +168,9 @@ export const api = {
 
   // 用户上传（UGC）：开会话 / 断点回读 / 定稿 / 取消 / 我的上传；PUT 用 XHR（见 upload.js）。
   // 名字带 ugc 前缀，别和上面管理端那套 uploadStart/uploadFinish 撞车（撞了会互相覆盖）。
-  ugcStart: (name, size) => request("POST", "/api/v1/uploads", { name, size }),
+  // target 可选：{target_library_id, target_series_title} —— 上传者指定的投递目标（A2）
+  ugcStart: (name, size, target) => request("POST", "/api/v1/uploads",
+    Object.assign({ name, size }, target || {})),
   ugcGet: (id) => request("GET", "/api/v1/uploads/" + encodeURIComponent(id)),
   ugcFinish: (id) => request("POST", "/api/v1/uploads/" + encodeURIComponent(id) + "/finish"),
   ugcCancel: (id) => request("DELETE", "/api/v1/uploads/" + encodeURIComponent(id)),

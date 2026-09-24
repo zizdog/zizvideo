@@ -507,3 +507,76 @@ func TestUGCBatchApproveAndReject(t *testing.T) {
 		t.Fatalf("空 ids 应 400，实际 %d", res.StatusCode)
 	}
 }
+
+// A2 门禁：上传时可选"投递目标"，并且**只有自己能访问的库**才能当目标；
+// 目标会随条目透出（审核页据此预填）。
+func TestUGCUploadTargetIsScoped(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	rootA := filepath.Join(e.Root, "tgt-a")
+	rootB := filepath.Join(e.Root, "tgt-b")
+	for _, d := range []string{rootA, rootB} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	libA := e.newLibrary("目标库A", rootA)
+	libB := e.newLibrary("目标库B", rootB)
+	client, userID := e.ugcUser(t, "targetuser")
+	if res, _, raw := e.write(http.MethodPatch, "/api/v1/users/"+userID,
+		map[string]any{"can_upload": true}); res.StatusCode != http.StatusOK {
+		t.Fatalf("开白名单失败 %d: %s", res.StatusCode, raw)
+	}
+	// 只授权 A
+	if res, _, raw := e.write(http.MethodPut, "/api/v1/admin/users/"+userID+"/libraries",
+		map[string]any{"library_ids": []string{libA.ID}}); res.StatusCode != http.StatusOK {
+		t.Fatalf("授权失败 %d: %s", res.StatusCode, raw)
+	}
+
+	// 选自己没权限的库 B：必须拒（否则传完自己看不见）
+	body := []byte("zv-target-check")
+	res, _, raw := e.writeAs(client, http.MethodPost, "/api/v1/uploads", map[string]any{
+		"name": "带目标.mp4", "size": len(body),
+		"target_library_id": libB.ID, "target_series_title": "不该成"})
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("越权目标应 403，实际 %d: %s", res.StatusCode, raw)
+	}
+	// 选有权限的 A：通过，并且目标随条目透出
+	res, env, raw := e.writeAs(client, http.MethodPost, "/api/v1/uploads", map[string]any{
+		"name": "带目标.mp4", "size": len(body),
+		"target_library_id": libA.ID, "target_series_title": "我的目标剧"})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("开会话失败 %d: %s", res.StatusCode, raw)
+	}
+	var start struct {
+		Item struct {
+			ID                string `json:"id"`
+			TargetLibraryID   string `json:"target_library_id"`
+			TargetSeriesTitle string `json:"target_series_title"`
+		} `json:"item"`
+	}
+	decodeInto(t, env.Data, &start)
+	if start.Item.TargetLibraryID != libA.ID || start.Item.TargetSeriesTitle != "我的目标剧" {
+		t.Fatalf("投递目标没存下来: %+v", start.Item)
+	}
+	// 审核页的数据源（后台待审列表）也要带上目标
+	if p, b := e.uploadRaw(t, client, http.MethodPut, "/api/v1/uploads/"+start.Item.ID, body, nil); p.StatusCode != http.StatusOK {
+		t.Fatalf("上传失败 %d: %s", p.StatusCode, b)
+	}
+	if r, _, b := e.writeAs(client, http.MethodPost, "/api/v1/uploads/"+start.Item.ID+"/finish", nil); r.StatusCode != http.StatusOK {
+		t.Fatalf("定稿失败 %d: %s", r.StatusCode, b)
+	}
+	_, env, raw = e.do(http.MethodGet, "/api/v1/admin/uploads/pending", nil)
+	var pending struct {
+		List []struct {
+			ID                string `json:"id"`
+			TargetLibraryID   string `json:"target_library_id"`
+			TargetSeriesTitle string `json:"target_series_title"`
+		} `json:"list"`
+	}
+	decodeInto(t, env.Data, &pending)
+	if len(pending.List) != 1 || pending.List[0].TargetLibraryID != libA.ID ||
+		pending.List[0].TargetSeriesTitle != "我的目标剧" {
+		t.Fatalf("待审列表应带上投递目标（审核页预填用）: %s", raw)
+	}
+}

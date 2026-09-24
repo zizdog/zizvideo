@@ -66,6 +66,9 @@ type UploadItem struct {
 	MediaID     string `json:"media_id,omitempty"`
 	LibraryID   string `json:"library_id,omitempty"`
 	CreatedAt   string `json:"created_at"`
+	// 上传者填的"投递目标"（审核页预填用；只是建议，是否采纳由管理员在审核时定）。
+	TargetLibraryID   string `json:"target_library_id,omitempty"`
+	TargetSeriesTitle string `json:"target_series_title,omitempty"`
 	ReviewedBy  string `json:"-"`
 	ReviewedAt  string `json:"-"`
 }

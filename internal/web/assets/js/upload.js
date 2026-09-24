@@ -49,7 +49,7 @@ function putChunk(id, file, offset, end, onProgress, slot) {
 // uploadOne 把一个文件传完（内部按 8MB 分片；失败后再次调用会从服务端断点续传）。
 async function uploadOne(row, file, onTick) {
   if (!row.id) {
-    const started = await api.ugcStart(file.name, file.size);
+    const started = await api.ugcStart(file.name, file.size, targetPayload());
     row.id = started.item.id;
     row.quota = started.quota;
     row.sent = 0;
@@ -74,6 +74,14 @@ async function uploadOne(row, file, onTick) {
 
 export function mountUpload(view) {
   const note = banner();
+  // A2：上传时可选"投递目标"（审核页会预填）。库列表只来自 /me/libraries（自己的可见库），
+  // 选了没权限的库后端也会拒（scope 是唯一判据）。
+  const targetLib = el("select", { class: "input", dataset: { role: "upload-target-lib" } },
+    el("option", { value: "", text: "（不指定）" }));
+  const targetSeries = el("input", { class: "input", placeholder: "剧场草稿名（可选，如：穿越水浒）",
+    dataset: { role: "upload-target-series" } });
+  const targetNote = el("div", { class: "muted small-note", dataset: { role: "upload-target-note" },
+    text: "投递目标只是建议：审核通过时管理员可改，指定后审核页会预填。" });
   const quotaLine = el("div", { class: "muted small-note", dataset: { role: "upload-quota" }, text: "配额读取中…" });
   const picker = el("input", {
     type: "file", multiple: true, accept: "video/*", dataset: { role: "upload-picker" },
@@ -99,7 +107,9 @@ export function mountUpload(view) {
     el("div", { class: "panel" },
       el("div", { class: "muted small-note", text: "选中视频后点「开始上传」；上传完进待审，管理员通过后才进媒体库。" }),
       quotaLine,
-      el("div", { class: "row" }, picker, startBtn, nativeBtn)),
+      el("div", { class: "row" }, picker, startBtn, nativeBtn),
+      el("div", { class: "row" }, el("span", { class: "muted small-note", text: "投递目标：" }), targetLib, targetSeries),
+      targetNote),
     rowBox);
 
   function paintQuota(quota) {
@@ -203,6 +213,24 @@ export function mountUpload(view) {
     refreshQuota();
   });
 
+  // 上传目标只在"开会话"时带上；一个文件一批，所以整批用同一个目标。
+  function targetPayload() {
+    const out = {};
+    if (targetLib.value) out.target_library_id = targetLib.value;
+    const t = targetSeries.value.trim();
+    if (t) out.target_series_title = t;
+    return out;
+  }
+
+  async function loadTargets() {
+    try {
+      const libs = await api.myLibraries();
+      const list = Array.isArray(libs) ? libs : ((libs && libs.list) || []);
+      for (const lib of list) targetLib.append(el("option", { value: lib.id, text: lib.name || lib.id }));
+      if (!list.length) targetNote.textContent = "你还没有可访问的媒体库：投递目标不可选，先让管理员授权。";
+    } catch (err) { /* 读不到就不显示，不编 */ }
+  }
+
   async function refreshQuota() {
     try {
       const data = await api.myUploads();
@@ -212,6 +240,7 @@ export function mountUpload(view) {
   }
 
   refreshQuota();
+  loadTargets();
   view.append(page);
   return null;
 }
