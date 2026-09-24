@@ -1153,28 +1153,25 @@ export function mountFeed(view, options = {}) {
   }
 
   // 双击点赞：**只加不减**（再双击也不取消，和抖音一致），中间弹一个大拇指动画。
+  // 双击 = 点赞/取消点赞（用户 2026-09-24："加双击取消点赞"）。
+  // 原来双击已赞过的只重复播动画、什么都不改 —— 现在它是**开关**：
+  // 没赞过 ⇒ 点赞（大拇指放大动画），已赞过 ⇒ 取消（同一个动画调成灰色）。
+  // 写接口只有一条路（toggleLike），别在这里再写一份，免得两处状态对不上。
   async function doubleTapLike(entry) {
     if (entry.destroyed || !entry.item) return;
-    const item = entry.item;
-    burstLike(entry);
-    if (item.reaction === "like") return; // 已经赞过了：只给动画，不再打接口
-    entry.item.reaction = "like";
-    if (entry.like) entry.like.classList.add("on");
-    showToast("已喜欢");
-    try {
-      await api.addReaction(item.id, "like");
-    } catch (err) {
-      entry.item.reaction = null;
-      if (entry.like) entry.like.classList.remove("on");
-      showToast(err && err.message ? err.message : "点赞失败");
-    }
+    const willLike = entry.item.reaction !== "like";
+    burstLike(entry, willLike);
+    await toggleLike(entry);
   }
 
   // burstLike：中央那个"赞"的放大淡出动画（只是反馈，不是按钮）。
-  function burstLike(entry) {
+  function burstLike(entry, on) {
     if (entry.destroyed || !entry.layer) return;
     if (entry.burst) entry.burst.remove();
-    const node = el("div", { class: "like-burst", dataset: { role: "like-burst" } }, icon("thumb"));
+    const node = el("div", {
+      class: "like-burst" + (on === false ? " off" : ""),
+      dataset: { role: "like-burst", off: on === false ? "1" : "0" },
+    }, icon("thumb"));
     entry.layer.append(node);
     entry.burst = node;
     setTimeout(() => { if (entry.burst === node) { node.remove(); entry.burst = null; } }, 700);

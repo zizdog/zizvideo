@@ -605,6 +605,9 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   animation: zv-like-burst .68s ease-out forwards;
 }
 .like-burst svg { width: 96px; height: 96px; }
+/* 双击**取消**点赞：同一个动画，灰掉 + 小一点，一眼能看出"这次是取消"（用户 2026-09-24） */
+.like-burst.off { color: #b9bec6; animation-duration: .5s; }
+.like-burst.off svg { width: 78px; height: 78px; }
 @keyframes zv-like-burst {
   0% { opacity: 0; transform: translate(-50%, -50%) scale(.5) rotate(-14deg); }
   35% { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(6deg); }
