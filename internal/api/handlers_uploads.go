@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/zizdog/zizvideo/internal/dirimport"
 	"github.com/zizdog/zizvideo/internal/domain"
 	"github.com/zizdog/zizvideo/internal/media"
+	"github.com/zizdog/zizvideo/internal/storage"
 )
 
 // 上传：三步（start / PUT 流式 / finish），目标目录必须在允许根内、必须属于某个媒体库。
@@ -46,30 +48,96 @@ type uploadSession struct {
 	Files     []*uploadFile
 }
 
+// uploadStore：内存是热缓存，**数据库是真相**（迁移 0021）。
+// 大文件上传动辄几分钟，进程一重启内存就空了 —— 只靠内存的话，客户端续传会 404，
+// 用户只能从头再传（用户 2026-09-24 点名要修）。
 type uploadStore struct {
+	db   *storage.DB
 	mu   sync.Mutex
 	live map[string]*uploadSession
 }
 
-func newUploadStore() *uploadStore { return &uploadStore{live: map[string]*uploadSession{}} }
+func newUploadStore(db *storage.DB) *uploadStore {
+	return &uploadStore{db: db, live: map[string]*uploadSession{}}
+}
+
+// sessionWire 是落库用的形状（uploadSession 带 mutex，不能直接 JSON）。
+type sessionWire struct {
+	ID        string       `json:"id"`
+	Dir       string       `json:"dir"`
+	LibraryID string       `json:"library_id"`
+	SeriesID  string       `json:"series_id"`
+	Overwrite bool         `json:"overwrite"`
+	Created   time.Time    `json:"created"`
+	Files     []uploadFile `json:"files"`
+}
 
 func (u *uploadStore) put(s *uploadSession) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
 	u.live[s.ID] = s
+	u.mu.Unlock()
+	// 落库失败不该让上传本身失败：内存里还有，能继续传；只是重启会丢。
+	files := make([]uploadFile, 0, len(s.Files))
+	for _, f := range s.Files {
+		if f != nil {
+			files = append(files, *f)
+		}
+	}
+	wire := sessionWire{ID: s.ID, Dir: s.Dir, LibraryID: s.LibraryID, SeriesID: s.SeriesID,
+		Overwrite: s.Overwrite, Created: s.Created, Files: files}
+	body, err := json.Marshal(wire)
+	if err != nil {
+		return
+	}
+	_ = u.db.SaveUploadSession(storage.UploadSessionRow{
+		ID: s.ID, Dir: s.Dir, LibraryID: s.LibraryID, SeriesID: s.SeriesID,
+		Overwrite: s.Overwrite, FilesJSON: string(body),
+		CreatedAt: s.Created.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (u *uploadStore) get(id string) (*uploadSession, bool) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	s, ok := u.live[id]
-	return s, ok
+	if s, ok := u.live[id]; ok {
+		u.mu.Unlock()
+		return s, true
+	}
+	u.mu.Unlock()
+	// 内存里没有（比如刚重启）：从库里捞回来接着传
+	row, err := u.db.GetUploadSession(id)
+	if err != nil {
+		return nil, false
+	}
+	var wire sessionWire
+	if json.Unmarshal([]byte(row.FilesJSON), &wire) != nil || len(wire.Files) == 0 {
+		return nil, false
+	}
+	created := parseSessionTime(row.CreatedAt)
+	files := make([]*uploadFile, 0, len(wire.Files))
+	for i := range wire.Files {
+		f := wire.Files[i]
+		files = append(files, &f)
+	}
+	session := &uploadSession{ID: row.ID, Dir: row.Dir, LibraryID: row.LibraryID,
+		SeriesID: row.SeriesID, Overwrite: row.Overwrite, Created: created, Files: files}
+	u.mu.Lock()
+	u.live[id] = session
+	u.mu.Unlock()
+	return session, true
 }
 
 func (u *uploadStore) drop(id string) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
 	delete(u.live, id)
+	u.mu.Unlock()
+	_ = u.db.DeleteUploadSession(id)
+}
+
+func parseSessionTime(raw string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t
+	}
+	return time.Now()
 }
 
 // prune 丢掉超时会话（浏览器中途关掉就不再有人 finish）；磁盘上的 .zvpart 由下次 start 清。
@@ -79,6 +147,7 @@ func (u *uploadStore) prune(now time.Time) {
 	for id, s := range u.live {
 		if now.Sub(s.Created) > uploadSessionTTL {
 			delete(u.live, id)
+			_ = u.db.DeleteUploadSession(id)
 		}
 	}
 }
@@ -425,9 +494,12 @@ func (s *Server) HandleUploadPut(w http.ResponseWriter, r *http.Request) {
 	if file.Size > 0 && total < file.Size {
 		if !hasRange {
 			// 整文件 PUT 没传完：删掉半截，提示重传。
+			// 这里最常见的外因是**反向代理把请求体截断了**（nginx 默认 client_max_body_size 1m）——
+			// 所以报错里直接把这个可能性说出来，别让用户对着"字节数不符"猜（用户 2026-09-24）。
 			_ = os.Remove(part)
 			s.fail(w, r, domain.New("UPLOAD_SIZE_MISMATCH",
-				fmt.Sprintf("收到的字节数与声明不符（收到 %d，声明 %d）", total, file.Size), 400))
+				fmt.Sprintf("收到的字节数与声明不符（收到 %d，声明 %d）；"+
+					"若经过反向代理，请放开请求体上限（nginx: client_max_body_size）", total, file.Size), 400))
 			return
 		}
 		// 分块上传：保留 .part，回 202 让客户端接着传。

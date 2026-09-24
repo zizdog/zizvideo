@@ -164,6 +164,9 @@ zizvideo roots remove "$HOME/Movies"       --config config.json
   真正的兼容版本要等 Phase2 转码。
 - SQLite 单写者；不要把数据库放在网络盘上。
 - 单实例，多开两个写同一份数据库会互相干扰。
+- **走反向代理时要把请求体上限放开**（大文件上传是 8MB 一块分片传的，nginx 默认
+  `client_max_body_size 1m` 会直接 413）：nginx 加 `client_max_body_size 0;`（不限制），
+  Caddy 默认不限、但若改过 `request_body` 请放够；否则上传会在中途失败并提示"字节数与声明不符"。
 
 ## 测试
 

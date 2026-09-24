@@ -3,11 +3,11 @@ package api
 
 import (
 	"context"
-	"path/filepath"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,7 +25,7 @@ import (
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.2.3-mvp"
+var Version = "0.2.4-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {
@@ -78,7 +78,7 @@ func (s *Server) lockCover(id string) func() {
 func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Manager,
 	roots *config.Roots, r ffmpeg.Runner, log *slog.Logger) *Server {
 	s := &Server{Cfg: cfg, DB: db, Auth: a, Tasks: t, Roots: roots, Runner: r, Log: log,
-		Uploads: newUploadStore(), StartedAt: time.Now()}
+		Uploads: newUploadStore(db), StartedAt: time.Now()}
 	// 收件箱配错（落在媒体允许根里）就退回默认位置并大声报错：不能让待审文件被扫描器入库。
 	if s.inboxUnsafe() {
 		s.Log.Error("upload_inbox_dir 落在媒体允许根内，已退回默认收件箱",

@@ -39,6 +39,10 @@ type env struct {
 	Base    string
 	Root    string
 	ArgvLog string
+	// 给 Restart() 用：这些都是建 Server 需要的依赖，存着才能"重启"出一个等价实例。
+	auth  *auth.Manager
+	tasks *task.Manager
+	log   *slog.Logger
 }
 
 // newEnv builds an env; tweak may adjust the config before wiring.
@@ -120,8 +124,24 @@ echo fake-jpeg > "$out"
 	jar, _ := cookiejar.New(nil)
 	e := &env{t: t, S: srv, DB: db, Cfg: cfg, TS: ts, Roots: roots, CfgPath: cfgPath,
 		Client: &http.Client{Jar: jar}, Base: base, Root: root,
-		ArgvLog: filepath.Join(base, "argv.log")}
+		ArgvLog: filepath.Join(base, "argv.log"),
+		// 下面这几个留给 Restart()：模拟"进程重启"要用同一份 db / 配置重新建一个 Server
+		auth: authMgr, tasks: tasks, log: logger}
 	return e
+}
+
+// Restart 模拟"服务进程重启"：同一个数据库、同一份配置，**重新建一个 Server + httptest 服务**，
+// 但沿用原来的 cookie jar（会话在库里，重启后照样有效）。
+// 为什么需要它：像"上传会话要不要落库"这种事，只有真的换一个 Server 实例才测得出来 ——
+// 内存里那份缓存必须消失，才能证明数据是从库里恢复的。
+func (e *env) Restart() {
+	e.t.Helper()
+	srv := api.NewServer(e.Cfg, e.DB, e.auth, e.tasks, e.Roots, ffmpeg.ExecRunner{}, e.log)
+	ts := httptest.NewServer(web.Router(srv))
+	e.t.Cleanup(ts.Close)
+	e.S = srv
+	e.TS = ts
+	// CSRF 是绑定会话 token 派生的，会话没变 ⇒ 不用重新登录。
 }
 
 // writeConfigFile writes a minimal config.json holding the allow roots.
