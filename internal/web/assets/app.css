@@ -1,5 +1,9 @@
-/* Zizvideo 前端样式：手写、深色优先、无外部字体与图片（坑 6，禁止 CDN） */
+/* Zizvideo 前端样式：手写、**只有暗色**、无外部字体与图片（坑 6，禁止 CDN）。
+   用户 2026-09-24："去掉亮色，只保留暗色。同抖音。" —— 原来跟着系统 prefers-color-scheme 变亮，
+   手机在浅色模式下会变成白底，和抖音那种纯暗色不一致；现在删掉亮色分支，
+   并声明 color-scheme: dark（原生控件/滚动条/输入框也按暗色画）。 */
 :root {
+  color-scheme: dark;
   --bg: #0b0d10;
   --fg: #e9edf2;
   --muted: #dedede;
@@ -9,9 +13,6 @@
   --accent: #3ea6ff;
   --danger: #ff6b6b;
   --radius: 10px;
-}
-@media (prefers-color-scheme: light) {
-  :root { --bg:#f4f6f9; --fg:#12161c; --muted:#5c6774; --line:#dde2e9; --panel:#fff; --panel2:#eef1f5; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
