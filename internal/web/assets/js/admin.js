@@ -600,7 +600,46 @@ function mountMedia(root) {
     { value: "missing", label: "missing" },
   ]);
   const info = el("div", { class: "muted" });
-  const { table, body } = gridOf(["标题", "媒体库", "时长", "分辨率", "视频编码", "状态", "大小", "操作"]);
+  const { table, body } = gridOf(["", "标题", "媒体库", "时长", "分辨率", "视频编码", "状态", "大小", "操作"]);
+  // C8 批量转码：本页勾选（翻页/换筛选就清空，避免"选了看不见的条目"）
+  const picked = new Set();
+  const pickAll = el("input", { type: "checkbox", dataset: { role: "media-pick-all" }, title: "选中本页" });
+  table.querySelector("thead th").append(pickAll);
+  const pickCount = el("span", { class: "muted small-note", dataset: { role: "media-pick-count" }, text: "未选" });
+  const batchBtn = el("button", {
+    class: "btn small primary", type: "button", text: "转码所选",
+    dataset: { role: "media-transcode-batch" }, disabled: true,
+  });
+  function paintPick() {
+    pickCount.textContent = picked.size ? ("已选 " + picked.size + " 条") : "未选";
+    batchBtn.disabled = picked.size === 0;
+    batchBtn.textContent = picked.size ? ("转码所选（" + picked.size + "）") : "转码所选";
+  }
+  pickAll.addEventListener("change", () => {
+    for (const node of body.querySelectorAll('input[data-role="media-pick"]')) {
+      node.checked = pickAll.checked;
+      if (pickAll.checked) picked.add(node.value); else picked.delete(node.value);
+    }
+    paintPick();
+  });
+  batchBtn.addEventListener("click", async () => {
+    if (!picked.size) return;
+    batchBtn.disabled = true;
+    try {
+      const height = Number(transcodeSize.value) || 0;
+      const data = await api.transcode(Array.from(picked), height);
+      setBanner(note, "");
+      picked.clear();
+      pickAll.checked = false;
+      paintPick();
+      pollTranscode(data.job_id);
+      await refresh(); // 立刻把"转码中"标到行上
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "转码排队失败");
+    } finally {
+      paintPick();
+    }
+  });
   const prev = button("上一页", () => { page = Math.max(1, page - 1); refresh(); });
   const next = button("下一页", () => { page += 1; refresh(); });
   const names = new Map();
@@ -632,6 +671,9 @@ function mountMedia(root) {
       const list = result && result.data && Array.isArray(result.data.list) ? result.data.list : [];
       const meta = (result && result.meta) || {};
       clear(body);
+      picked.clear();          // 翻页/换筛选后旧的选中看不见了，必须清掉
+      pickAll.checked = false;
+      paintPick();
       if (!list.length) body.append(emptyRow(8, "没有数据"));
       for (const item of list) {
         const resolution = item.width && item.height ? item.width + "×" + item.height : "-";
@@ -642,7 +684,15 @@ function mountMedia(root) {
         if (item.transcode_state === "done") stateText += " · 已转码";
         if (item.transcode_state === "running") stateText += " · 转码中";
         if (item.transcode_state === "failed") stateText += " · 转码失败";
-        const transcodeBtn = button("转码", null);
+        const check = el("input", { type: "checkbox", dataset: { role: "media-pick" }, value: String(item.id) });
+        check.addEventListener("change", () => {
+          if (check.checked) picked.add(String(item.id)); else picked.delete(String(item.id));
+          paintPick();
+        });
+        // C8：失败的给「重试」（同一个接口，语义更清楚）；成功的还能再转（换更小尺寸）
+        const isRetry = item.transcode_state === "failed";
+        const transcodeBtn = button(isRetry ? "重试" : "转码", null);
+        transcodeBtn.dataset.role = isRetry ? "media-retry" : "media-transcode";
         transcodeBtn.addEventListener("click", async () => {
           transcodeBtn.disabled = true;
           try {
@@ -658,9 +708,21 @@ function mountMedia(root) {
         });
         const holder = el("td", null, transcodeBtn);
         if (item.transcode_state === "failed" && item.transcode_note) holder.title = item.transcode_note;
-        body.append(rowOf([item.title, names.get(String(item.library_id)) || item.library_id,
+        // C8 前后对比：转码结论里带着「体积 265.3MB→181.1MB（小 32%）」，直接摊在行里，
+        // 不用点开任务中心才知道到底压小没有（失败的写失败原因）。
+        let stateCell = null;
+        if (item.transcode_state === "done" && item.transcode_note) {
+          stateCell = el("td", null, el("div", { text: stateText }),
+            el("div", { class: "muted small-note", dataset: { role: "transcode-note" }, text: item.transcode_note }));
+        } else if (item.transcode_state === "failed" && item.transcode_note) {
+          stateCell = el("td", null, el("div", { text: stateText }),
+            el("div", { class: "danger small-note", dataset: { role: "transcode-note" }, text: item.transcode_note }));
+        }
+        const row = rowOf([check, item.title, names.get(String(item.library_id)) || item.library_id,
           fmtDuration(item.duration_ms), resolution, item.codecs ? item.codecs.video : "-",
-          stateText, fmtBytes(item.size), holder]));
+          stateText, fmtBytes(item.size), holder]);
+        if (stateCell) row.replaceChild(stateCell, row.children[6]);
+        body.append(row);
       }
       // 清理按钮只在选中具体库时出现（清理是"针对某个库"的动作，不做全局一头雾水的清）。
       purgeBtn.hidden = !librarySelect.value;
@@ -752,7 +814,8 @@ function mountMedia(root) {
   librarySelect.addEventListener("change", onFilter);
   statusSelect.addEventListener("change", onFilter);
   query.addEventListener("change", onFilter);
-  root.append(note, el("div", { class: "panel" }, filters, el("div", { class: "row" }, purgeBtn, purgeInfo),
+  root.append(note, el("div", { class: "panel" }, filters,
+      el("div", { class: "row" }, batchBtn, pickCount, purgeBtn, purgeInfo),
       transcodeInfo),
     el("div", { class: "actions" }, prev, next, info), table);
   loadLibraries().then(refresh);

@@ -439,12 +439,16 @@ func (q *Queue) one(ctx context.Context, jobID string, item Item) outcome {
 }
 
 // sizeNote 如实报告体积变化（用户 2026-09-24："转完反而变大就没意义"）。
+// C8：小于 1% 的抖动不写成"大 0%"（那读起来像出事了），直接说"基本不变"。
 func sizeNote(before, after int64) string {
 	if before <= 0 || after <= 0 {
 		return ""
 	}
 	delta := after - before
 	pct := float64(delta) * 100 / float64(before)
+	if pct > -1 && pct < 1 {
+		return fmt.Sprintf("；体积 %s→%s（基本不变）", mb(before), mb(after))
+	}
 	if delta < 0 {
 		return fmt.Sprintf("；体积 %s→%s（小 %.0f%%）", mb(before), mb(after), -pct)
 	}
@@ -498,10 +502,16 @@ func progressPercent(line string, durationMS int64) (int, bool) {
 }
 
 // friendlyErr 把 ffmpeg 的失败压缩成一句人话（stderr 已经在 ExecError 里截过尾巴）。
+// friendlyErr 给人看的一句话：ffmpeg 的报错是多行 + 一大段流信息，
+// 原样塞进媒体行备注里没法看（实测 200 字里大半是 Metadata/编码参数）⇒ 只留第一行。
+// 完整报错仍进服务端日志（调用处 q.log.Warn 带 error）。
 func friendlyErr(err error) string {
-	msg := err.Error()
-	if len(msg) > 200 {
-		msg = msg[:200] + "…"
+	msg := strings.TrimSpace(err.Error())
+	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
+		msg = strings.TrimSpace(msg[:i]) + "…（完整报错见服务端日志）"
+	}
+	if len(msg) > 160 {
+		msg = msg[:160] + "…"
 	}
 	return msg
 }
