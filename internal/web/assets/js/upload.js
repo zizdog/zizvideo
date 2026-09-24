@@ -47,9 +47,11 @@ function putChunk(id, file, offset, end, onProgress, slot) {
 }
 
 // uploadOne 把一个文件传完（内部按 8MB 分片；失败后再次调用会从服务端断点续传）。
-async function uploadOne(row, file, onTick) {
+// ⚠️ target（投递目标）必须由调用方传进来：本函数在模块级，看不见 mountUpload 里的 targetPayload()
+// —— 2026-09-24 用户点上传报 `Can't find variable: targetPayload` 就是这个（门禁现在能抓这类跨作用域调用）。
+async function uploadOne(row, file, onTick, target) {
   if (!row.id) {
-    const started = await api.ugcStart(file.name, file.size, targetPayload());
+    const started = await api.ugcStart(file.name, file.size, target || {});
     row.id = started.item.id;
     row.quota = started.quota;
     row.sent = 0;
@@ -181,7 +183,7 @@ export function mountUpload(view) {
       setBanner(note, "");
       row.status = "上传中";
       paintRow(row);
-      await uploadOne(row, row.file, (sent) => { row.sent = sent; paintRow(row); });
+      await uploadOne(row, row.file, (sent) => { row.sent = sent; paintRow(row); }, targetPayload());
       row.sent = row.size;
       row.status = STATE_LABEL[row.state] || row.state;
       paintRow(row);
@@ -233,8 +235,15 @@ export function mountUpload(view) {
     for (const row of rows) {
       if (row.status === "待上传" || row.status === "失败" || row.status === "已取消") await runOne(row);
     }
-    // 成功不用红字横幅（那是错误样式）：结果都写在每一行的状态里，这里只清掉旧错误
-    setBanner(note, "");
+    // ⚠️ 只在**没有失败**时清横幅：横幅是用户唯一能看到失败原因的地方。
+    // 原来这里无条件 setBanner("")，把 runOne 刚写上的「文件名：原因」擦掉了 ——
+    // 用户 2026-09-24 就是只看到行上一个"失败"，不知道为什么（点「继续」才看到原因）。
+    const failed = rows.filter((row) => row.status === "失败");
+    if (failed.length === 0) {
+      setBanner(note, ""); // 成功不用红字横幅（那是错误样式）：结果都写在每一行的状态里
+    } else if (failed.length > 1) {
+      setBanner(note, failed.length + " 个文件没传成，逐个点「继续」看原因");
+    }
     refreshQuota();
   });
 
