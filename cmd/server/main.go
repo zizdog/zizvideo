@@ -141,6 +141,7 @@ func run() error {
 		logger.Warn("HTTP 收尾超时", "error", err.Error())
 	}
 	srv.StopAutoScan()
+	srv.StopBackground()
 	tasks.Stop()
 	logger.Info("已停止")
 	return nil

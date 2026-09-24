@@ -600,7 +600,7 @@ function mountMedia(root) {
     { value: "missing", label: "missing" },
   ]);
   const info = el("div", { class: "muted" });
-  const { table, body } = gridOf(["标题", "媒体库", "时长", "分辨率", "视频编码", "状态", "大小"]);
+  const { table, body } = gridOf(["标题", "媒体库", "时长", "分辨率", "视频编码", "状态", "大小", "操作"]);
   const prev = button("上一页", () => { page = Math.max(1, page - 1); refresh(); });
   const next = button("下一页", () => { page += 1; refresh(); });
   const names = new Map();
@@ -632,15 +632,34 @@ function mountMedia(root) {
       const list = result && result.data && Array.isArray(result.data.list) ? result.data.list : [];
       const meta = (result && result.meta) || {};
       clear(body);
-      if (!list.length) body.append(emptyRow(7, "没有数据"));
+      if (!list.length) body.append(emptyRow(8, "没有数据"));
       for (const item of list) {
         const resolution = item.width && item.height ? item.width + "×" + item.height : "-";
         // missing 要如实显示：status 列在这里仍是 ready（扫描只写 missing_since），
         // 直接显示 ready 会让人以为"能放"——用户就是这么被误导的。
-        const stateText = item.missing ? "missing（文件不在了）" : item.status;
+        let stateText = item.missing ? "missing（文件不在了）" : item.status;
+        // 转码状态与"能不能播"分开显示（转码失败时 status 仍是 ready —— 这条还能播，如实说）
+        if (item.transcode_state === "done") stateText += " · 已转码";
+        if (item.transcode_state === "running") stateText += " · 转码中";
+        if (item.transcode_state === "failed") stateText += " · 转码失败";
+        const transcodeBtn = button("转码", null);
+        transcodeBtn.addEventListener("click", async () => {
+          transcodeBtn.disabled = true;
+          try {
+            const data = await api.transcode([item.id]);
+            setBanner(note, "");
+            pollTranscode(data.job_id);
+          } catch (err) {
+            setBanner(note, err && err.message ? err.message : "转码排队失败");
+          } finally {
+            transcodeBtn.disabled = false;
+          }
+        });
+        const holder = el("td", null, transcodeBtn);
+        if (item.transcode_state === "failed" && item.transcode_note) holder.title = item.transcode_note;
         body.append(rowOf([item.title, names.get(String(item.library_id)) || item.library_id,
           fmtDuration(item.duration_ms), resolution, item.codecs ? item.codecs.video : "-",
-          stateText, fmtBytes(item.size)]));
+          stateText, fmtBytes(item.size), holder]));
       }
       // 清理按钮只在选中具体库时出现（清理是"针对某个库"的动作，不做全局一头雾水的清）。
       purgeBtn.hidden = !librarySelect.value;
@@ -654,6 +673,38 @@ function mountMedia(root) {
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "加载失败");
     }
+  }
+
+  // 转码进度：任务中心里的 percent 就是"当前这一件"的百分比（转码是分钟级动作，得看得见）
+  const transcodeInfo = el("div", { class: "muted small-note", dataset: { role: "transcode-progress" } });
+  let transcodeTimer = 0;
+  function pollTranscode(jobId) {
+    if (transcodeTimer) clearInterval(transcodeTimer);
+    transcodeInfo.textContent = "转码已排队…";
+    transcodeTimer = setInterval(async () => {
+      let task = null;
+      try { task = await api.jobTask(jobId); }
+      catch (err) {
+        clearInterval(transcodeTimer); transcodeTimer = 0;
+        transcodeInfo.textContent = "";
+        setBanner(note, err && err.message ? err.message : "查询转码任务失败");
+        return;
+      }
+      if (task.status === "pending" || task.status === "running") {
+        transcodeInfo.textContent = "转码中 " + (Number(task.processed) || 0) + "/"
+          + (Number(task.total) || 0) + " · 当前 " + (Number(task.percent) || 0) + "%";
+        return;
+      }
+      clearInterval(transcodeTimer);
+      transcodeTimer = 0;
+      const summary = task.summary || {};
+      let text = (task.status === "success" ? "转码完成：" : "转码有失败：")
+        + "成功 " + (Number(summary.succeeded) || 0) + " / 失败 " + (Number(summary.failed) || 0);
+      if (task.error) text += "；" + task.error;
+      transcodeInfo.textContent = text;
+      refresh();
+    }, 1200);
+    timers.push(transcodeTimer);
   }
 
   const filters = el("div", { class: "row" }, librarySelect, query, statusSelect);
@@ -690,7 +741,8 @@ function mountMedia(root) {
   librarySelect.addEventListener("change", onFilter);
   statusSelect.addEventListener("change", onFilter);
   query.addEventListener("change", onFilter);
-  root.append(note, el("div", { class: "panel" }, filters, el("div", { class: "row" }, purgeBtn, purgeInfo)),
+  root.append(note, el("div", { class: "panel" }, filters, el("div", { class: "row" }, purgeBtn, purgeInfo),
+      transcodeInfo),
     el("div", { class: "actions" }, prev, next, info), table);
   loadLibraries().then(refresh);
 }

@@ -15,18 +15,21 @@ const batchSize = 500
 
 const mediaCols = `id, library_id, path, title, size, mtime_ns, container,
 	video_codec, audio_codec, width, height, duration_ms, bitrate, fps,
-	status, error_class, error_message, COALESCE(missing_since,''), created_at, updated_at`
+	status, error_class, error_message, COALESCE(missing_since,''), created_at, updated_at,
+	transcode_state, transcode_note`
 
 // mediaColsQ is mediaCols qualified for JOINs (created_at 会被别的表撞名).
 const mediaColsQ = `m.id, m.library_id, m.path, m.title, m.size, m.mtime_ns, m.container,
 	m.video_codec, m.audio_codec, m.width, m.height, m.duration_ms, m.bitrate, m.fps,
-	m.status, m.error_class, m.error_message, COALESCE(m.missing_since,''), m.created_at, m.updated_at`
+	m.status, m.error_class, m.error_message, COALESCE(m.missing_since,''), m.created_at, m.updated_at,
+	m.transcode_state, m.transcode_note`
 
 func scanMedia(s interface{ Scan(...any) error }) (*domain.Media, error) {
 	var m domain.Media
 	if err := s.Scan(&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
 		&m.Codecs.Video, &m.Codecs.Audio, &m.Width, &m.Height, &m.DurationMS, &m.Bitrate, &m.FPS,
-		&m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince, &m.CreatedAt, &m.UpdatedAt,
+		&m.TranscodeState, &m.TranscodeNote); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -91,6 +94,13 @@ func (db *DB) UpdateMediaProbe(m *domain.Media) error {
 		WHERE id = ?`,
 		m.Path, m.Title, m.Size, m.MtimeNS, m.Container, m.Codecs.Video, m.Codecs.Audio,
 		m.Width, m.Height, m.DurationMS, m.Bitrate, m.FPS, m.Status, domain.NowString(), m.ID)
+	return err
+}
+
+// SetMediaTranscode 写转码状态与结论（失败原因给人看，不覆盖探测错误）。
+func (db *DB) SetMediaTranscode(id, state, note string) error {
+	_, err := db.Exec(`UPDATE media SET transcode_state = ?, transcode_note = ?, updated_at = ?
+		WHERE id = ? AND deleted_at IS NULL`, state, truncate(note, 300), domain.NowString(), id)
 	return err
 }
 

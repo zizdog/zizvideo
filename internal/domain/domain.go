@@ -121,7 +121,18 @@ type Media struct {
 	MissingSince string  `json:"-"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
+	// 转码状态（P1）：'' 未转过 | running | done | failed。
+	// 与 status/error_class 分开：转码失败时 status 仍是 ready（原文件还能播），界面据此如实说明。
+	TranscodeState string `json:"transcode_state,omitempty"`
+	TranscodeNote  string `json:"transcode_note,omitempty"`
 }
+
+// 转码状态取值。
+const (
+	TranscodeRunning = "running"
+	TranscodeDone    = "done"
+	TranscodeFailed  = "failed"
+)
 
 // Series is a 剧场（短剧）: an ordered list of already-scanned media items.
 // It never owns a file; episodes only reference existing media rows.
@@ -184,10 +195,13 @@ type ScanTask struct {
 const (
 	JobKindEpisodeDetect = "episode_detect"
 	JobKindSeriesImport  = "series_import"
+	JobKindTranscode     = "transcode"
 
 	JobTriggerManualBatch  = "manual_batch"
 	JobTriggerScanFinished = "scan_finished"
 	JobTriggerDirBatch     = "dir_batch"
+	JobTriggerUploadApprove = "upload_approve"
+	JobTriggerManualMedia   = "manual_media"
 )
 
 // JobTask is a persisted cross-library background job (一键识别 / 扫描后自动识别）。
@@ -199,6 +213,7 @@ type JobTask struct {
 	Status        string `json:"status"`
 	Total         int    `json:"total"`
 	Processed     int    `json:"processed"`
+	Percent       int    `json:"percent"` // 当前这一件的进度（转码这类分钟级动作要看得见）
 	Updated       int    `json:"updated"`
 	Failed        int    `json:"failed"`
 	ManualSkipped int    `json:"manual_skipped"`

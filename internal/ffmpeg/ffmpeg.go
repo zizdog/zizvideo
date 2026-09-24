@@ -3,6 +3,7 @@
 package ffmpeg
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,21 @@ type Runner interface {
 	Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
 }
 
+// StreamRunner 是**可选能力**：能边跑边按行回调输出（转码进度要实时看）。
+// 故意不塞进 Runner 接口 —— 那会逼所有测试替身都实现一遍；调用方用类型断言即可。
+type StreamRunner interface {
+	RunStream(ctx context.Context, onLine func(string), name string, args ...string) error
+}
+
+// RunStreaming 有流式能力就用流式，没有就退回一次性 Run（调用方照样拿到错误）。
+func RunStreaming(ctx context.Context, r Runner, onLine func(string), name string, args ...string) error {
+	if sr, ok := r.(StreamRunner); ok {
+		return sr.RunStream(ctx, onLine, name, args...)
+	}
+	_, _, err := r.Run(ctx, name, args...)
+	return err
+}
+
 // ExecRunner is the production runner. There is no shell involved.
 type ExecRunner struct{}
 
@@ -33,6 +49,52 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	err := cmd.Run()
 	return []byte(out.String()), []byte(errb.String()), err
 }
+
+// RunStream implements StreamRunner: stdout 按行回调（ffmpeg -progress 就是一行一条），
+// stderr 仍然收着（失败时给错误分类看）。回调必须自己够快，别在里面做重活。
+func (ExecRunner) RunStream(ctx context.Context, onLine func(string), name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if onLine != nil {
+			onLine(scanner.Text())
+		}
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		return &ExecError{Err: waitErr, Stderr: errb.String()}
+	}
+	return nil
+}
+
+// ExecError 带上 stderr 尾巴，便于如实说明"哪一步失败"。
+type ExecError struct {
+	Err    error
+	Stderr string
+}
+
+func (e *ExecError) Error() string {
+	tail := strings.TrimSpace(e.Stderr)
+	if len(tail) > 400 {
+		tail = tail[len(tail)-400:]
+	}
+	if tail == "" {
+		return e.Err.Error()
+	}
+	return e.Err.Error() + "：" + tail
+}
+
+func (e *ExecError) Unwrap() error { return e.Err }
 
 // ProbeError carries the classified failure reason for a single file.
 type ProbeError struct {

@@ -9,18 +9,50 @@ export function mountUploadsTab(root) {
   const note = banner();
   const count = el("span", { class: "muted small-note", dataset: { role: "pending-count" } });
   const listBox = el("div", { class: "upload-list", dataset: { role: "pending-rows" } });
+  // 转码进度行放面板里：reload() 会清空 listBox，放在里面会被"通过后刷新"顺手清掉。
+  const transcodeLine = el("div", { class: "muted small-note", dataset: { role: "transcode-progress" } });
   let libraries = [];
 
   root.append(el("div", { class: "panel" },
     el("div", { class: "panel-title" }, el("span", { text: "待审上传" }), count),
     el("div", { class: "muted small-note", text: "通过前先看一眼预览：通过后文件移进你选的媒体库并立刻可播。" }),
-    note), listBox);
+    note, transcodeLine), listBox);
 
   async function loadLibraries() {
     try {
       const data = await api.libraries();
       libraries = (data && (data.list || data)) || [];
     } catch (err) { libraries = []; }
+  }
+
+  // 转码任务进度（复用任务中心 /admin/tasks/{id} 的 percent）
+  let transcodeTimer = 0;
+  function pollTranscode(jobId) {
+    if (transcodeTimer) clearInterval(transcodeTimer);
+    const line = transcodeLine;
+    const tick = async () => {
+      let task = null;
+      try { task = await api.jobTask(jobId); }
+      catch (err) {
+        clearInterval(transcodeTimer); transcodeTimer = 0;
+        line.textContent = "转码进度查询失败：" + (err && err.message ? err.message : "");
+        return;
+      }
+      if (task.status === "pending" || task.status === "running") {
+        line.textContent = "转码中 " + (Number(task.processed) || 0) + "/" + (Number(task.total) || 0) +
+          " · 当前 " + (Number(task.percent) || 0) + "%";
+        return;
+      }
+      clearInterval(transcodeTimer);
+      transcodeTimer = 0;
+      const summary = task.summary || {};
+      line.textContent = (task.status === "success" ? "转码完成：" : "转码有失败：") +
+        "成功 " + (Number(summary.succeeded) || 0) + " / 失败 " + (Number(summary.failed) || 0) +
+        (task.error ? "；" + task.error : "");
+      await reload();
+    };
+    transcodeTimer = setInterval(tick, 1200);
+    tick();
   }
 
   async function reload() {
@@ -79,6 +111,24 @@ export function mountUploadsTab(root) {
         approve.disabled = false;
       }
     });
+    // 通过并转码（P1）：兼容优先，转码是后台任务，失败也不影响"已经进库"这件事。
+    const approveTranscode = el("button", { class: "btn small", type: "button", text: "通过并转码",
+      dataset: { role: "pending-approve-transcode" } });
+    approveTranscode.addEventListener("click", async () => {
+      if (!libSelect.value) { setBanner(note, "先选一个媒体库"); return; }
+      approveTranscode.disabled = true;
+      try {
+        const data = await api.approveUpload(item.id, { library_id: libSelect.value,
+          title: titleInput.value.trim(), transcode: true });
+        await reload();
+        if (data && data.transcode_error) setBanner(note, "已通过，但转码没排上：" + data.transcode_error);
+        else if (data && data.transcode_job_id) pollTranscode(data.transcode_job_id);
+      } catch (err) {
+        setBanner(note, err && err.message ? err.message : "通过失败");
+      } finally {
+        approveTranscode.disabled = false;
+      }
+    });
     const reject = el("button", { class: "btn danger small", type: "button", text: "驳回",
       dataset: { role: "pending-reject" } });
     reject.addEventListener("click", async () => {
@@ -103,7 +153,7 @@ export function mountUploadsTab(root) {
           el("span", { class: "muted small-note", text: " " + fmtBytes(item.size) })),
         el("div", { class: "muted small-note", text: "上传者 " + (item.uploader || "-") + " · " + fmtDate(item.created_at) }),
         el("div", { class: "row" }, libSelect, titleInput),
-        el("div", { class: "actions" }, approve, reject)));
+        el("div", { class: "actions" }, approve, approveTranscode, reject)));
   }
 
   loadLibraries().then(reload);

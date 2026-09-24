@@ -179,6 +179,9 @@ export const api = {
 
   systemInfo: () => request("GET", "/api/v1/admin/system/info"),
 
+  // P1 转码队列：排队转码（进度看 jobTask）。
+  transcode: (mediaIds) => request("POST", "/api/v1/admin/transcodes", { media_ids: mediaIds }),
+
   // 自动扫描：读写设置 + 立即触发一轮（202 + task_ids，扫描仍走任务中心）。
   autoScan: () => request("GET", "/api/v1/admin/autoscan"),
   saveAutoScan: (body) => request("PATCH", "/api/v1/admin/autoscan", body),

@@ -1,0 +1,108 @@
+package transcode
+
+import (
+	"strings"
+	"testing"
+)
+
+// 门禁：转码决策必须只看编解码/分辨率，且"已兼容"不许白重编（P1 的省时省质判据）。
+func TestBuildPlanDecidesRemuxVsTranscode(t *testing.T) {
+	base := Options{In: "/lib/a.mkv", Out: "/lib/a.mkv.zvtranscode"}
+	cases := []struct {
+		name     string
+		opts     Options
+		wantMode string
+		mustHave []string
+		mustNot  []string
+	}{
+		{
+			name: "HEVC + AC3 竖屏 → 重编视频与音频",
+			opts: Options{VideoCodec: "hevc", AudioCodec: "ac3", Height: 1280, Out: base.Out},
+			wantMode: "transcode",
+			mustHave: []string{"libx264", "aac", "scale=-2:'min(720,ih)'", "+faststart"},
+		},
+		{
+			name: "有 videotoolbox 就用硬件编码（码率模式，不是 crf）",
+			opts: Options{VideoCodec: "hevc", AudioCodec: "aac", Height: 1080,
+				VideoToolbox: true, Out: base.Out},
+			wantMode: "transcode",
+			mustHave: []string{"h264_videotoolbox", "-b:v"},
+			mustNot:  []string{"libx264", "-crf"},
+		},
+		{
+			name:     "H.264+AAC 且 ≤720p → 只换容器（-c copy）",
+			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 640, Out: base.Out},
+			wantMode: "remux",
+			mustHave: []string{"-c", "copy"},
+			mustNot:  []string{"libx264", "-crf"},
+		},
+		{
+			name:     "视频兼容但音频是 DTS → 只重编音频，视频直接 copy",
+			opts:     Options{VideoCodec: "h264", AudioCodec: "dts", Height: 480, Out: base.Out},
+			wantMode: "remux",
+			mustHave: []string{"-c:v", "copy", "aac"},
+			mustNot:  []string{"libx264"},
+		},
+		{
+			name:     "720p 以上即使 H.264 也要缩到 720",
+			opts:     Options{VideoCodec: "h264", AudioCodec: "aac", Height: 1080, Out: base.Out},
+			wantMode: "transcode",
+			mustHave: []string{"libx264", "scale=-2:'min(720,ih)'"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := BuildPlan(Options{In: base.In, VideoCodec: c.opts.VideoCodec,
+				AudioCodec: c.opts.AudioCodec, Height: c.opts.Height,
+				DurationMS: 60000, VideoToolbox: c.opts.VideoToolbox, Out: base.Out})
+			if plan.Mode != c.wantMode {
+				t.Fatalf("mode = %s，期望 %s（args=%v）", plan.Mode, c.wantMode, plan.Args)
+			}
+			joined := strings.Join(plan.Args, " ")
+			for _, want := range c.mustHave {
+				if !strings.Contains(joined, want) {
+					t.Errorf("参数里缺少 %q：%v", want, plan.Args)
+				}
+			}
+			for _, no := range c.mustNot {
+				if strings.Contains(joined, no) {
+					t.Errorf("参数里不该出现 %q：%v", no, plan.Args)
+				}
+			}
+			// 输出必须是同目录临时文件（同卷 rename 才原子；后缀不在允许扩展名里，扫描器会跳过）
+			if !strings.HasSuffix(plan.Args[len(plan.Args)-1], ".zvtranscode") {
+				t.Errorf("输出不是同目录临时文件：%v", plan.Args[len(plan.Args)-1])
+			}
+			// 进度必须走 stdout（解析 out_time_us）
+			if !strings.Contains(joined, "-progress pipe:1") {
+				t.Errorf("缺少 -progress pipe:1：%v", plan.Args)
+			}
+			if plan.Note == "" {
+				t.Error("缺少人话说明（界面要显示它）")
+			}
+		})
+	}
+}
+
+// 进度解析：只有真的拿到 out_time_us 才算，除零/负数一律不出数（不许编进度）。
+func TestProgressPercentHonest(t *testing.T) {
+	cases := []struct {
+		line     string
+		duration int64
+		want     int
+		ok       bool
+	}{
+		{"out_time_us=30000000", 60000, 50, true},
+		{"out_time_us=0", 60000, 0, false},
+		{"out_time_us=abc", 60000, 0, false},
+		{"out_time_us=30000000", 0, 0, false},
+		{"progress=continue", 60000, 0, false},
+		{"out_time_us=99000000", 60000, 100, true}, // 夹到 100
+	}
+	for _, c := range cases {
+		got, ok := progressPercent(c.line, c.duration)
+		if ok != c.ok || got != c.want {
+			t.Errorf("progressPercent(%q, %d) = (%d,%v)，期望 (%d,%v)", c.line, c.duration, got, ok, c.want, c.ok)
+		}
+	}
+}

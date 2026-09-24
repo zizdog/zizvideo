@@ -17,6 +17,7 @@ import (
 
 	"github.com/zizdog/zizvideo/internal/domain"
 	"github.com/zizdog/zizvideo/internal/media"
+	"github.com/zizdog/zizvideo/internal/transcode"
 )
 
 // 用户上传（UGC，docs/上传设计.md）：白名单（users.can_upload）才可开上传会话。
@@ -503,6 +504,8 @@ type ugcApproveReq struct {
 	LibraryID string `json:"library_id"`
 	// Title 可选：审核时顺手改标题（进库后的显示名）。
 	Title string `json:"title"`
+	// Transcode 可选：通过后顺手排队转码（P1 兼容优先，原文件在转码成功前一直是可播的）。
+	Transcode bool `json:"transcode"`
 }
 
 // HandleAdminApproveUpload 通过：把文件从 inbox 移进选定的媒体库并登记 media（立刻可播）。
@@ -564,9 +567,21 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.audit(r, "upload.ugc.approve", "upload:"+it.ID, true,
-		fmt.Sprintf("media:%s library:%s", mediaID, lib.ID))
-	respond(w, http.StatusOK, map[string]any{"media_id": mediaID, "library_id": lib.ID,
-		"path": dest, "title": title}, nil)
+		fmt.Sprintf("media:%s library:%s transcode:%v", mediaID, lib.ID, req.Transcode))
+	out := map[string]any{"media_id": mediaID, "library_id": lib.ID,
+		"path": dest, "title": title}
+	// 顺手转码：排队失败不影响"已经通过"这个事实，如实把错误一起带回去。
+	if req.Transcode && s.Transcodes != nil {
+		jobID, terr := s.Transcodes.Enqueue([]transcode.Item{
+			{MediaID: mediaID, Source: domain.JobTriggerUploadApprove}},
+			domain.JobTriggerUploadApprove)
+		if terr != nil {
+			out["transcode_error"] = terr.Error()
+		} else {
+			out["transcode_job_id"] = jobID
+		}
+	}
+	respond(w, http.StatusOK, out, nil)
 }
 
 // probeApproved 登记 media：已经扫描过的路径直接复用，否则探测+抽封面后插入。

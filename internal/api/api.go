@@ -20,10 +20,11 @@ import (
 	"github.com/zizdog/zizvideo/internal/ffmpeg"
 	"github.com/zizdog/zizvideo/internal/storage"
 	"github.com/zizdog/zizvideo/internal/task"
+	"github.com/zizdog/zizvideo/internal/transcode"
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.1.19-mvp"
+var Version = "0.1.20-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {
@@ -40,6 +41,9 @@ type Server struct {
 
 	// Uploads 是三步上传的进程内会话（start/PUT/finish）。
 	Uploads *uploadStore
+
+	// Transcodes 是 P1 转码队列（单工作协程，串行）。
+	Transcodes *transcode.Queue
 
 	StartedAt time.Time
 
@@ -74,6 +78,11 @@ func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Mana
 	roots *config.Roots, r ffmpeg.Runner, log *slog.Logger) *Server {
 	s := &Server{Cfg: cfg, DB: db, Auth: a, Tasks: t, Roots: roots, Runner: r, Log: log,
 		Uploads: newUploadStore(), StartedAt: time.Now()}
+	s.Transcodes = transcode.NewQueue(cfg, db, roots, r, log)
+	// 范围判据只在这里构造（scopeAll 是唯一构造点）：转码队列拿到的永远是"能查到的这条"。
+	s.Transcodes.LoadMedia = func(id string) (*domain.Media, error) {
+		return db.GetMediaIn(scopeAll(), id)
+	}
 	// 扫描成功结束后自动补齐识别（不改变 task.Manager 对 api 的依赖方向）。
 	if t != nil {
 		t.SetAfterScan(s.OnScanFinished)
@@ -98,6 +107,13 @@ func (s *Server) StopAutoScan() {
 	}
 }
 
+// StopBackground 停掉本进程的后台队列（转码）；扫描由 task.Manager 自己收尾。
+func (s *Server) StopBackground() {
+	if s.Transcodes != nil {
+		s.Transcodes.Stop()
+	}
+}
+
 // AutoScanChanged asks the scheduler to re-read settings and rebuild watches.
 func (s *Server) AutoScanChanged() {
 	if s.Auto != nil {
@@ -111,6 +127,10 @@ func (s *Server) RefreshCapabilities(ctx context.Context) {
 	s.mu.Lock()
 	s.caps = caps
 	s.mu.Unlock()
+	// 转码队列用同一份探测结果决定有没有硬件编码器（别在队列里再跑一次 ffmpeg -encoders）。
+	if s.Transcodes != nil {
+		s.Transcodes.VideoToolbox = caps.VideoToolboxH264
+	}
 	if !caps.FFmpegOK || !caps.FFprobeOK {
 		s.Log.Error("外部工具不可用", "ffmpeg_ok", caps.FFmpegOK,
 			"ffprobe_ok", caps.FFprobeOK, "error", caps.Error)

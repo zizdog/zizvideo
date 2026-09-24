@@ -44,6 +44,9 @@ type mediaItem struct {
 	Missing   bool   `json:"missing"`
 	Reaction  any    `json:"reaction"`
 	CreatedAt string `json:"created_at"`
+	// 转码状态（P1）：与 status 分开透出 —— 转码失败时 status 仍是 ready（还能播）。
+	TranscodeState string `json:"transcode_state,omitempty"`
+	TranscodeNote  string `json:"transcode_note,omitempty"`
 }
 
 type progressBrief struct {
@@ -85,6 +88,7 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 			Favorite:  favs[m.ID], CreatedAt: m.CreatedAt,
 			WatchLater: later[m.ID],
 			Missing:    m.MissingSince != "",
+			TranscodeState: m.TranscodeState, TranscodeNote: m.TranscodeNote,
 		}
 		if withPath {
 			item.Path = m.Path

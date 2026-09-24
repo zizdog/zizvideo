@@ -388,6 +388,23 @@ func (s *Scanner) readyMedia(ctx context.Context, id string, lib *domain.Library
 	}
 }
 
+// RefreshFile 就地重探一条已存在的 media（转码替换了字节之后用）：
+// 只更新探测结果与封面，**不动 id**，所以观看进度/收藏/剧场成员关系全都不受影响。
+func (s *Scanner) RefreshFile(ctx context.Context, id, path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	title := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	probe, perr := s.probeWithRetry(ctx, path)
+	if perr != nil {
+		return perr
+	}
+	e := fileEntry{Path: path, Size: fi.Size(), MtimeNS: fi.ModTime().UnixNano()}
+	m := s.readyMedia(ctx, id, &domain.Library{}, e, probe, title)
+	return s.DB.UpdateMediaProbe(m)
+}
+
 // ProbePath 探测单个文件、抽封面并登记成 ready 行（用户上传审核通过后立刻可播）。
 // title 为空时按文件名取；探测失败返回错误，调用方负责别把坏文件塞进库。
 func (s *Scanner) ProbePath(ctx context.Context, lib *domain.Library, path string,

@@ -282,7 +282,7 @@ func (db *DB) ListSeriesEpisodes(scope domain.LibraryScope, seriesID string) ([]
 			&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
 			&m.Codecs.Video, &m.Codecs.Audio, &m.Width, &m.Height, &m.DurationMS, &m.Bitrate,
 			&m.FPS, &m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince,
-			&m.CreatedAt, &m.UpdatedAt); err != nil {
+			&m.CreatedAt, &m.UpdatedAt, &m.TranscodeState, &m.TranscodeNote); err != nil {
 			return nil, nil, err
 		}
 		e.Season = nullInt(season)

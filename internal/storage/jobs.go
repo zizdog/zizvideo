@@ -12,14 +12,14 @@ import (
 // NOT NULL + 外键指向单库，装不下跨库识别任务。
 const jobTaskCols = `id, kind, trigger, status, total, processed, updated, failed,
 	manual_skipped, unidentified, degraded, degrade_reason, error, summary,
-	COALESCE(started_at,''), COALESCE(finished_at,''), created_at, updated_at`
+	COALESCE(started_at,''), COALESCE(finished_at,''), created_at, updated_at, percent`
 
 func scanJobTask(s interface{ Scan(...any) error }) (*domain.JobTask, error) {
 	var t domain.JobTask
 	var degraded int
 	if err := s.Scan(&t.ID, &t.Kind, &t.Trigger, &t.Status, &t.Total, &t.Processed, &t.Updated,
 		&t.Failed, &t.ManualSkipped, &t.Unidentified, &degraded, &t.DegradeReason, &t.Error,
-		&t.Summary, &t.StartedAt, &t.FinishedAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.Summary, &t.StartedAt, &t.FinishedAt, &t.CreatedAt, &t.UpdatedAt, &t.Percent); err != nil {
 		return nil, err
 	}
 	t.Degraded = degraded == 1
@@ -47,6 +47,19 @@ func (db *DB) GetJobTask(id string) (*domain.JobTask, error) {
 		return nil, domain.ErrTaskNotFound
 	}
 	return t, err
+}
+
+// UpdateJobTaskPercent 写"当前这一件"的百分比（转码这类分钟级动作要看得见进度）。
+func (db *DB) UpdateJobTaskPercent(id string, percent int) error {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	_, err := db.Exec(`UPDATE job_tasks SET percent = ?, updated_at = ? WHERE id = ?`,
+		percent, domain.NowString(), id)
+	return err
 }
 
 // UpdateJobTaskProgress writes the counters collected so far and flips to running.

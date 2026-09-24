@@ -93,6 +93,8 @@ func jobTaskJSON(t *domain.JobTask) map[string]any {
 		"total": t.Total, "processed": t.Processed, "updated": t.Updated,
 		"manual_skipped": t.ManualSkipped, "unidentified": t.Unidentified, "failed": t.Failed,
 		"degraded": t.Degraded, "degrade_reason": t.DegradeReason, "error": t.Error,
+		// percent = 当前这一件的进度（转码这类分钟级动作要看得见；其它任务恒 0）
+		"percent":    t.Percent,
 		"started_at": t.StartedAt, "finished_at": t.FinishedAt, "updated_at": t.UpdatedAt,
 	}
 	if t.Summary != "" {
