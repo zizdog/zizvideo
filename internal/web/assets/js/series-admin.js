@@ -70,8 +70,71 @@ export function mountSeriesAdmin(box, series, options) {
     el("div", { class: "row" }, detectBtn),
     el("div", { class: "muted small-note", text: "按文件名识别，识别不到的不猜；手动排过的不会被覆盖。" }),
     detectBox);
+
+  // C9：把这一剧场各集的文件整理进 <库根>/<剧场名>/ —— 先给清单，确认后才真移动。
+  const organizeBtn = el("button", {
+    class: "btn small", type: "button", text: "按剧场整理到子目录",
+    dataset: { role: "series-organize" },
+  });
+  const organizeBox = el("div", { class: "muted small-note", hidden: true, dataset: { role: "series-organize-plan" } });
+  const organizeApply = el("button", {
+    class: "btn small primary", type: "button", hidden: true, text: "确认移动",
+    dataset: { role: "series-organize-apply" },
+  });
+  const organizePanel = el("div", { class: "panel" },
+    el("div", { class: "row" }, organizeBtn, organizeApply),
+    el("div", { class: "muted small-note",
+      text: "把这一剧场各集的文件挪进库内子目录（同卷直接改名；跨卷先复制校验再删源）。库根之外的文件不动。" }),
+    organizeBox);
+
+  function organizeActionText(item) {
+    if (item.action === "move") return "移动";
+    if (item.action === "keep") return "已在目标目录";
+    if (item.action === "missing") return "文件不在了";
+    return "不在本库根内（不动）";
+  }
+
+  async function runOrganize(apply) {
+    organizeBtn.disabled = true;
+    organizeApply.disabled = true;
+    setBanner(note, "");
+    try {
+      const data = await api.request("POST",
+        "/api/v1/admin/series/" + encodeURIComponent(series.id) + "/organize", { apply: !!apply });
+      const items = (data && data.items) || [];
+      clear(organizeBox);
+      organizeBox.hidden = false;
+      organizeBox.append(el("div", { text: "目标目录：" + ((data && data.target_dir) || "") }));
+      for (const item of items) {
+        organizeBox.append(el("div", { dataset: { role: "series-organize-item" },
+          text: (item.moved ? "✓ " : (item.error ? "✗ " : "· ")) + item.title + " → " +
+            organizeActionText(item) + (item.error ? "：" + item.error : "") }));
+      }
+      if (apply) {
+        organizeApply.hidden = true;
+        organizeBtn.textContent = "按剧场整理到子目录";
+        setBanner(note, "已移动 " + ((data && data.moved) || 0) + " 个文件"
+          + ((data && data.failed) ? ("，失败 " + data.failed + " 个（原文件未动）") : ""));
+        await load();
+        if (opts.onChanged) opts.onChanged();
+      } else {
+        const moves = (data && data.moves) || 0;
+        organizeApply.hidden = moves === 0;
+        organizeApply.textContent = "确认移动 " + moves + " 个文件";
+        organizeBtn.textContent = "重新给清单";
+      }
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "整理失败");
+    } finally {
+      organizeBtn.disabled = false;
+      organizeApply.disabled = false;
+    }
+  }
+  organizeBtn.addEventListener("click", () => runOrganize(false));
+  organizeApply.addEventListener("click", () => runOrganize(true));
   const delBtn = el("button", { class: "btn danger", type: "button", text: "删除剧场", dataset: { role: "series-delete" } });
-  box.append(editForm, dirPanel, picker, detectPanel, epPanel, el("div", { class: "actions" }, delBtn));
+  box.append(editForm, dirPanel, picker, detectPanel, organizePanel, epPanel,
+    el("div", { class: "actions" }, delBtn));
 
   let ids = [];
   const mediaByID = {};

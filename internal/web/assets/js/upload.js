@@ -89,6 +89,9 @@ export function mountUpload(view) {
   const targetNote = el("div", { class: "muted small-note", dataset: { role: "upload-target-note" },
     text: "投递目标只是建议：审核通过时管理员可改，指定后审核页会预填。" });
   const quotaLine = el("div", { class: "muted small-note", dataset: { role: "upload-quota" }, text: "配额读取中…" });
+  // 用户 2026-09-24 报障：这里原来显示的是**系统盘（数据目录）**的剩余空间，不是媒体库所在盘。
+  // 现在两块盘分开说清楚：收件盘（上传先落哪）+ 存储盘（目标媒体库在哪块盘）。
+  const spaceLine = el("div", { class: "muted small-note", dataset: { role: "upload-space" } });
   const picker = el("input", {
     type: "file", multiple: true, accept: "video/*", dataset: { role: "upload-picker" },
   });
@@ -117,6 +120,7 @@ export function mountUpload(view) {
     el("div", { class: "panel" },
       el("div", { class: "muted small-note", text: "选中视频后点「开始上传」；上传完进待审，管理员通过后才进媒体库。" }),
       quotaLine,
+      spaceLine,
       el("div", { class: "row" }, picker, startBtn, nativeBtn),
       el("div", { class: "row" }, el("span", { class: "muted small-note", text: "投递目标：" }), targetLib, targetSeries),
       targetNote),
@@ -125,8 +129,7 @@ export function mountUpload(view) {
   function paintQuota(quota) {
     if (!quota) return;
     quotaLine.textContent = "已用 " + quota.items + "/" + quota.max_items + " 条 · " +
-      fmtBytes(quota.bytes) + "/" + fmtBytes(quota.max_bytes) +
-      "（服务器剩余 " + fmtBytes(quota.free_bytes) + "）";
+      fmtBytes(quota.bytes) + "/" + fmtBytes(quota.max_bytes) + "（待审+已传总量）";
   }
 
   function paintRow(row) {
@@ -244,6 +247,38 @@ export function mountUpload(view) {
     return out;
   }
 
+  // 收件盘 / 存储盘 分开显示：存储盘取"当前选中的投递库"（没选就给第一个能访问的库，
+  // 并说明这只是默认值 —— 入库时管理员还能改）。
+  async function loadSpace() {
+    try {
+      const data = await api.uploadSpace(targetLib.value);
+      const inbox = data.inbox || {};
+      const lib = data.library || {};
+      clear(spaceLine);
+      spaceLine.append(el("div", { dataset: { role: "upload-space-inbox" },
+        text: "收件盘（上传先落这里）：可用 " + fmtBytes(inbox.free_bytes || 0) +
+          " / " + fmtBytes(inbox.total_bytes || 0) }));
+      if (data.library_id) {
+        spaceLine.append(el("div", { dataset: { role: "upload-space-library" },
+          text: "存储盘（" + (lib.label || "媒体库") + "）：可用 " + fmtBytes(lib.free_bytes || 0) +
+            " / " + fmtBytes(lib.total_bytes || 0) +
+            (data.defaulted ? "（还没选投递库，这是你第一个能访问的库）" : "") }));
+        if (data.same_volume === false) {
+          spaceLine.append(el("div", { class: "muted small-note", dataset: { role: "upload-space-cross" },
+            text: "收件盘和存储盘不是同一块盘：审核通过时会复制一份再删原件（慢一些，但不会因为掉盘丢东西）。" }));
+        }
+      }
+      if (data.warning) {
+        spaceLine.append(el("div", { class: "danger small-note", dataset: { role: "upload-space-warning" },
+          text: data.warning }));
+      }
+    } catch (err) {
+      // 读不到就如实说，不编一个数字
+      clear(spaceLine);
+      spaceLine.append(el("div", { text: "磁盘剩余空间读取失败：" + (err && err.message ? err.message : "") }));
+    }
+  }
+
   async function loadTargets() {
     try {
       const libs = await api.myLibraries();
@@ -252,6 +287,7 @@ export function mountUpload(view) {
       if (!list.length) targetNote.textContent = "你还没有可访问的媒体库：投递目标不可选，先让管理员授权。";
       applySeed();
     } catch (err) { /* 读不到就不显示，不编 */ }
+    await loadSpace();
   }
 
   // 把 C7 带来的预选落进控件（库要真在可选项里才选，选不了就只预填剧场名）
@@ -298,6 +334,7 @@ export function mountUpload(view) {
 
   refreshQuota();
   loadTargets();
+  targetLib.addEventListener("change", loadSpace); // 换目标库 ⇒ 存储盘可能换了一块盘
   view.append(page);
   return null;
 }

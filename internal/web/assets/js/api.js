@@ -183,6 +183,9 @@ export const api = {
   rejectUploadBatch: (ids, note) => request("POST", "/api/v1/admin/uploads/reject-batch", { ids, note }),
 
   systemInfo: () => request("GET", "/api/v1/admin/system/info"),
+  systemDisks: () => request("GET", "/api/v1/admin/system/disks"),
+  uploadSpace: (libraryId) => request("GET", "/api/v1/me/upload-space" +
+    (libraryId ? ("?library_id=" + encodeURIComponent(libraryId)) : "")),
 
   // P1 转码队列：排队转码（进度看 jobTask）。
   // maxHeight：输出高度上限（0/不传 = 保持原分辨率）

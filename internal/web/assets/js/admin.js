@@ -1392,7 +1392,46 @@ function mountDuplicates(root) {
 function mountSystem(root) {
   const note = banner();
   const box = el("div", { class: "panel" });
-  root.append(note, box);
+  // D11 磁盘告警 + D10 备份导出
+  const disksBox = el("div", { class: "panel", dataset: { role: "system-disks" } });
+  root.append(note, box, disksBox);
+
+  // D11：每块盘剩余量一眼看见；吃紧的直接红字说出来（不静默等人踩坑）
+  api.systemDisks().then((data) => {
+    const disks = (data && data.disks) || [];
+    const warnings = (data && data.warnings) || [];
+    clear(disksBox);
+    disksBox.append(el("div", { class: "panel-title", text: "磁盘" }));
+    for (const d of disks) {
+      const line = d.error
+        ? (d.label + "：" + d.path + "（读不到：" + d.error + "）")
+        : (d.label + "：" + fmtBytes(d.free_bytes) + " 可用 / " + fmtBytes(d.total_bytes) +
+           "（剩 " + (d.free_percent || 0) + "%）");
+      disksBox.append(el("div", {
+        class: d.low ? "danger small-note" : "muted small-note",
+        dataset: { role: "system-disk", low: d.low ? "1" : "0" },
+        text: (d.role === "library" ? "媒体库 · " : "") + line + (d.low ? "  ← 吃紧" : ""),
+      }));
+    }
+    for (const w of warnings) {
+      disksBox.append(el("div", { class: "danger small-note", dataset: { role: "system-disk-warning" }, text: w }));
+    }
+    disksBox.append(el("div", { class: "muted small-note",
+      text: "判据：剩余不足 5GB 或不足 5% 算吃紧（上传、转码、入库都可能因此失败）。" }));
+
+    // D10 备份导出：数据库快照（一致性由 VACUUM INTO 保证），点一下直接下载
+    disksBox.append(
+      el("div", { class: "panel-title", text: "备份" }),
+      el("div", { class: "muted small-note",
+        text: "导出数据库快照：用户 / 媒体库 / 剧场 / 观看进度 / 上传记录。不含视频文件与封面缓存（视频请另外备份媒体库目录）。" }),
+      el("div", { class: "row" },
+        el("a", { class: "btn small primary", href: "/api/v1/admin/backup",
+          dataset: { role: "system-backup" }, text: "导出备份（.tar.gz）" })));
+  }).catch((err) => {
+    clear(disksBox);
+    disksBox.append(el("div", { class: "muted small-note",
+      text: "磁盘信息读取失败：" + (err && err.message ? err.message : "") }));
+  });
 
   api.systemInfo().then((info) => {
     const ffmpeg = info.ffmpeg || {};

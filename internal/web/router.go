@@ -100,6 +100,7 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("DELETE /api/v1/admin/series/{id}/media/{mediaId}", s.RequireAdmin(s.HandleRemoveSeriesMedia))
 	mux.HandleFunc("PUT /api/v1/admin/series/{id}/order", s.RequireAdmin(s.HandleReorderSeries))
 	mux.HandleFunc("POST /api/v1/admin/series/{id}/detect", s.RequireAdmin(s.HandleDetectSeries))
+	mux.HandleFunc("POST /api/v1/admin/series/{id}/organize", s.RequireAdmin(s.HandleOrganizeSeries))
 	// P2：批量一键识别（confirm 两段式）+ 跨库任务进度（job_tasks，迁移 0008）。
 	mux.HandleFunc("POST /api/v1/admin/series/detect-all", s.RequireAdmin(s.HandleDetectAll))
 	mux.HandleFunc("GET /api/v1/admin/tasks/{id}", s.RequireAdmin(s.HandleGetJobTask))
@@ -125,6 +126,7 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("GET /api/v1/uploads/{id}/stream", s.RequireUploader(s.HandleUGCStream))
 	mux.HandleFunc("GET /api/v1/uploads/{id}/cover", s.RequireUploader(s.HandleUGCCover))
 	mux.HandleFunc("GET /api/v1/me/uploads", s.RequireUploader(s.HandleListMyUploads))
+	mux.HandleFunc("GET /api/v1/me/upload-space", s.RequireUploader(s.HandleMyUploadSpace))
 	// 后台「待审」：列表 + 通过（选库）/ 驳回。
 	mux.HandleFunc("GET /api/v1/admin/uploads/pending", s.RequireAdmin(s.HandleAdminPendingUploads))
 	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/approve", s.RequireAdmin(s.HandleAdminApproveUpload))
@@ -134,6 +136,8 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/uploads/reject-batch", s.RequireAdmin(s.HandleAdminRejectBatch))
 
 	mux.HandleFunc("GET /api/v1/admin/system/info", s.RequireAdmin(s.HandleSystemInfo))
+	mux.HandleFunc("GET /api/v1/admin/system/disks", s.RequireAdmin(s.HandleSystemDisks))
+	mux.HandleFunc("GET /api/v1/admin/backup", s.RequireAdmin(s.HandleExportBackup))
 	mux.HandleFunc("GET /api/v1/admin/audit", s.RequireAdmin(s.HandleAuditList))
 
 	// 条目 8：注册开关（默认关）+ 唯一公开自助注册入口。

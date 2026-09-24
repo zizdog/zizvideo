@@ -86,6 +86,8 @@ var authedUnscopedAllowlist = map[string]bool{
 	"GET /api/v1/uploads/{id}/stream":  true,
 	"GET /api/v1/uploads/{id}/cover":   true,
 	"GET /api/v1/me/uploads":           true,
+	// 上传页的磁盘显示：自己按 resolveScope 选库（scope 判据仍在 authz.go），故不包 WithLibraryScope
+	"GET /api/v1/me/upload-space": true,
 }
 
 // 匿名可访问：新增公开接口必须显式登记，否则测试红（防止悄悄公开）。
