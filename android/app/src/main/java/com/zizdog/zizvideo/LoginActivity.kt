@@ -29,6 +29,9 @@ class LoginActivity : AppCompatActivity() {
     /** 快捷方式要求直接开播的队列（zizvideo://listen/feed ⇒ "feed"）。 */
     private var listenKind = ""
 
+    /** zizvideo://upload：进网页上传页后直接弹系统选择器。 */
+    private var pickUploads = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -74,6 +77,8 @@ class LoginActivity : AppCompatActivity() {
 
         val data = intent?.data?.toString() ?: ""
         if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")
+        // zizvideo://upload：快捷方式直接进上传页并弹系统选择器（后台传、息屏不断）
+        if (data.startsWith("zizvideo://upload")) pickUploads = true
         // 上次登录留下的会话 cookie 还有效就直接进 —— 不然每次冷启动都要重输口令（用户预期是免登录）
         autoEnterIfLoggedIn()
     }
@@ -189,7 +194,13 @@ class LoginActivity : AppCompatActivity() {
         }
         val intent = Intent(this, WebActivity::class.java).putExtra(WebActivity.EXTRA_BASE, base)
         // 允许"启动就打开某一页"（通知/深链/自测都靠它，别在测试里写死坐标点导航栏）
-        this.intent.getStringExtra(WebActivity.EXTRA_PATH)?.let { intent.putExtra(WebActivity.EXTRA_PATH, it) }
+        val explicitPath = this.intent.getStringExtra(WebActivity.EXTRA_PATH)
+        if (pickUploads) {
+            intent.putExtra(WebActivity.EXTRA_PATH, "/#/upload")
+            intent.putExtra(WebActivity.EXTRA_PICK, true)
+        } else if (explicitPath != null) {
+            intent.putExtra(WebActivity.EXTRA_PATH, explicitPath)
+        }
         startActivity(intent)
         finish()
     }

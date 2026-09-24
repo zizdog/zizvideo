@@ -46,6 +46,9 @@ class WebActivity : AppCompatActivity() {
 
         /** 启动时直接打开的站内路径（如 "/#/favorites/later"）；不传就进首页。 */
         const val EXTRA_PATH = "path"
+
+        /** 启动即拉起系统文件选择器（zizvideo://upload 快捷方式用）。 */
+        const val EXTRA_PICK = "pick_uploads"
     }
 
     private lateinit var web: WebView
@@ -83,6 +86,20 @@ class WebActivity : AppCompatActivity() {
                     ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 } else {
                     ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+            return true
+        }
+
+        /** 网页「用系统选择器上传」调这个：SAF 多选视频，交给 UploadService 后台传（息屏不断）。 */
+        @android.webkit.JavascriptInterface
+        fun pickUploads(): Boolean {
+            runOnUiThread {
+                try {
+                    uploadPicker.launch(arrayOf("video/*"))
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(this@WebActivity, "打不开系统选择器：" + e.message,
+                        android.widget.Toast.LENGTH_LONG).show()
                 }
             }
             return true
@@ -189,8 +206,23 @@ class WebActivity : AppCompatActivity() {
           });
         })();
     """.trimIndent()
+    private var pickOnLoad = false
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+
+    // 用户上传：SAF 多选 → 交给前台服务后台传（网页端那套分片接口）
+    private val uploadPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val list = ArrayList(uris ?: emptyList())
+        if (list.isEmpty()) return@registerForActivityResult
+        for (uri in list) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                // 有些 provider 不给持久授权：临时授权在服务存活期间仍可读，读失败会如实报错
+            }
+        }
+        UploadService.start(this, list)
+    }
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileCallback ?: return@registerForActivityResult
@@ -222,6 +254,7 @@ class WebActivity : AppCompatActivity() {
             this, SessionToken(this, ComponentName(this, PlaybackService::class.java)),
         ).buildAsync()
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
+        pickOnLoad = intent.getBooleanExtra(EXTRA_PICK, false)
         web.loadUrl(base + path)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -250,6 +283,11 @@ class WebActivity : AppCompatActivity() {
         view.webViewClient = object : WebViewClient() {
             override fun onPageFinished(v: WebView, url: String?) {
                 v.evaluateJavascript(hookScript, null)
+                if (pickOnLoad) {
+                    pickOnLoad = false
+                    // 等页面画完再弹选择器：用户能看到"在上传页"的上下文
+                    v.postDelayed({ try { uploadPicker.launch(arrayOf("video/*")) } catch (e: Exception) { } }, 400)
+                }
             }
 
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {

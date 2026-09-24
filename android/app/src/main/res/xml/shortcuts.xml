@@ -23,4 +23,14 @@
             android:targetPackage="com.zizdog.zizvideo"
             android:targetClass="com.zizdog.zizvideo.LoginActivity" />
     </shortcut>
+    <shortcut
+        android:shortcutId="upload_video"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_upload_video">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="zizvideo://upload"
+            android:targetPackage="com.zizdog.zizvideo"
+            android:targetClass="com.zizdog.zizvideo.LoginActivity" />
+    </shortcut>
 </shortcuts>

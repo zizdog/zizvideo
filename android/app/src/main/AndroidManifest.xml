@@ -6,6 +6,8 @@
     <!-- 后台"听视频"必须的：前台服务（mediaPlayback 类型）+ 通知 + 播放期间持锁 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 用户上传：后台把视频传完（息屏不断），前台服务类型 dataSync（Android 14+ 要单独声明） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 后台听视频在国产 ROM 上常被杀：允许用户在系统弹窗里一次点掉（自用分发，不上架） -->
@@ -54,6 +56,12 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- 用户上传：SAF 选中的视频在后台传完（同一套分片接口），息屏/切后台都不停 -->
+        <service
+            android:name=".UploadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 网页界面宿主：复用现成 UI，配置变化自己扛（别因旋转重建丢播放状态） -->
         <activity

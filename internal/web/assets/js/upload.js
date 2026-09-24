@@ -85,6 +85,12 @@ export function mountUpload(view) {
   let busy = false;
   let unfinished = [];   // 服务端还留着的"上传中"条目：按同名同大小续传
 
+  // 安卓 App 里多给一个入口：走系统选择器（SAF）交给前台服务后台传，息屏/切后台都不停。
+  const nativeBtn = (window.ZvAndroid && typeof window.ZvAndroid.pickUploads === "function")
+    ? el("button", { class: "btn", type: "button", text: "用系统选择器后台传",
+        dataset: { role: "upload-native" },
+        onclick: () => { try { window.ZvAndroid.pickUploads(); } catch (err) { /* 老版本 App 没有这个方法 */ } } })
+    : null;
   const page = el("div", { class: "page" },
     el("div", { class: "page-head" },
       el("h2", { class: "page-title", text: "上传视频" }),
@@ -93,7 +99,7 @@ export function mountUpload(view) {
     el("div", { class: "panel" },
       el("div", { class: "muted small-note", text: "选中视频后点「开始上传」；上传完进待审，管理员通过后才进媒体库。" }),
       quotaLine,
-      el("div", { class: "row" }, picker, startBtn)),
+      el("div", { class: "row" }, picker, startBtn, nativeBtn)),
     rowBox);
 
   function paintQuota(quota) {
