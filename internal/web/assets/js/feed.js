@@ -83,6 +83,8 @@ export function createMediaVideo(item, opts = {}) {
   video.controls = opts.controls === true;
   video.muted = opts.muted === true;
   video.loop = opts.loop === true;
+  // 预览帧：不自动播放时不能只是一块黑（用户 2026-09-24）——用服务端抽好的封面当 poster
+  if (item.cover_url) video.poster = item.cover_url;
   video.src = item.stream_url || ("/api/v1/media/" + encodeURIComponent(item.id) + "/stream");
   return video;
 }
@@ -168,15 +170,22 @@ export function mountFeed(view, options = {}) {
     gate.settle();
   }
 
-  function setActive(index, animate) {
+  function setActive(index, animate, opts) {
     if (index < 0 || index === state.active) return;
+    const options = opts || {};
     const previous = state.active;
     if (previous >= 0) flushProgress(previous, false);
     state.active = index;
     paintTrack(animate !== false);
     syncWindow(index);
     const entry = state.built.get(index);
-    if (entry && entry.video && !entry.broken) tryPlay(entry);
+    // autoplay=false 只用于"进入首页那一下"（设置里关掉"进入自动播放"）；
+    // 用户自己滑/点过来的切换一律照播（options 不传就是 true）。
+    const autoplay = options.autoplay !== false;
+    if (entry && entry.video && !entry.broken) {
+      if (autoplay) tryPlay(entry);
+      else showPlayButton(entry);
+    }
     maybeLoadMore(index);
     warmUpcoming(); // 预加载后面几条：等切过去再拉就来不及
   }
@@ -296,7 +305,7 @@ export function mountFeed(view, options = {}) {
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
       entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
-      playPauseButton(entry), cleanButton(entry), fullscreenButton(entry)));
+      playPauseButton(entry), fullscreenButton(entry), cleanButton(entry)));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
@@ -409,7 +418,19 @@ export function mountFeed(view, options = {}) {
   function tryPlay(entry) {
     const result = entry.video.play();
     if (result && typeof result.catch === "function") {
-      result.catch(() => showPlayButton(entry));
+      result.catch(() => {
+        // 浏览器策略：没交互过不许"有声自动播放"。退回静音自动播（用户要的是"进入就播"），
+        // 播起来了就提示一句去哪里开声音；真播不了才退回播放按钮。
+        if (entry.destroyed || !entry.video || entry.video.muted) { showPlayButton(entry); return; }
+        entry.video.muted = true;
+        const retry = entry.video.play();
+        if (retry && typeof retry.then === "function") {
+          retry.then(() => showHint(entry, "已静音自动播放，点右下角喇叭开声"))
+            .catch(() => showPlayButton(entry));
+        } else {
+          showPlayButton(entry);
+        }
+      });
     }
   }
 
@@ -1038,7 +1059,10 @@ export function mountFeed(view, options = {}) {
         text: noLibrary ? "没有可访问的媒体库，请联系管理员" : "还没有视频" });
       feed.append(state.emptyCard);
     }
-    if (state.items.length && state.active < 0) setActive(0, false);
+    if (state.items.length && state.active < 0) {
+      // 首页第一次进来：看"进入自动播放"设置；剧场（playlist）本来就是自动连播
+      setActive(0, false, { autoplay: playlist ? true : state.settings.autoplay_enter });
+    }
   }
 
   // 删除成功后本地下掉这一条：重建窗口 + 重排 top/下标，不整页重置（保持当前位置）。

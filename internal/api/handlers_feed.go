@@ -155,6 +155,8 @@ type feedSettingsReq struct {
 	LoopPlay     *bool `json:"loop_play"`
 	AutoplayNext *bool `json:"autoplay_next"`
 	SeekSeconds  *int  `json:"seek_seconds"`
+	// AutoplayEnter = 进入首页自动播放（用户 2026-09-24）。
+	AutoplayEnter *bool `json:"autoplay_enter"`
 }
 
 // 左右键跳转秒数的合法区间；越界/非法保留原值，不改写也不报错。
@@ -185,6 +187,9 @@ func (s *Server) HandlePatchFeedSettings(w http.ResponseWriter, r *http.Request)
 	if req.SeekSeconds != nil && *req.SeekSeconds >= seekSecondsMin && *req.SeekSeconds <= seekSecondsMax {
 		prefs.SeekSeconds = *req.SeekSeconds
 	}
+	if req.AutoplayEnter != nil {
+		prefs.AutoplayEnter = *req.AutoplayEnter
+	}
 	if err := s.DB.SaveUserPrefs(u.ID, prefs); err != nil {
 		s.fail(w, r, err)
 		return
@@ -200,6 +205,7 @@ func feedSettingsBody(p *storage.UserPrefs) map[string]any {
 		"loop_effective": p.LoopPlay && !p.AutoplayNext,
 		"autoplay_next":  p.AutoplayNext,
 		"seek_seconds":   p.SeekSeconds,
+		"autoplay_enter": p.AutoplayEnter,
 	}
 }
 

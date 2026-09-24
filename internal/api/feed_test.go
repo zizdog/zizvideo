@@ -25,6 +25,7 @@ type feedSettingsBody struct {
 	LoopEffective bool `json:"loop_effective"`
 	AutoplayNext  bool `json:"autoplay_next"`
 	SeekSeconds   int  `json:"seek_seconds"`
+	AutoplayEnter bool `json:"autoplay_enter"`
 }
 
 type feedMetaBody struct {
@@ -182,6 +183,26 @@ func TestFeedSettingsPersistPerUser(t *testing.T) {
 	decodeInto(t, env.Data, &got)
 	if !got.LoopPlay || !got.AutoplayNext || got.LoopEffective {
 		t.Fatalf("连播开时循环必须无效（但设置值保留）: %+v", got)
+	}
+
+	// 用户 2026-09-24："进入自动播放"要能在设置里开关 —— 默认开、能关、能持久化。
+	if !got.AutoplayEnter {
+		t.Fatalf("「进入自动播放」默认应为开: %+v", got)
+	}
+	_, env, _ = e.write(http.MethodPatch, "/api/v1/feed/settings", map[string]any{"autoplay_enter": false})
+	decodeInto(t, env.Data, &got)
+	if got.AutoplayEnter {
+		t.Fatalf("关掉「进入自动播放」后应为 false: %+v", got)
+	}
+	_, env, _ = e.do(http.MethodGet, "/api/v1/feed/settings", nil)
+	decodeInto(t, env.Data, &got)
+	if got.AutoplayEnter {
+		t.Fatalf("重新读取时应持久化为 false: %+v", got)
+	}
+	_, env, _ = e.write(http.MethodPatch, "/api/v1/feed/settings", map[string]any{"autoplay_enter": true})
+	decodeInto(t, env.Data, &got)
+	if !got.AutoplayEnter {
+		t.Fatalf("再打开应为 true: %+v", got)
 	}
 
 	_, env, _ = e.do(http.MethodGet, "/api/v1/feed/settings", nil)

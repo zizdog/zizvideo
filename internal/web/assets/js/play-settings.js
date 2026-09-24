@@ -3,7 +3,9 @@
 
 import { el } from "./dom.js";
 
-export const FEED_SETTINGS_DEFAULTS = { loop_play: false, autoplay_next: true, seek_seconds: 10 };
+export const FEED_SETTINGS_DEFAULTS = {
+  loop_play: false, autoplay_next: true, seek_seconds: 10, autoplay_enter: true,
+};
 
 // normalizeFeedSettings 把任意响应收敛成三项合法值：非法/缺省一律用默认（10 秒、上限 120）。
 export function normalizeFeedSettings(data) {
@@ -14,6 +16,8 @@ export function normalizeFeedSettings(data) {
     loop_play: !!src.loop_play,
     autoplay_next: src.autoplay_next === undefined ? FEED_SETTINGS_DEFAULTS.autoplay_next : !!src.autoplay_next,
     seek_seconds: seek,
+    // 用户 2026-09-24：进入首页是否自动播放（默认开；关掉时首页显示预览帧，点了才播）
+    autoplay_enter: src.autoplay_enter === undefined ? FEED_SETTINGS_DEFAULTS.autoplay_enter : !!src.autoplay_enter,
   };
 }
 
@@ -32,14 +36,17 @@ export function loopEffective(settings) {
 export function createFeedSettingsForm(options) {
   const opts = options || {};
   const lockAutoplay = !!opts.lockAutoplay;
+  const enter = el("input", { type: "checkbox" });
   const auto = el("input", { type: "checkbox" });
   const loop = el("input", { type: "checkbox" });
   const seek = el("input", { type: "number", min: "1", max: "120", step: "1" });
   const note = el("div", { class: "set-note", text: "连播开启时循环不生效" });
+  const enterRow = el("label", { class: "set-row" }, enter, el("span", { text: "进入自动播放" }));
   const autoRow = el("label", { class: "set-row" }, auto, el("span", { text: "自动播放下一个" }));
   const loopRow = el("label", { class: "set-row" }, loop, el("span", { text: "循环播放" }));
   const seekRow = el("label", { class: "set-row" }, el("span", { text: "左右键跳转" }), seek, el("span", { text: "秒" }));
   const form = el("div", { class: "set-form" },
+    lockAutoplay ? null : enterRow,
     lockAutoplay ? null : autoRow,
     lockAutoplay ? null : loopRow,
     seekRow,
@@ -51,6 +58,7 @@ export function createFeedSettingsForm(options) {
 
   let last = normalizeFeedSettings(opts.settings);
 
+  enter.addEventListener("change", () => emit({ autoplay_enter: enter.checked }));
   auto.addEventListener("change", () => emit({ autoplay_next: auto.checked }));
   loop.addEventListener("change", () => emit({ loop_play: loop.checked }));
   seek.addEventListener("change", () => {
@@ -62,6 +70,7 @@ export function createFeedSettingsForm(options) {
 
   function paint(settings) {
     last = normalizeFeedSettings(settings || last);
+    enter.checked = !!last.autoplay_enter;
     auto.checked = !!last.autoplay_next;
     loop.checked = !!last.loop_play;
     loop.disabled = !!last.autoplay_next;

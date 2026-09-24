@@ -74,21 +74,24 @@ type UserPrefs struct {
 	LoopPlay     bool
 	AutoplayNext bool
 	SeekSeconds  int
+	// AutoplayEnter = 进入首页就自动播放（用户 2026-09-24）。关掉时只显示预览帧，点了才播。
+	AutoplayEnter bool
 }
 
 // GetUserPrefs returns the player settings; autoplay defaults on, loop off.
 func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
-	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds}
-	var loop, auto int
-	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds FROM user_prefs WHERE user_id = ?`, userID).
-		Scan(&loop, &auto, &p.SeekSeconds)
+	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds, AutoplayEnter: true}
+	var loop, auto, enter int
+	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter
+		FROM user_prefs WHERE user_id = ?`, userID).
+		Scan(&loop, &auto, &p.SeekSeconds, &enter)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	p.LoopPlay, p.AutoplayNext = loop != 0, auto != 0
+	p.LoopPlay, p.AutoplayNext, p.AutoplayEnter = loop != 0, auto != 0, enter != 0
 	if p.SeekSeconds <= 0 {
 		p.SeekSeconds = DefaultSeekSeconds
 	}
@@ -101,12 +104,14 @@ func (db *DB) SaveUserPrefs(userID string, p *UserPrefs) error {
 	if seek <= 0 {
 		seek = DefaultSeekSeconds
 	}
-	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds, updated_at)
-		VALUES (?,?,?,?,?)
+	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds, autoplay_enter, updated_at)
+		VALUES (?,?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			loop_play = excluded.loop_play, autoplay_next = excluded.autoplay_next,
-			seek_seconds = excluded.seek_seconds, updated_at = excluded.updated_at`,
-		userID, boolToInt(p.LoopPlay), boolToInt(p.AutoplayNext), seek, domain.NowString())
+			seek_seconds = excluded.seek_seconds, autoplay_enter = excluded.autoplay_enter,
+			updated_at = excluded.updated_at`,
+		userID, boolToInt(p.LoopPlay), boolToInt(p.AutoplayNext), seek,
+		boolToInt(p.AutoplayEnter), domain.NowString())
 	return err
 }
 
