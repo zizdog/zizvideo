@@ -77,6 +77,12 @@ function castAvailable() {
     && !!HTMLVideoElement.prototype && "remote" in HTMLVideoElement.prototype;
 }
 
+// inOverlay：事件来自设置面板/遮罩/选集面板 ⇒ 手势不归播放器管（面板要能自己滚）
+function inOverlay(target) {
+  return !!(target && typeof target.closest === "function" &&
+    target.closest(".set-panel, .sheet-scrim, .picker-overlay"));
+}
+
 function isInteractive(target) {
   if (!target || typeof target.closest !== "function") return false;
   return !!target.closest("button, input, .bar-wrap, .set-panel, .lib-chip");
@@ -324,14 +330,15 @@ export function mountFeed(view, options = {}) {
 
     // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
-    // 边栏（用户 2026-09-24：像抖音那样"多一点图标"）：喜欢 / 收藏 / 分享 / 缓存(App) / 选集 / 声音 / 删除。
-    // 小窗播放、投屏、稍后再看、清屏、播放设置都在底部面板里；全屏在视频画面下方。
+    // 边栏（用户 2026-09-24 最终定稿）：喜欢 / 收藏 / 缓存(App) / 选集 / 声音 / 删除 / 设置(仅 web) / 全屏。
+    // 小窗播放、投屏、稍后再看、清屏、播放设置在底部面板里；**分享暂时不出现**（用户：以后或许用到）。
     layer.append(el("div", { class: "ov-rail" },
-      entry.like, entry.fav, shareButton(entry),
+      entry.like, entry.fav,
       nativeCacheAvailable() ? cacheButton(entry) : null,
-      entry.eps, soundButton(entry), entry.del));
+      entry.eps, soundButton(entry), entry.del,
+      inAppWebView() ? null : settingsButton(entry),
+      fullscreenButton()));
     layer.append(centerPlayPause(entry));
-    if (playable) layer.append(belowVideoRow(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
@@ -648,7 +655,6 @@ export function mountFeed(view, options = {}) {
   }
 
   function onMetadata(entry) {
-    paintBelow(entry);
     if (!entry.resumeDone) {
       entry.resumeDone = true;
       const progress = entry.item.progress || {};
@@ -813,7 +819,6 @@ export function mountFeed(view, options = {}) {
     const laterRow = actionRow("clock", "稍后再看", () => { toggleWatchLater(entry); paintCommon(); });
     laterRow.dataset.role = "sheet-later";
     common.append(laterRow);
-    common.append(actionRow("share", "分享", () => shareItem(entry)));
     common.append(entry.settingsForm.node);
 
     const groups = [];
@@ -840,6 +845,9 @@ export function mountFeed(view, options = {}) {
     for (const g of groups) panel.append(g);
     entry.panel = panel;
     entry.panel.addEventListener("click", (event) => event.stopPropagation());
+    // 面板自己能滚：滚轮/触摸就地消化，别冒泡到 feed（否则一滚就换下一条视频）
+    entry.panel.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+    entry.panel.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
 
     // 行上的状态文字（清屏开/关、稍后再看已添加/未添加）跟着真实状态刷
     function paintCommon() {
@@ -873,7 +881,6 @@ export function mountFeed(view, options = {}) {
     ensureScrim().classList.remove("hidden");
     entry.panel.classList.remove("hidden");
     if (entry.paintSheet) entry.paintSheet();
-    paintBelow(entry);
   }
 
   // 剧场「选集」面板：样式与剧场列表里的选集一致（.ep-list/.ep-item），点一集就跳过去。
@@ -920,9 +927,10 @@ export function mountFeed(view, options = {}) {
     return !!window.ZvAndroid || /[?&]zv=app(&|#|$)/.test(location.search + location.hash);
   }
 
+  // 设置入口（侧栏，仅网页端显示；App 里靠长按弹面板 —— 与抖音一致）
   function settingsButton(entry) {
-    const btn = el("button", { class: "below-btn", type: "button", text: "设置",
-      dataset: { role: "below-settings" } });
+    const btn = el("button", { class: "icon-btn", type: "button", title: "播放设置",
+      dataset: { role: "rail-settings" } }, icon("gear"));
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       openPanel(entry);
@@ -1022,7 +1030,6 @@ export function mountFeed(view, options = {}) {
     feed.classList.toggle("clean", on);
     writeCleanPref(on);
     applyClean(null, on);
-    for (const entry of state.built.values()) paintBelow(entry);
     showToast(on ? "已清屏，长按画面可还原" : "已显示图标");
     return on;
   }
@@ -1195,42 +1202,23 @@ export function mountFeed(view, options = {}) {
     }
   }
 
-  // 视频画面下方那排：紧贴画面下沿 8px 居中（用户 2026-09-24）。
-  // 全屏播放按钮：横向文字、白色、默认 50% 不透明，hover/按下 100%。
-  function belowVideoRow(entry) {
-    const fs = el("button", { class: "below-btn", type: "button", text: "全屏播放",
-      dataset: { role: "below-fullscreen" } });
-    fs.addEventListener("click", async (event) => {
+  // 全屏（旋转全屏）按钮：按用户 2026-09-24 的要求**回到侧栏**（视频下方那排已撤）
+  function fullscreenButton() {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "旋转全屏",
+      dataset: { role: "rail-fullscreen" } }, icon("expand"));
+    const paint = () => {
+      const on = immersiveOn();
+      setIcon(btn, on ? "collapse" : "expand");
+      btn.title = on ? "退出横屏" : "旋转全屏";
+    };
+    btn.addEventListener("click", async (event) => {
       event.stopPropagation();
       if (immersiveOn()) await exitFullscreen();
       else await enterFullscreen();
-      paintBelow(entry);
+      paint();
     });
-    const row = el("div", { class: "below-row", dataset: { role: "below-row" } }, fs,
-      inAppWebView() ? null : settingsButton(entry));
-    entry.belowRow = row;
-    // 位置：算上"视频画面在容器里上下留的黑边"，贴画面下沿 +8px
-    requestAnimationFrame(() => paintBelow(entry));
-    return row;
-  }
-
-  function paintBelow(entry) {
-    const row = entry.belowRow;
-    if (!row || entry.destroyed) return;
-    if (immersiveOn() || feed.classList.contains("clean")) {
-      row.classList.add("hidden");
-      return;
-    }
-    row.classList.remove("hidden");
-    const v = entry.video;
-    const stageH = row.parentNode ? row.parentNode.clientHeight : 0;
-    let top = stageH - 64; // 还没拿到画面尺寸时的兜底：贴着底部一点
-    if (v && v.videoWidth > 0 && stageH > 0) {
-      const drawn = Math.min(stageH, v.clientWidth * (v.videoHeight / v.videoWidth));
-      top = (stageH - drawn) / 2 + drawn + 8; // 画面下沿 + 8px
-      top = Math.min(top, stageH - 40);
-    }
-    row.style.top = Math.round(top) + "px";
+    paint();
+    return btn;
   }
 
   /* ---------- 反应 / 收藏 ---------- */
@@ -1582,6 +1570,8 @@ export function mountFeed(view, options = {}) {
   let touchY = null;
 
   function onWheel(event) {
+    // 面板里滚动时别翻下一条（用户 2026-09-24：web 端面板长了滚不动、一滚就换视频）
+    if (inOverlay(event.target)) return;
     event.preventDefault();
     const now = Date.now();
     wheelAcc += event.deltaY;
@@ -1594,6 +1584,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function onTouchStart(event) {
+    if (inOverlay(event.target)) { touchY = null; return; }
     if (event.touches.length !== 1) return;
     if (isInteractive(event.target)) { touchY = null; return; }
     touchY = event.touches[0].clientY;
@@ -1601,6 +1592,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function onTouchEnd(event) {
+    if (inOverlay(event.target)) { touchY = null; return; }
     if (touchY === null) return;
     const touch = event.changedTouches && event.changedTouches[0];
     if (!touch) { touchY = null; return; }
@@ -1710,17 +1702,10 @@ export function mountFeed(view, options = {}) {
   };
   document.addEventListener("fullscreenchange", onFullscreenChange);
 
-  // 转屏/改窗口大小：画面尺寸变了，视频下方那排要跟着重算
-  const onResize = () => {
-    for (const entry of state.built.values()) paintBelow(entry);
-  };
-  window.addEventListener("resize", onResize);
-
   return function cleanup() {
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     try { delete window.__zvExitFullscreen; } catch (err) { window.__zvExitFullscreen = null; }
     try { delete window.__zvBackHandler; } catch (err) { window.__zvBackHandler = null; }
-    window.removeEventListener("resize", onResize);
     document.body.classList.remove("pip");
     if (window.zvPipMode === onPipMode) {
       try { delete window.zvPipMode; } catch (err) { window.zvPipMode = null; }

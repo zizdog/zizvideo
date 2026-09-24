@@ -355,6 +355,15 @@ class WebActivity : AppCompatActivity() {
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             userAgentString = "$userAgentString zizvideo-android/0.1"
+            // 视口/缩放（用户 2026-09-24 报障："app 里小窗恢复后整个画面被放大、超出屏幕且回不来"）：
+            // 小窗时窗口变小，WebView 若按"整页概览"重算就会留下一个放大的 scale，退出后不还原。
+            // 这里明确按 viewport meta 排版、禁止缩放，避免它自己有想法。
+            useWideViewPort = true
+            loadWithOverviewMode = false
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+            textZoom = 100
         }
         view.setBackgroundColor(0xFF101014.toInt())
         view.webViewClient = object : WebViewClient() {
@@ -481,7 +490,19 @@ class WebActivity : AppCompatActivity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         try {
-            web.evaluateJavascript("window.zvPipMode&&window.zvPipMode(" + isInPictureInPictureMode + ")", null)
+            // 退出小窗要**彻底复位**：小窗里的窗口尺寸会让 WebView 留下初始缩放，
+            // 不复位就是"画面被放大、超出屏幕、按钮跑到屏幕外"（用户 2026-09-24 报障）。
+            if (!isInPictureInPictureMode) {
+                web.setInitialScale(0)
+                web.post {
+                    web.requestLayout()
+                    web.evaluateJavascript(
+                        "(function(){try{window.scrollTo(0,0);}catch(e){}" +
+                            "if(window.zvPipMode)window.zvPipMode(false);})()", null)
+                }
+            } else {
+                web.evaluateJavascript("window.zvPipMode&&window.zvPipMode(true)", null)
+            }
         } catch (e: Exception) {
             // 页面还没加载好就算了，状态会在下一次回调对齐
         }

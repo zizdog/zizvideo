@@ -210,7 +210,11 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   border: 0; border-top: 1px solid var(--line); color: #fff;
   box-shadow: 0 -8px 30px rgba(0,0,0,.5);
   animation: zv-sheet-up .18s ease-out;
-  max-height: 78%; overflow: auto;
+  /* 内容多的时候允许到 86%，并把底部导航让出来（用户报"app 下面两个看不到"） */
+  padding-bottom: calc(20px + var(--sab));
+  max-height: 78%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;   /* 滚到底也不要带动外层（否则会翻下一条视频） */
+  touch-action: pan-y;            /* 面板内只做纵向滚动 */
 }
 @keyframes zv-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 .set-panel .sheet-handle {
@@ -234,11 +238,16 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .sheet-right { color: rgba(255,255,255,.55); font-size: 14px; }
 .sheet-arrow { color: rgba(255,255,255,.35); font-size: 18px; line-height: 1; }
 /* 开关：亮=强调红，灭=灰（抖音同款观感） */
-.sheet-switch { display: inline-flex; align-items: center; }
+.sheet-switch {
+  display: inline-flex; align-items: center;
+  /* ⚠️ 必须 relative：下面的 ::after 是绝对定位的滑块，没有定位祖先就会跑到面板外
+     （App 里表现为"面板下面浮着两个白圆点"，用户 2026-09-24 报障） */
+  position: relative; width: 44px; height: 26px; flex: 0 0 auto;
+}
 .sheet-switch-input { position: absolute; opacity: 0; width: 0; height: 0; }
 .sheet-switch::before {
   content: ""; display: block; width: 44px; height: 26px; border-radius: 999px;
-  background: rgba(255,255,255,.25); transition: background .15s ease; position: relative;
+  background: rgba(255,255,255,.25); transition: background .15s ease;
 }
 .sheet-switch::after {
   content: ""; position: absolute; width: 22px; height: 22px; border-radius: 50%;
@@ -247,6 +256,8 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .sheet-switch.on::before { background: var(--accent); }
 .sheet-switch.on::after { transform: translateX(19px); }
 .sheet-switch.off::after { transform: translateX(3px); }
+/* 行里的输入框（左右键跳转秒数）不要撑破卡片 */
+.sheet-form .set-row input[type="number"] { width: 64px; }
 /* 倍速分段（图2：0.75 / 1.0 / 1.25 … 当前档红色） */
 .sheet-seg { display: flex; gap: 14px; }
 .sheet-seg-btn {
@@ -264,19 +275,6 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .sheet-form .set-note { padding: 0 16px 10px; }
 /* 面板外的遮罩：吞掉点击（点外面只关面板，不触发播放/暂停） */
 .sheet-scrim { position: absolute; inset: 0; z-index: 11; background: rgba(0,0,0,.35); }
-/* 视频画面下方那排：全屏播放（+ 网页端才有的设置） */
-.below-row {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 14px; z-index: 8; pointer-events: none;
-}
-.below-row > * { pointer-events: auto; }
-.below-btn {
-  font: inherit; font-size: 14px; padding: 6px 14px; border: 0; cursor: pointer;
-  background: transparent; color: #fff; opacity: .5; transition: opacity .15s ease;
-}
-.below-btn:hover, .below-btn:active { opacity: 1; }
-/* 沉浸（全屏）/清屏时这排跟着藏起来 */
-.feed.immersive .below-row, .feed.clean .below-row, .feed.blank .below-row { display: none; }
 .set-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .set-row input { width: 16px; height: 16px; }
 .set-row input:disabled + span { opacity: .45; }
