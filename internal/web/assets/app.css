@@ -144,6 +144,15 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
+/* B4 画中画（安卓整窗小窗）：小窗里只留画面 —— 顶栏/底栏/工具条/文字层都收起来 */
+body.pip .header, body.pip .bottom-nav, body.pip .ov-rail, body.pip .overlay,
+body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important; }
+
+/* B4：工具条多了画中画/投屏，矮屏（横屏手机/小屏）上别把图标顶出屏幕 —— 超出才滚动 */
+@media (max-height: 700px) {
+  .ov-rail { max-height: calc(100% - 160px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .ov-rail::-webkit-scrollbar { width: 0; height: 0; }
+}
 /* 实心矢量、无圆圈底、白图标 + 投影；选中/点亮变强调色（像抖音点赞变红）。 */
 .icon-btn {
   width: 54px; height: 54px; padding: 0; line-height: 0; cursor: pointer;

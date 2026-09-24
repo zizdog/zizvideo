@@ -60,6 +60,23 @@ function writeSoundPref(on) {
   try { localStorage.setItem(SOUND_KEY, on ? "on" : "off"); } catch (err) { /* 隐私模式忽略 */ }
 }
 
+// B4：画中画 / 投屏的能力探测 —— 浏览器支持才画按钮，绝不画个点了没反应的图标。
+// 安卓 App 的画中画是"整个 App 缩成小窗"（WebView 里的视频继续放），由原生桥 enterPip 接管。
+function nativePipAvailable() {
+  return typeof window !== "undefined" && !!window.ZvAndroid
+    && typeof window.ZvAndroid.enterPip === "function";
+}
+function pipAvailable() {
+  if (nativePipAvailable()) return true;
+  return typeof document !== "undefined" && document.pictureInPictureEnabled === true
+    && typeof document.exitPictureInPicture === "function";
+}
+// Remote Playback 是标准的"投到电视/盒子"接口（Chrome 的 Cast、Safari 的 AirPlay 都走它）。
+function castAvailable() {
+  return typeof HTMLVideoElement !== "undefined"
+    && !!HTMLVideoElement.prototype && "remote" in HTMLVideoElement.prototype;
+}
+
 function isInteractive(target) {
   if (!target || typeof target.closest !== "function") return false;
   return !!target.closest("button, input, .bar-wrap, .set-panel, .lib-chip");
@@ -286,6 +303,9 @@ export function mountFeed(view, options = {}) {
       });
     }
 
+    // 能不能放：影响工具条画不画画中画/投屏（必须在 append rail 之前算好）
+    const playable = isPlayable(item);
+
     entry.fill = el("span", { class: "bar-fill" });
     entry.elapsed = el("span", { text: "0:00" });
     entry.total = el("span", { text: fmtDuration(item.duration_ms) });
@@ -305,6 +325,8 @@ export function mountFeed(view, options = {}) {
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
       entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
+      playable && pipAvailable() ? pipButton(entry) : null,
+      playable && castAvailable() ? castButton(entry) : null,
       fullscreenButton(entry), cleanButton(entry)));
     layer.append(centerPlayPause(entry));
 
@@ -313,7 +335,7 @@ export function mountFeed(view, options = {}) {
     // 全屏（沉浸）时左上角的返回键：点了退出全屏（用户 2026-09-24）
     layer.append(immersiveBack(entry));
 
-    if (!isPlayable(item)) {
+    if (!playable) {
       // 文件不在了（改名/移动/掉盘）时如实说，不再打"状态：ready"——那句话自相矛盾（用户报障）。
       if (item.missing) {
         layer.append(centerMessage("文件不在了", "可能已改名或移动；后台「媒体」页可清理这条记录"));
@@ -335,6 +357,8 @@ export function mountFeed(view, options = {}) {
     for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
       video.addEventListener(ev, () => stopFastForward(entry));
     }
+    video.addEventListener("enterpictureinpicture", () => paintPip());
+    video.addEventListener("leavepictureinpicture", () => paintPip());
     video.addEventListener("loadedmetadata", () => onMetadata(entry));
     video.addEventListener("loadeddata", () => { hideLoading(entry); checkFrames(entry); });
     video.addEventListener("canplay", () => hideLoading(entry));
@@ -416,6 +440,9 @@ export function mountFeed(view, options = {}) {
     entry.destroyed = true;
     if (entry.hintTimer) clearTimeout(entry.hintTimer);
     if (entry.ffTimer) clearTimeout(entry.ffTimer);
+    for (const btn of [entry.pipBtn, entry.castBtn]) {
+      if (btn && btn.__zvPaint) pipPaints.delete(btn.__zvPaint);
+    }
     if (entry.flashTimer) clearTimeout(entry.flashTimer);
     if (entry.video) {
       try { entry.video.pause(); } catch (err) { /* ignore */ }
@@ -841,6 +868,14 @@ export function mountFeed(view, options = {}) {
   // 用户 2026-09-24：「全屏播放时不显示任何按钮/进度、边栏收起；点屏幕切换显示；
   // 左上角显示返回按钮（左箭头）」。所以全屏 = 沉浸态：进去先全收起，点屏幕来回切换。
   const full = { rotated: false, native: false, uiHidden: false };
+  // B4：画中画状态。原生（安卓整窗小窗）时由 App 回调 window.zvPipMode 同步过来。
+  let nativePip = false;
+  const pipPaints = new Set();
+  function pipOn() {
+    if (nativePip) return true;
+    return typeof document !== "undefined" && !!document.pictureInPictureElement;
+  }
+  function paintPip() { for (const fn of pipPaints) fn(); }
   let lastImmersive = null;
   function paintImmersive() {
     const on = full.rotated || full.native;
@@ -983,6 +1018,69 @@ export function mountFeed(view, options = {}) {
       if (entry.video && entry.video.paused) { full.uiHidden = false; paintImmersive(); }
     });
     entry.paintPlayPause = paint;
+    paint();
+    return btn;
+  }
+
+  /* ---------- B4 画中画 / 投屏 ---------- */
+
+  function pipButton(entry) {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "画中画",
+      dataset: { role: "rail-pip" } }, icon("pip"));
+    const paint = () => {
+      const on = pipOn();
+      btn.classList.toggle("on", on);
+      btn.title = on ? "退出画中画" : "画中画";
+    };
+    btn.__zvPaint = paint;
+    entry.pipBtn = btn;
+    pipPaints.add(paint);
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        if (nativePip) return; // 已经在原生小窗里（这时按钮也点不到）
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else if (nativePipAvailable()) { window.ZvAndroid.enterPip(); return; }
+        else await entry.video.requestPictureInPicture();
+      } catch (err) {
+        showToast(pipFailText(err));
+      }
+      paintPip();
+    });
+    paint();
+    return btn;
+  }
+
+  function pipFailText(err) {
+    const name = err && err.name ? err.name : "";
+    if (name === "NotAllowedError") return "这个浏览器不让直接开小窗，先点一下画面再试";
+    if (name === "NotSupportedError") return "这段视频不支持画中画";
+    return "开不了画中画：" + (err && err.message ? err.message : "未知原因");
+  }
+
+  function castButton(entry) {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "投屏",
+      dataset: { role: "rail-cast" } }, icon("cast"));
+    const paint = () => {
+      const remote = entry.video && entry.video.remote;
+      const on = !!remote && (remote.state === "connected" || remote.state === "connecting");
+      btn.classList.toggle("on", on);
+      btn.title = on ? "停止投屏" : "投屏";
+    };
+    btn.__zvPaint = paint;
+    entry.castBtn = btn;
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const remote = entry.video && entry.video.remote;
+      if (!remote || typeof remote.prompt !== "function") { showToast("这个浏览器不支持投屏"); return; }
+      try {
+        await remote.prompt();
+      } catch (err) {
+        // 绝大多数是"附近没有可投屏的设备"——如实说，别装作投上了
+        showToast("没找到可投屏的设备（电视/盒子要和手机在同一 Wi-Fi）");
+      }
+      paint();
+    });
     paint();
     return btn;
   }
@@ -1451,6 +1549,15 @@ export function mountFeed(view, options = {}) {
   }
 
   // App 的系统返回手势进来先问这里：全屏中就只退出全屏（符合播放器习惯），否则交给路由。
+  // App 进/出小窗（原生画中画）时通知这里，好让按钮状态和真实情况一致
+  const onPipMode = (on) => {
+    nativePip = !!on;
+    // 安卓的"画中画"是整窗缩放：小窗里只该有画面，顶栏/底栏/工具条全收起
+    document.body.classList.toggle("pip", nativePip);
+    paintPip();
+  };
+  window.zvPipMode = onPipMode;
+
   window.__zvExitFullscreen = () => {
     if (!immersiveOn()) return false;
     exitFullscreen();
@@ -1468,6 +1575,10 @@ export function mountFeed(view, options = {}) {
   return function cleanup() {
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     try { delete window.__zvExitFullscreen; } catch (err) { window.__zvExitFullscreen = null; }
+    document.body.classList.remove("pip");
+    if (window.zvPipMode === onPipMode) {
+      try { delete window.zvPipMode; } catch (err) { window.zvPipMode = null; }
+    }
     releaseFullscreen(); // 返回/换页时把系统横屏与 document 全屏一并交还
     document.body.classList.remove("playing");
     document.body.classList.remove("rot-play");

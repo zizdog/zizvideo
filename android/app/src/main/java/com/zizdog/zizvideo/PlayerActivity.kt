@@ -63,6 +63,8 @@ class PlayerActivity : AppCompatActivity() {
         favBtn.setOnClickListener { toggle("fav") }
         likeBtn.setOnClickListener { toggle("like") }
         laterBtn.setOnClickListener { toggle("later") }
+        // B4 画中画：把播放页缩成浮窗（原生播放器继续放，退出页面也不停）
+        findViewById<android.widget.ImageButton>(R.id.pip).setOnClickListener { enterPip() }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -111,6 +113,35 @@ class PlayerActivity : AppCompatActivity() {
             controller?.stop()
             stopService(Intent(this, PlaybackService::class.java))
             finish()
+        }
+    }
+
+    /** B4：进小窗后把互动栏/标题/按钮都收起来 —— 小窗里只该有画面。 */
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        val vis = if (isInPictureInPictureMode) android.view.View.GONE else android.view.View.VISIBLE
+        findViewById<android.view.View>(R.id.chrome).visibility = vis
+        nowPlaying.visibility = vis
+    }
+
+    /** B4：进小窗。宽高比按当前播放页算；安卓 8 以下没有这个能力，如实说一句。 */
+    private fun enterPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            android.widget.Toast.makeText(this, "这台机器（安卓 8 以下）不支持画中画",
+                android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val root = findViewById<android.view.View>(R.id.playerRoot)
+            val w = root.width.takeIf { it > 0 } ?: 16
+            val h = root.height.takeIf { it > 0 } ?: 9
+            val params = android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(android.util.Rational(w, h))
+                .build()
+            enterPictureInPictureMode(params)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, "开不了画中画：" + e.message,
+                android.widget.Toast.LENGTH_LONG).show()
         }
     }
 

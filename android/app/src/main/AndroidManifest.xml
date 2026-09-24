@@ -41,10 +41,13 @@
         </activity>
 
         <!-- 原生播放页：ExoPlayer 硬解；退出页面后由 PlaybackService 继续放（后台/锁屏） -->
+        <!-- B4：支持画中画（点播放页的小窗按钮 ⇒ 缩成浮窗继续放，可以边刷别的） -->
         <activity
             android:name=".PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
             android:exported="false"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.Zizvideo" />
 
         <!-- 前台服务 + MediaSession：通知栏/锁屏控制、后台不被回收 -->
@@ -64,11 +67,14 @@
             android:foregroundServiceType="dataSync" />
 
         <!-- 网页界面宿主：复用现成 UI，配置变化自己扛（别因旋转重建丢播放状态） -->
+        <!-- B4：也支持画中画（网页工具条的「画中画」按钮走 ZvAndroid.enterPip） -->
         <activity
             android:name=".WebActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
             android:exported="false"
             android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

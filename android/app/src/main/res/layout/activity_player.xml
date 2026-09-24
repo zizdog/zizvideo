@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 原生播放页：硬解播放 + 后台继续。控件交给 PlayerView（播放/暂停/上下条/进度/手势）。 -->
+<!-- 原生播放页：硬解播放 + 后台继续。控件交给 PlayerView（播放/暂停/上下条/进度/手势）。
+     所有"画面以外"的东西都放进 id=chrome 这块，进画中画时整块藏起来（B4：小窗里只留画面）。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/playerRoot"
     android:layout_width="match_parent"
@@ -7,6 +8,8 @@
     android:background="#FF000000"
     android:orientation="vertical">
 
+    <!-- surface_type=texture_view：画中画（B4）要用 TextureView —— SurfaceView 在小窗里不参与合成
+         （实测 Android 15 模拟器：小窗起来了但画面全黑，换成 TextureView 才有画面）。 -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/player"
         android:layout_width="match_parent"
@@ -15,62 +18,79 @@
         app:use_controller="true"
         app:show_buffering="when_playing"
         app:resize_mode="fit"
+        app:surface_type="texture_view"
         xmlns:app="http://schemas.android.com/apk/res-auto" />
 
-    <!-- 互动栏：与网页图标栏同一批接口（收藏/喜欢/稍后再看），从列表点进来也能直接收藏 -->
     <LinearLayout
+        android:id="@+id/chrome"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center"
-        android:paddingVertical="4dp">
+        android:orientation="vertical">
 
-        <ImageButton
-            android:id="@+id/fav"
-            android:layout_width="56dp"
-            android:layout_height="48dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="收藏"
-            android:src="@drawable/ic_heart" />
+        <!-- 互动栏：与网页图标栏同一批接口（收藏/喜欢/稍后再看），从列表点进来也能直接收藏 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:paddingVertical="4dp">
 
-        <ImageButton
-            android:id="@+id/like"
-            android:layout_width="56dp"
-            android:layout_height="48dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="喜欢"
-            android:src="@drawable/ic_thumb" />
+            <ImageButton
+                android:id="@+id/fav"
+                android:layout_width="56dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="收藏"
+                android:src="@drawable/ic_heart" />
 
-        <ImageButton
-            android:id="@+id/later"
-            android:layout_width="56dp"
-            android:layout_height="48dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="稍后再看"
-            android:src="@drawable/ic_clock" />
+            <ImageButton
+                android:id="@+id/like"
+                android:layout_width="56dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="喜欢"
+                android:src="@drawable/ic_thumb" />
+
+            <ImageButton
+                android:id="@+id/later"
+                android:layout_width="56dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="稍后再看"
+                android:src="@drawable/ic_clock" />
+
+            <!-- B4 画中画：缩成浮窗继续放，可以边刷别的（安卓 8+） -->
+            <ImageButton
+                android:id="@+id/pip"
+                android:layout_width="56dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="画中画"
+                android:src="@drawable/ic_pip" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/nowPlaying"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="12dp"
+            android:textColor="#FFEDEDED"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="12dp"
+            android:text="锁屏/退到后台会继续播放，通知栏可以控制"
+            android:textColor="#FF9AA0A6"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/stop"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="8dp"
+            android:text="停止并退出" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/nowPlaying"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="12dp"
-        android:textColor="#FFEDEDED"
-        android:textSize="14sp" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingHorizontal="12dp"
-        android:text="锁屏/退到后台会继续播放，通知栏可以控制"
-        android:textColor="#FF9AA0A6"
-        android:textSize="12sp" />
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/stop"
-        style="@style/Widget.Material3.Button.TextButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_margin="8dp"
-        android:text="停止并退出" />
 </LinearLayout>

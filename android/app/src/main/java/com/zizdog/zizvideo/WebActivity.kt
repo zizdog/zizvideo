@@ -105,6 +105,34 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /**
+         * B4：网页的「画中画」按钮要求把整个 App 缩成浮窗（WebView 里的视频继续放）。
+         * 网页拿不到这个桥（浏览器/老版本 App）时会退回标准的 requestPictureInPicture()。
+         */
+        @android.webkit.JavascriptInterface
+        fun enterPip(): Boolean {
+            runOnUiThread {
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        // 宽高比按当前窗口算：竖屏刷视频就是竖窗，横屏播放就是横窗
+                        val w = web.width.takeIf { it > 0 } ?: 16
+                        val h = web.height.takeIf { it > 0 } ?: 9
+                        val params = android.app.PictureInPictureParams.Builder()
+                            .setAspectRatio(android.util.Rational(w, h))
+                            .build()
+                        enterPictureInPictureMode(params)
+                    } else {
+                        android.widget.Toast.makeText(this@WebActivity, "这台机器（安卓 8 以下）不支持画中画",
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(this@WebActivity, "开不了画中画：" + e.message,
+                        android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            return true
+        }
+
         /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
         @android.webkit.JavascriptInterface
         fun setImmersive(on: Boolean) {
@@ -287,6 +315,10 @@ class WebActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configure(view: WebView) {
+        // 只有"可调试"的包开远程调试：自测（模拟器 + adb forward）要靠它读网页里的真实状态。
+        // release 包绝不开 —— 那等于把调试端口暴露给同机的任何程序。
+        val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable) WebView.setWebContentsDebuggingEnabled(true)
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -415,6 +447,16 @@ class WebActivity : AppCompatActivity() {
             web.postDelayed({ launchingNative = false }, 1500)
         }
         return true
+    }
+
+    /** B4：进出小窗时通知网页，好让「画中画」按钮的点亮状态和真实情况一致。 */
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        try {
+            web.evaluateJavascript("window.zvPipMode&&window.zvPipMode(" + isInPictureInPictureMode + ")", null)
+        } catch (e: Exception) {
+            // 页面还没加载好就算了，状态会在下一次回调对齐
+        }
     }
 
     override fun onResume() {
