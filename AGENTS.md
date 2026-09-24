@@ -34,6 +34,9 @@
    - 累积期间**要改就 bump `VERSION`**（`Makefile` + `internal/api/api.go` 两处），让仓库版本号永远
      指向"尚未发布的新字节"；否则会出现"0.1.7 已发布、工作树里却是另一份 0.1.7"。
    - 同版本绝不许换字节重传：产物 sha256 一变，"已装 0.1.7" 与"新装 0.1.7"就不是同一份东西。
+   - **安卓安装包每次发版都要 +0.0.1**（用户 2026-09-24 明确："安装包每次更改发布都要改版本号+0.0.1"）：
+     改 `android/app/build.gradle.kts` 的 `versionCode`（+1）与 `versionName`（+0.0.1），再 `bash android/tools/build.sh assembleRelease`，
+     让发布目录里的 APK 文件名每次都不同 —— 否则用户分不清"装了哪个包"。
    - 用户点名发版后：`make release` → `make publish` → 让用户**在面板后台手动更新**测试
      （面板读镜像索引的 `latest`，zizvideo 单方面发版即可生效）。**不要替用户升级任何机器。**
    - 换机器/换凭据后先 `bash tools/publish-mirror.sh --self-test`（上传探针即删），别拿真版本试。
