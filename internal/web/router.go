@@ -164,6 +164,11 @@ func Router(s *api.Server) http.Handler {
 
 // staticHandler serves the embedded frontend. index.html is never cached so a
 // rebuilt binary is picked up on refresh.
+//
+// 用户 2026-09-24 报障"顶栏还有背景 / 图标位置没改"——代码里其实早就改了，是**前端被缓存**：
+// 内嵌资源没有 Last-Modified，浏览器/WebView 只能按启发式缓存，升级后仍吃旧 CSS。
+// 现在所有资源都带"版本 ETag + no-cache"：同版本内浏览器 304 复用，换版本立刻拿到新字节，
+// 不再依赖用户手动清缓存（这正是"改了却像没改"的根因）。
 func staticHandler() http.Handler {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
@@ -171,9 +176,11 @@ func staticHandler() http.Handler {
 	}
 	fileServer := http.FileServerFS(sub)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/" {
-			w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Cache-Control", "no-cache")
+		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
+			w.Header().Set("Cache-Control", "no-cache, no-store")
 		}
+		w.Header().Set("ETag", `"zv-`+api.Version+`-`+r.URL.Path+`"`)
 		fileServer.ServeHTTP(w, r)
 	})
 }

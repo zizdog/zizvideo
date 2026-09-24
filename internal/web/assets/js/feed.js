@@ -123,6 +123,8 @@ export function mountFeed(view, options = {}) {
   view.append(feed, toast);
   // 底栏挂载点（条目 10）：只加容器与入口，不改播放/进度逻辑
   view.append(mountNav(playlist ? (playlist.navKey || "series") : "feed"));
+  // 播放页整屏（用户 2026-09-24）:顶栏改成浮在视频上，否则顶上那 52px 是页面底色（像一条背景横条）
+  document.body.classList.add("playing");
 
   const gate = createGestureGate();
   const state = {
@@ -741,40 +743,86 @@ export function mountFeed(view, options = {}) {
       feed.classList.toggle("clean");
       const on = feed.classList.contains("clean");
       btn.title = on ? "显示图标" : "清屏播放";
-      setIcon(btn, on ? "down" : "down");
+      setIcon(btn, on ? "expand" : "down");
       showToast(on ? "已清屏，点箭头还原" : "已显示图标");
     });
     return btn;
   }
 
-  // 旋转全屏：真全屏（隐藏顶栏/底栏）+ 尽量锁横屏；再点退出（参考抖音精选版）
+  // 旋转全屏（用户 2026-09-24）：**不许依赖系统自动旋转**。
+  // 三级策略：① 安卓原生桥能接管就交给它（真·系统横屏）；
+  //          ② 否则试全屏 + screen.orientation.lock("landscape")；
+  //          ③ 都不行就 CSS 把播放器整体转 90°（竖屏视口里也能横过来看，把手机横过来就行）。
+  // 前两级成功时**不能再转 CSS**，否则和系统旋转叠加成 180°。
   function fullscreenButton() {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "全屏", dataset: { role: "rail-fullscreen" } }, icon("expand"));
-    const sync = () => {
-      const on = !!document.fullscreenElement;
+    const btn = el("button", { class: "icon-btn", type: "button", title: "旋转全屏",
+      dataset: { role: "rail-fullscreen" } }, icon("expand"));
+    let rotated = false;   // CSS 旋转是否生效
+    let native = false;    // 原生/系统是否已经横过来
+
+    const paint = () => {
+      const on = rotated || native;
+      feed.classList.toggle("rot", rotated);
+      document.body.classList.toggle("rot-play", rotated);
       setIcon(btn, on ? "collapse" : "expand");
-      btn.title = on ? "退出全屏" : "全屏";
+      btn.title = on ? "退出横屏" : "旋转全屏";
     };
-    btn.addEventListener("click", async () => {
+
+    // 系统到底转没转，只能看**实际朝向**：lock() 在无头/WebView 里会"假装成功"却什么也不做
+    // （实测 headless Chromium：lock 返回 resolved，orientation.type 仍是 portrait-primary），
+    // 所以要回读一次，别把"没转"当成"转了"，否则用户点了没反应。
+    const isLandscape = () => {
       try {
-        if (document.fullscreenElement) {
-          await document.exitFullscreen();
-          if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
-          showToast("已退出全屏");
-        } else {
-          await (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject(new Error("unsupported")));
-          if (screen.orientation && screen.orientation.lock) {
-            try { await screen.orientation.lock("landscape"); } catch (err) { /* 桌面/不支持就算了 */ }
-          }
-          showToast("已全屏（横屏）");
+        if (screen.orientation && screen.orientation.type) return String(screen.orientation.type).startsWith("landscape");
+        return window.matchMedia("(orientation: landscape)").matches;
+      } catch (err) { return false; }
+    };
+    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+    async function enter() {
+      // ① 安卓 App 的桥（装了新版 APK 才有）：返回 true 表示它真的去改 Activity 朝向了
+      try {
+        const bridge = window.ZvAndroid;
+        if (bridge && typeof bridge.landscape === "function") {
+          native = bridge.landscape(true) === true;
         }
-      } catch (err) {
-        showToast("这台设备不支持全屏");
+      } catch (err) { native = false; }
+      // ② 浏览器：全屏 + 锁横屏，然后回读真实朝向
+      if (!native) {
+        try {
+          if (document.fullscreenElement === null && document.documentElement.requestFullscreen) {
+            await document.documentElement.requestFullscreen();
+          }
+          if (screen.orientation && typeof screen.orientation.lock === "function") {
+            await screen.orientation.lock("landscape");
+            await sleep(250);
+            native = isLandscape();
+          }
+        } catch (err) { native = false; }
       }
-      sync();
+      // ③ 兜底（桌面浏览器 / WebView / 没开自动旋转的手机）：CSS 自己转，永远有效
+      rotated = !native;
+      paint();
+      showToast(native ? "横屏全屏（再点一次退出）" : "已旋转横屏：把手机横过来看（再点一次退出）");
+    }
+
+    async function exit() {
+      rotated = false;
+      if (native) {
+        try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
+        try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
+        try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
+      }
+      native = false;
+      paint();
+      showToast("已退出横屏");
+    }
+
+    btn.addEventListener("click", () => {
+      if (rotated || native) exit();
+      else enter();
     });
-    document.addEventListener("fullscreenchange", sync);
-    sync();
+    paint();
     return btn;
   }
 
@@ -1193,6 +1241,8 @@ export function mountFeed(view, options = {}) {
   }
 
   return function cleanup() {
+    document.body.classList.remove("playing");
+    document.body.classList.remove("rot-play");
     clearInterval(progressTimer);
     if (toastTimer) clearTimeout(toastTimer);
     if (settleTimer) clearTimeout(settleTimer);

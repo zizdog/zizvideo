@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.content.ComponentName
 import android.content.Context
@@ -71,6 +72,22 @@ class WebActivity : AppCompatActivity() {
 
     inner class Bridge {
         /** 网页一开播就预热（不退后台也调），交接时就不用现拉流。 */
+        /**
+         * 网页的「旋转全屏」调这个：真·系统横屏（不依赖用户开自动旋转）。
+         * 网页拿不到这个桥（老版本 App）时会退回 CSS 自己转 90°，所以这里必须如实返回是否接管。
+         */
+        @android.webkit.JavascriptInterface
+        fun landscape(on: Boolean): Boolean {
+            runOnUiThread {
+                requestedOrientation = if (on) {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+            return true
+        }
+
         @android.webkit.JavascriptInterface
         fun prepare(payload: String) {
             val service = PlaybackService.instance ?: return

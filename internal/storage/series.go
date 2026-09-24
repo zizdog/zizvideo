@@ -576,11 +576,12 @@ type SeriesCounts struct {
 // 软删的集与其进度都不计；scope 只用来限制"可见的集"，与 ListSeries 的可见性判据一致（S3/S4）。
 func (db *DB) SeriesWatchCounts(scope domain.LibraryScope, userID string) (map[string]SeriesCounts, error) {
 	where := `m.deleted_at IS NULL AND sm.media_id = m.id`
-	args := []any{userID}
-	if w, sargs := scopeWhere(scope, "m.library_id"); w != "" {
-		where += w
-		args = append(args, sargs...)
-	}
+	// ⚠️ 传参顺序＝SQL 占位符顺序：范围条件写在 JOIN 子句里、排在 `wp.user_id = ?` **之前**，
+	// 所以范围参数必须排在 userID 前面。老实现反过来传 ⇒ 有库范围的账号永远算不出进度
+	// （用户 2026-09-24 报障"观看中完全不生效"就是这一条；管理员恰好 scope=All 才没暴露）。
+	w, scopeArgs := scopeWhere(scope, "m.library_id")
+	where += w
+	args := append(append([]any{}, scopeArgs...), userID)
 	rows, err := db.Query(`SELECT sm.series_id,
 		  SUM(CASE WHEN wp.completed = 0 AND wp.position_ms > 0 THEN 1 ELSE 0 END),
 		  SUM(CASE WHEN wp.completed = 1 THEN 1 ELSE 0 END)

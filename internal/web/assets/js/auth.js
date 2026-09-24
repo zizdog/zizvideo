@@ -18,38 +18,59 @@ export async function loadMe() {
 export async function doLogout() {
   try { await api.logout(); } catch (err) { /* 退出失败也要回到登录页 */ }
   session.user = null;
-  // 主动退出后**不要**再被"自动登录"顶回去（否则一点退出就又进去了）
+  // 主动退出后**不要**再被"自动登录"顶回去（否则一点退出就又进去了）；
+  // 同时把"自动登录"这个意愿关掉 —— 用户点了退出，就不该下次还被自动带进来。
   try { sessionStorage.setItem("zv_no_auto", "1"); } catch (err) { /* 隐私模式忽略 */ }
+  try { localStorage.removeItem("zv_auto"); } catch (err) { /* 隐私模式忽略 */ }
 }
 
 export function mountLogin(view, onSuccess) {
   const username = input({ type: "text", autocomplete: "username", placeholder: "用户名", required: true });
   const password = input({ type: "password", autocomplete: "current-password", placeholder: "口令", required: true });
   const note = banner();
-  const remember = el("input", { type: "checkbox" });
+  // 用户 2026-09-24：拆成两个勾选 —— 「记住信息」（用户名/口令存本机）与「自动登录」（下次直接进）。
+  const remember = el("input", { type: "checkbox", dataset: { role: "login-remember" } });
+  const auto = el("input", { type: "checkbox", dataset: { role: "login-auto" } });
   const submit = el("button", { class: "btn primary", type: "submit", text: "登录" });
   const form = el("form", { class: "panel narrow" },
     el("h1", { class: "title", text: "Zizvideo" }),
     field("用户名", username),
     field("口令", password),
-    // 用户 2026-09-23：记住与自动登录（口令明文存本机浏览器 —— 界面上如实写明）
+    // 口令明文存本机浏览器 —— 界面上如实写明，不藏着
     el("label", { class: "check" }, remember,
-      el("span", { class: "muted small-note", text: "记住我（自动登录，口令明文存本机）" })),
+      el("span", { class: "muted small-note", text: "记住信息（用户名与口令存本机）" })),
+    el("label", { class: "check" }, auto,
+      el("span", { class: "muted small-note", text: "自动登录（打开就进，需先记住信息）" })),
     note,
     submit
   );
-  const KEY = "zv_login";
+  const KEY = "zv_login";       // {u,p} —— 记住信息
+  const AUTO_KEY = "zv_auto";   // "1" —— 自动登录
+  const readLocal = (key) => { try { return localStorage.getItem(key); } catch (err) { return null; } };
+  const writeLocal = (key, value) => {
+    try {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    } catch (err) { /* 隐私模式忽略 */ }
+  };
   const saved = (() => {
-    try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (err) { return null; }
+    try { return JSON.parse(readLocal(KEY) || "null"); } catch (err) { return null; }
   })();
   const noAuto = (() => { try { return sessionStorage.getItem("zv_no_auto") === "1"; } catch (err) { return false; } })();
-  if (saved && saved.u && saved.p && !noAuto) {
+  const wantAuto = readLocal(AUTO_KEY) === "1";
+  if (saved && saved.u) {
     username.value = saved.u;
-    password.value = saved.p;
+    password.value = saved.p || "";
     remember.checked = true;
-    // 下一次自动登录（等表单挂好再提交）
-    setTimeout(() => { form.dispatchEvent(new Event("submit", { cancelable: true })); }, 0);
+    auto.checked = wantAuto;
+    // 只有"自动登录"勾着才自己提交（用户主动退出过一次就不再顶回去）
+    if (wantAuto && !noAuto) {
+      setTimeout(() => { form.dispatchEvent(new Event("submit", { cancelable: true })); }, 0);
+    }
   }
+  // 勾了自动登录就要先记住信息：直接替用户勾上（否则"自动"没有口令可自动）
+  auto.addEventListener("change", () => { if (auto.checked) remember.checked = true; });
+  remember.addEventListener("change", () => { if (!remember.checked) auto.checked = false; });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setBanner(note, "");
@@ -57,10 +78,13 @@ export function mountLogin(view, onSuccess) {
     try {
       session.user = await api.login({ username: username.value.trim(), password: password.value });
       try { sessionStorage.removeItem("zv_no_auto"); } catch (err) { /* 忽略 */ }
-      try {
-        if (remember.checked) localStorage.setItem(KEY, JSON.stringify({ u: username.value.trim(), p: password.value }));
-        else localStorage.removeItem(KEY);
-      } catch (err) { /* 隐私模式忽略 */ }
+      if (remember.checked) {
+        writeLocal(KEY, JSON.stringify({ u: username.value.trim(), p: password.value }));
+        writeLocal(AUTO_KEY, auto.checked ? "1" : null);
+      } else {
+        writeLocal(KEY, null);
+        writeLocal(AUTO_KEY, null);
+      }
       onSuccess();
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "登录失败");

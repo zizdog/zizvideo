@@ -30,6 +30,14 @@ body {
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
   height: 52px; padding: 0 10px; background: transparent; border-bottom: 0;
 }
+/* 播放页整屏（body.playing）：顶栏**浮在视频上**。
+   只把 background 设成 transparent 还不够 —— 顶栏原来是 flex 兄弟节点，视频从它下面才开始，
+   那 52px 露的是页面底色，看着还是一条横条（用户 2026-09-24 报障"顶栏仍有背景"）。 */
+body.playing .header {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 12; background: transparent;
+}
+/* 顶栏浮起来后，「来自 X / 选库」落在它下沿 10px（用户 2026-09-24：距顶栏 10px）。 */
+body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .top-btn {
   font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
@@ -107,9 +115,10 @@ body {
 .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .overlay {
+  /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; gap: 7px;
+  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 4px;
   background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
 }
 .ov-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
@@ -119,9 +128,10 @@ body {
 }
 /* 抖音式右侧竖排操作栏：右下角、竖向排列（用户 2026-09-22 要求） */
 .ov-rail {
-  position: absolute; z-index: 7; right: 8px;  /* 用户 2026-09-23：再近一些，8px */
-  bottom: calc(88px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  /* 用户 2026-09-24：图标栏**再靠右**（2px）、纵向**挨紧**（gap 0）—— 8 个图标排下来太长 */
+  position: absolute; z-index: 7; right: 2px;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: 0;
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
@@ -151,7 +161,7 @@ body {
 .ov-corner {
   /* 顶部要躲开状态栏/刘海：安卓 App 里由原生把 WebView 垫到状态栏下方，
      浏览器/刘海屏这里再用 env() 兜一道（0 时无副作用）。 */
-  position: absolute; z-index: 7; top: calc(15px + env(safe-area-inset-top, 0px));
+  position: absolute; z-index: 7; top: calc(10px + env(safe-area-inset-top, 0px));
   display: flex; gap: 8px; padding: 0 12px; align-items: center;
   pointer-events: none; max-width: 100%;
 }
@@ -312,9 +322,9 @@ body {
   .admin { padding: 8px; }
   .grid { font-size: 12px; }
   .ov-title { max-width: 52%; font-size: 14px; }
-  /* 手机上原来压到 34px，用户反馈"太小"⇒ 放大到 50/36（大屏是 54/38） */
-  .icon-btn { width: 50px; height: 50px; }
-  .icon-btn svg { width: 36px; height: 36px; }
+  /* 手机上原来压到 34px，用户反馈"太小"⇒ 放大到 50/36；再收紧到 46/34 让 8 个图标排得下 */
+  .icon-btn { width: 46px; height: 46px; }
+  .icon-btn svg { width: 34px; height: 34px; }
   .kv { flex-direction: column; gap: 0; }
   .kv .k { min-width: 0; }
 }
@@ -329,13 +339,18 @@ body {
   flex: 0 0 auto; display: flex; border-top: 1px solid var(--line);
   background: var(--panel); padding-bottom: env(safe-area-inset-bottom); z-index: 15;
 }
+/* 用户 2026-09-24：底栏**只留文字**（去掉图标）、高度降下来，别占播放画面 */
 .nav-item {
-  flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 7px 4px 8px; text-decoration: none; color: var(--muted); font-size: 12px;
+  flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
+  padding: 8px 4px calc(8px + env(safe-area-inset-bottom)); text-decoration: none;
+  color: var(--muted); font-size: 13px;
 }
-.nav-item.on { color: var(--accent); }
-.nav-icon { line-height: 0; }
-.nav-icon svg { width: 24px; height: 24px; }
+.nav-item.on { color: var(--accent); font-weight: 600; }
+
+/* 剧场板块小标题（用户 2026-09-24：观看中要排在所有内容前面） */
+.series-sec { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 -2px; }
+.series-sec-title { font-size: 15px; font-weight: 600; }
+.series-sec-note { font-size: 12px; }
 
 /* 剧场列表：抖音式竖版海报网格（用户 2026-09-22："不要横条，参考抖音"）。
    auto-fill + minmax 让它自己决定一行几张：手机 2 张、宽屏 5~6 张。 */
@@ -495,6 +510,19 @@ body {
   animation: zv-spin .8s linear infinite;
 }
 @keyframes zv-spin { to { transform: rotate(360deg); } }
+
+/* 旋转全屏（用户 2026-09-24：**不许依赖系统自动旋转**）：整体转 90° 铺满竖屏视口。
+   手机没开自动旋转、桌面浏览器、WebView 都一样能用；把手机横过来就是标准横屏。
+   顶栏/底栏同时收起（真全屏观感）。 */
+.feed.rot {
+  position: fixed; z-index: 40;
+  top: 50%; left: 50%;
+  width: 100vh; height: 100vw;
+  width: 100dvh; height: 100dvw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+}
+body.rot-play .header, body.rot-play .bottom-nav { display: none; }
 
 /* 真正的全屏（含旋转）：全屏时藏掉顶栏与底栏（参考抖音精选版） */
 :fullscreen .header, :fullscreen .nav, :-webkit-full-screen .header, :-webkit-full-screen .nav { display: none; }

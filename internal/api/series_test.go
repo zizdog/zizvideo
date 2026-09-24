@@ -170,6 +170,27 @@ func TestSeriesWatchedCountBacksWatchingSection(t *testing.T) {
 	if got.CompletedCount != 0 || got.WatchedCount != 1 {
 		t.Fatalf("重开后应回到观看中（watched=1, completed=0），实际 %+v", got)
 	}
+
+	// 范围受限的账号（普通用户 / 被收窄的管理员）也必须算对 —— 这是用户 2026-09-24 报障
+	// "观看中完全不生效"的根因：范围条件的占位符在 SQL 里排在 user_id **前面**，传参顺序错了
+	// 就永远 JOIN 不上进度（管理员恰好 scope=All 才没暴露）。
+	scoped := domain.LibraryScope{IDs: map[string]bool{lib.ID: true}}
+	counts, err := e.DB.SeriesWatchCounts(scoped, admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := counts[sb.ID]; c.Watching != 1 || c.Completed != 0 {
+		t.Fatalf("受限范围下 watched=%d completed=%d，期望 1/0", c.Watching, c.Completed)
+	}
+	// 未授权的库既不算数也不泄露（范围外的剧场不该出现在结果里）
+	other := domain.LibraryScope{IDs: map[string]bool{"lib_not_granted": true}}
+	counts, err = e.DB.SeriesWatchCounts(other, admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := counts[sb.ID]; ok && (c.Watching != 0 || c.Completed != 0) {
+		t.Fatalf("范围外不该有进度统计：%+v", c)
+	}
 }
 
 // TestSeriesEpisodesFollowPositionOrder 是"剧场顺序连播"的后端门禁：
