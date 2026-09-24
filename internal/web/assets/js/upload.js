@@ -99,10 +99,14 @@ export function mountUpload(view) {
         dataset: { role: "upload-native" },
         onclick: () => { try { window.ZvAndroid.pickUploads(); } catch (err) { /* 老版本 App 没有这个方法 */ } } })
     : null;
+  // A3：页面一进来就把"没传完的"摆出来，并给一个直接续传的按钮 ——
+  // 断线/刷新后不用自己去"我的上传"里翻，也不用回忆传到哪了。
+  const resumeBox = el("div", { class: "panel hidden", dataset: { role: "upload-resume" } });
   const page = el("div", { class: "page" },
     el("div", { class: "page-head" },
       el("h2", { class: "page-title", text: "上传视频" }),
       el("a", { class: "link small-note", href: "#/me/uploads", text: "我的上传 ›" })),
+    resumeBox,
     note,
     el("div", { class: "panel" },
       el("div", { class: "muted small-note", text: "选中视频后点「开始上传」；上传完进待审，管理员通过后才进媒体库。" }),
@@ -183,11 +187,14 @@ export function mountUpload(view) {
     }
   }
 
-  picker.addEventListener("change", () => {
+  let autoResume = false; // 这次选择是不是"点续传来的"：是就自动开传，不用再点一次开始上传
+
+  picker.addEventListener("change", async () => {
     const picked = Array.from(picker.files || []);
     if (!picked.length) return;
     clear(rowBox);
     rows.length = 0;
+    const resumed = [];
     for (const file of picked) {
       addRow(file);
       // 服务端有同名同大小的未完成条目 ⇒ 复用它的 id，续传而不是重传
@@ -196,11 +203,20 @@ export function mountUpload(view) {
         const row = rows[rows.length - 1];
         row.id = match.id;
         row.sent = Number(match.received_bytes) || 0;
+        row.status = "可续传";
         paintRow(row);
+        resumed.push(row);
       }
     }
     startBtn.disabled = false;
     picker.value = "";
+    if (autoResume && resumed.length) {
+      autoResume = false;
+      for (const row of resumed) await runOne(row);
+      refreshQuota();
+    } else if (resumed.length) {
+      setBanner(note, "有 " + resumed.length + " 个文件可以续传：点「开始上传」接着传（已传部分不会重传）");
+    }
   });
 
   startBtn.addEventListener("click", async () => {
@@ -236,7 +252,28 @@ export function mountUpload(view) {
       const data = await api.myUploads();
       paintQuota(data.quota);
       unfinished = (data.list || []).filter((it) => it.state === "uploading");
+      paintResume();
     } catch (err) { /* 配额读不到就不显示，不编造 */ }
+  }
+
+  // paintResume 把"没传完的"列出来：每条显示进度，一个按钮直接去选文件续传。
+  function paintResume() {
+    clear(resumeBox);
+    if (!unfinished.length) { resumeBox.classList.add("hidden"); return; }
+    resumeBox.classList.remove("hidden");
+    const go = el("button", { class: "btn primary small", type: "button", text: "选同一个文件继续传",
+      dataset: { role: "upload-resume-pick" } });
+    go.addEventListener("click", () => { autoResume = true; picker.click(); });
+    resumeBox.append(
+      el("div", { class: "panel-title", text: "未完成的上传（" + unfinished.length + "）" }),
+      el("div", { class: "muted small-note", text: "断线或刷新后：点下面按钮选**同一个文件**，会从断点接着传，已传部分不重传。" }),
+      ...unfinished.map((it) => el("div", { class: "upload-row", dataset: { role: "upload-unfinished" } },
+        el("div", { class: "upload-name" }, el("span", { text: it.name }),
+          el("span", { class: "muted small-note", text: " 已传 " + fmtBytes(it.received_bytes || 0) +
+            " / " + fmtBytes(it.size) })),
+        el("div", { class: "bar" }, el("span", { class: "bar-fill",
+          style: { width: (it.size > 0 ? Math.round((Number(it.received_bytes) || 0) / it.size * 100) : 0) + "%" } })))),
+      el("div", { class: "actions" }, go));
   }
 
   refreshQuota();
@@ -299,7 +336,7 @@ export function mountMyUploads(view) {
     }
     if (item.state === "uploading") {
       row.append(el("div", { class: "upload-note", text: "已传 " + fmtBytes(item.received_bytes || 0) +
-        "；重新选同一个文件点上传即可接着传" }));
+        "；到「上传视频」页点「选同一个文件继续传」即可从断点接着传（已传部分不重传）" }));
     }
     return row;
   }
