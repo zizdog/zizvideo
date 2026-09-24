@@ -296,10 +296,12 @@ export function mountFeed(view, options = {}) {
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
       entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
-      cleanButton(entry), fullscreenButton(entry)));
+      playPauseButton(entry), cleanButton(entry), fullscreenButton(entry)));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
+    // 全屏（沉浸）时左上角的返回键：点了退出全屏（用户 2026-09-24）
+    layer.append(immersiveBack(entry));
 
     if (!isPlayable(item)) {
       // 文件不在了（改名/移动/掉盘）时如实说，不再打"状态：ready"——那句话自相矛盾（用户报障）。
@@ -324,14 +326,22 @@ export function mountFeed(view, options = {}) {
     video.addEventListener("waiting", () => showLoading(entry));
     video.addEventListener("timeupdate", () => paintTime(entry));
     video.addEventListener("play", () => {
+      if (entry.paintPlayPause) entry.paintPlayPause();
       hideLoading(entry);
       hidePlayButton(entry);
       if (!state.soundOn) showSoundHint(entry);
     });
-    video.addEventListener("pause", () => { if (!entry.video.ended) showPlayButton(entry); });
+    video.addEventListener("pause", () => {
+      if (entry.paintPlayPause) entry.paintPlayPause();
+      if (!entry.video.ended) showPlayButton(entry);
+    });
     video.addEventListener("ended", () => onEnded(entry));
     video.addEventListener("error", () => showBroken(entry));
-    video.addEventListener("click", () => togglePlay(entry));
+    video.addEventListener("click", () => {
+      // 全屏（沉浸）时点屏幕 = 切换控件显示（用户 2026-09-24）；平时仍是播放/暂停
+      if (immersiveOn()) { full.uiHidden = !full.uiHidden; paintImmersive(); return; }
+      togglePlay(entry);
+    });
     stage.append(video);
     showLoading(entry); // 用户 2026-09-23：先给"加载中"，别一进来就是个大播放按钮
     return entry;
@@ -734,6 +744,25 @@ export function mountFeed(view, options = {}) {
   /* ---------- 清屏播放 / 旋转全屏（用户 2026-09-23） ---------- */
 
   // 清屏：把边栏/标题/角标都收起来，只留一个小箭头还原（比"点画面切换"更明确，不会和"点画面=暂停"打架）
+  /* ---------- 全屏（沉浸）状态：全局一份（feed 只有一个） ---------- */
+  //
+  // 用户 2026-09-24：「全屏播放时不显示任何按钮/进度、边栏收起；点屏幕切换显示；
+  // 左上角显示返回按钮（左箭头）」。所以全屏 = 沉浸态：进去先全收起，点屏幕来回切换。
+  const full = { rotated: false, native: false, uiHidden: false };
+  function paintImmersive() {
+    // 转屏靠 CSS（rot）—— 忘了它就会出现"进了全屏但画面没横过来"（我自己踩过）
+    feed.classList.toggle("rot", full.rotated);
+    document.body.classList.toggle("rot-play", full.rotated);
+    feed.classList.toggle("immersive", full.rotated || full.native);
+    feed.classList.toggle("blank", full.uiHidden);
+  }
+  function setImmersive(on) {
+    full.uiHidden = on;            // 进全屏先收起，退出全屏恢复
+    if (on) feed.classList.remove("clean"); // 别和"清屏"那个状态打架
+    paintImmersive();
+  }
+  function immersiveOn() { return full.rotated || full.native; }
+
   function cleanButton() {
     const btn = el("button", {
       class: "icon-btn rail-restore", type: "button", title: "清屏播放",
@@ -752,76 +781,87 @@ export function mountFeed(view, options = {}) {
 
   // 旋转全屏（用户 2026-09-24）：**不许依赖系统自动旋转**。
   // 三级策略：① 安卓原生桥能接管就交给它（真·系统横屏）；
-  //          ② 否则试全屏 + screen.orientation.lock("landscape")；
+  //          ② 否则试全屏 + screen.orientation.lock("landscape")；锁了要**回读真实朝向**（lock 会假装成功）；
   //          ③ 都不行就 CSS 把播放器整体转 90°（竖屏视口里也能横过来看，把手机横过来就行）。
-  // 前两级成功时**不能再转 CSS**，否则和系统旋转叠加成 180°。
+  // 进全屏 = 进沉浸态：控件全收起，点屏幕切换（用户 2026-09-24）。
+  // 只有 type 与 matchMedia **两处都说是横屏**才算"系统真的转了"：
+  // lock() 在无头/WebView 里会假装成功（实测 type 会短暂变 landscape 但实际没转），只信一处会误判成"已横屏"。
+  const isLandscape = () => {
+    try {
+      const type = screen.orientation && screen.orientation.type ? String(screen.orientation.type) : "";
+      const mq = window.matchMedia("(orientation: landscape)").matches;
+      return type.startsWith("landscape") && mq;
+    } catch (err) { return false; }
+  };
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+  async function enterFullscreen() {
+    const bridge = window.ZvAndroid;
+    try {
+      if (bridge && typeof bridge.landscape === "function") full.native = bridge.landscape(true) === true;
+    } catch (err) { full.native = false; }
+    if (!full.native) {
+      try {
+        if (document.fullscreenElement === null && document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+        if (screen.orientation && typeof screen.orientation.lock === "function") {
+          await screen.orientation.lock("landscape");
+          await sleep(250);
+          full.native = isLandscape();
+          await sleep(200);              // 再读一次：假成功会自己退回去
+          if (!isLandscape()) full.native = false;
+        }
+      } catch (err) { full.native = false; }
+    }
+    full.rotated = !full.native;
+    setImmersive(true);
+    showToast(full.native ? "横屏全屏（点屏幕显隐控件）" : "已旋转横屏：把手机横过来看（点屏幕显隐控件）");
+  }
+
+  async function exitFullscreen() {
+    full.rotated = false;
+    if (full.native) {
+      try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
+      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
+      try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
+    }
+    full.native = false;
+    setImmersive(false);
+    showToast("已退出横屏");
+  }
+
+  function immersiveBack() {
+    const btn = el("button", { class: "icon-btn imm-back", type: "button", title: "退出全屏",
+      dataset: { role: "imm-back" } }, icon("back"));
+    btn.addEventListener("click", (event) => { event.stopPropagation(); exitFullscreen(); });
+    return btn;
+  }
+
+  // 全屏里没有别的暂停入口：加一个只在沉浸态出现的播放/暂停键
+  function playPauseButton(entry) {
+    const btn = el("button", { class: "icon-btn rail-play", type: "button", title: "播放/暂停",
+      dataset: { role: "rail-play" } }, icon("play"));
+    const paint = () => setIcon(btn, entry.video && !entry.video.paused ? "pause" : "play");
+    btn.addEventListener("click", (event) => { event.stopPropagation(); togglePlay(entry); paint(); });
+    entry.paintPlayPause = paint;
+    paint();
+    return btn;
+  }
+
   function fullscreenButton() {
     const btn = el("button", { class: "icon-btn", type: "button", title: "旋转全屏",
       dataset: { role: "rail-fullscreen" } }, icon("expand"));
-    let rotated = false;   // CSS 旋转是否生效
-    let native = false;    // 原生/系统是否已经横过来
-
     const paint = () => {
-      const on = rotated || native;
-      feed.classList.toggle("rot", rotated);
-      document.body.classList.toggle("rot-play", rotated);
+      const on = immersiveOn();
       setIcon(btn, on ? "collapse" : "expand");
       btn.title = on ? "退出横屏" : "旋转全屏";
     };
-
-    // 系统到底转没转，只能看**实际朝向**：lock() 在无头/WebView 里会"假装成功"却什么也不做
-    // （实测 headless Chromium：lock 返回 resolved，orientation.type 仍是 portrait-primary），
-    // 所以要回读一次，别把"没转"当成"转了"，否则用户点了没反应。
-    const isLandscape = () => {
-      try {
-        if (screen.orientation && screen.orientation.type) return String(screen.orientation.type).startsWith("landscape");
-        return window.matchMedia("(orientation: landscape)").matches;
-      } catch (err) { return false; }
-    };
-    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-
-    async function enter() {
-      // ① 安卓 App 的桥（装了新版 APK 才有）：返回 true 表示它真的去改 Activity 朝向了
-      try {
-        const bridge = window.ZvAndroid;
-        if (bridge && typeof bridge.landscape === "function") {
-          native = bridge.landscape(true) === true;
-        }
-      } catch (err) { native = false; }
-      // ② 浏览器：全屏 + 锁横屏，然后回读真实朝向
-      if (!native) {
-        try {
-          if (document.fullscreenElement === null && document.documentElement.requestFullscreen) {
-            await document.documentElement.requestFullscreen();
-          }
-          if (screen.orientation && typeof screen.orientation.lock === "function") {
-            await screen.orientation.lock("landscape");
-            await sleep(250);
-            native = isLandscape();
-          }
-        } catch (err) { native = false; }
-      }
-      // ③ 兜底（桌面浏览器 / WebView / 没开自动旋转的手机）：CSS 自己转，永远有效
-      rotated = !native;
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (immersiveOn()) await exitFullscreen();
+      else await enterFullscreen();
       paint();
-      showToast(native ? "横屏全屏（再点一次退出）" : "已旋转横屏：把手机横过来看（再点一次退出）");
-    }
-
-    async function exit() {
-      rotated = false;
-      if (native) {
-        try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
-        try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
-        try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
-      }
-      native = false;
-      paint();
-      showToast("已退出横屏");
-    }
-
-    btn.addEventListener("click", () => {
-      if (rotated || native) exit();
-      else enter();
     });
     paint();
     return btn;

@@ -551,6 +551,30 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 }
 @keyframes zv-spin { to { transform: rotate(360deg); } }
 
+/* 全屏（沉浸态）：进去先全收起，点屏幕切换显示（用户 2026-09-24）——
+   "全屏播放时，不显示任何按钮、进度、边栏收起。点击屏幕可切换显示。左上角显示返回按钮。" */
+.feed.blank .overlay,
+.feed.blank .ov-rail,
+.feed.blank .ov-corner,
+.feed.blank .imm-back { display: none; }
+/* 左上角返回键（左箭头）：只在全屏且控件可见时出现，点了退出全屏 */
+.feed .imm-back {
+  display: none; position: absolute; z-index: 9;
+  top: calc(10px + env(safe-area-inset-top, 0px)); left: 8px;
+}
+.feed.immersive .imm-back {
+  display: inline-flex; background: rgba(0, 0, 0, .38); border-radius: 999px;
+}
+/* 收起状态优先：全屏默认"什么都不显示"，点了屏幕才露出返回键（同权重时必须显式压过上面那条） */
+.feed.immersive.blank .imm-back { display: none; }
+/* 全屏里左上角只留返回键（"来自 X / 选库"让位，别两个挤一起） */
+.feed.immersive .ov-corner { display: none; }
+/* 全屏里 rail 多一个播放/暂停键；平时不显示 */
+.feed .rail-play { display: none; }
+.feed.immersive .rail-play { display: inline-flex; }
+/* 全屏时控件贴到屏幕边（顶栏已收起，不用再躲那 52px） */
+body.rot-play .ov-corner { top: calc(10px + env(safe-area-inset-top, 0px)); }
+
 /* 旋转全屏（用户 2026-09-24：**不许依赖系统自动旋转**）：整体转 90° 铺满竖屏视口。
    手机没开自动旋转、桌面浏览器、WebView 都一样能用；把手机横过来就是标准横屏。
    顶栏/底栏同时收起（真全屏观感）。 */
