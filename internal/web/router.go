@@ -129,6 +129,9 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/uploads/pending", s.RequireAdmin(s.HandleAdminPendingUploads))
 	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/approve", s.RequireAdmin(s.HandleAdminApproveUpload))
 	mux.HandleFunc("POST /api/v1/admin/uploads/{id}/reject", s.RequireAdmin(s.HandleAdminRejectUpload))
+	// 批量审核（A1）：一次几十集时别让人点几十次；逐条如实报结果。
+	mux.HandleFunc("POST /api/v1/admin/uploads/approve-batch", s.RequireAdmin(s.HandleAdminApproveBatch))
+	mux.HandleFunc("POST /api/v1/admin/uploads/reject-batch", s.RequireAdmin(s.HandleAdminRejectBatch))
 
 	mux.HandleFunc("GET /api/v1/admin/system/info", s.RequireAdmin(s.HandleSystemInfo))
 	mux.HandleFunc("GET /api/v1/admin/audit", s.RequireAdmin(s.HandleAuditList))

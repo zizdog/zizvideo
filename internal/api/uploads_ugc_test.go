@@ -390,3 +390,120 @@ func TestUGCApproveIntoSeriesDraft(t *testing.T) {
 		t.Fatalf("第三集应排到最后：%+v", eps3[2])
 	}
 }
+
+// A1 批量审核门禁：批量通过（同一份单条逻辑）→ 逐条结果如实；批量驳回 → 文件真的没了。
+// 关键点：**部分失败不许整批失败**（一个坏 id 不能拖着其它条一起不通过）。
+func TestUGCBatchApproveAndReject(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	libRoot := filepath.Join(e.Root, "batch-lib")
+	if err := os.MkdirAll(libRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib := e.newLibrary("批量库", libRoot)
+	client, userID := e.ugcUser(t, "batchuser")
+	if res, _, raw := e.write(http.MethodPatch, "/api/v1/users/"+userID,
+		map[string]any{"can_upload": true}); res.StatusCode != http.StatusOK {
+		t.Fatalf("开白名单失败 %d: %s", res.StatusCode, raw)
+	}
+	send := func(name string) string {
+		t.Helper()
+		body := []byte("zv-batch-" + name)
+		res, start, raw := e.ugcStart(t, client, name, len(body))
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("开会话失败 %d: %s", res.StatusCode, raw)
+		}
+		id := start.Item.ID
+		if p, b := e.uploadRaw(t, client, http.MethodPut, "/api/v1/uploads/"+id, body, nil); p.StatusCode != http.StatusOK {
+			t.Fatalf("上传失败 %d: %s", p.StatusCode, b)
+		}
+		if r, _, b := e.writeAs(client, http.MethodPost, "/api/v1/uploads/"+id+"/finish", nil); r.StatusCode != http.StatusOK {
+			t.Fatalf("定稿失败 %d: %s", r.StatusCode, b)
+		}
+		return id
+	}
+
+	ids := []string{send("批量剧 第2集.mp4"), send("批量剧 第1集.mp4")}
+	keep := send("留着驳回.mp4")
+	// 故意混一个不存在的 id：它必须单独失败，另外两条照样通过
+	batchIDs := append(append([]string{}, ids...), "upl_does_not_exist")
+	res, env, raw := e.write(http.MethodPost, "/api/v1/admin/uploads/approve-batch",
+		map[string]any{"ids": batchIDs, "library_id": lib.ID, "series_title": "批量剧"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("批量通过 HTTP = %d: %s", res.StatusCode, raw)
+	}
+	var out struct {
+		Approved int `json:"approved"`
+		Failed   int `json:"failed"`
+		Total    int `json:"total"`
+		Results  []struct {
+			ID    string `json:"id"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+			Item  struct {
+				SeriesID string `json:"series_id"`
+			} `json:"item"`
+		} `json:"results"`
+	}
+	decodeInto(t, env.Data, &out)
+	if out.Total != 3 || out.Approved != 2 || out.Failed != 1 {
+		t.Fatalf("批量结果计数不对: %+v", out)
+	}
+	seriesID := ""
+	for _, r := range out.Results {
+		if r.ID == "upl_does_not_exist" {
+			if r.OK || r.Error == "" {
+				t.Fatalf("坏 id 必须单独失败并给原因: %+v", r)
+			}
+			continue
+		}
+		if !r.OK || r.Item.SeriesID == "" {
+			t.Fatalf("这两条应当通过并归入剧场草稿: %+v", r)
+		}
+		seriesID = r.Item.SeriesID
+	}
+	eps, _, err := e.DB.ListSeriesEpisodes(domain.LibraryScope{All: true}, seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 2 || eps[0].Episode == nil || *eps[0].Episode != 1 {
+		t.Fatalf("批量通过后剧场应识别集号并重排: %+v", eps)
+	}
+
+	// 批量驳回：文件必须真的删掉、状态 rejected
+	res, env, raw = e.write(http.MethodPost, "/api/v1/admin/uploads/reject-batch",
+		map[string]any{"ids": []string{keep}, "note": "不符合要求"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("批量驳回 HTTP = %d: %s", res.StatusCode, raw)
+	}
+	var rj struct {
+		Rejected int `json:"rejected"`
+		Failed   int `json:"failed"`
+	}
+	decodeInto(t, env.Data, &rj)
+	if rj.Rejected != 1 || rj.Failed != 0 {
+		t.Fatalf("批量驳回计数不对: %+v", rj)
+	}
+	item, err := e.DB.GetUploadItem(keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != domain.UploadRejected {
+		t.Fatalf("驳回后状态 = %q", item.State)
+	}
+	if _, err := os.Stat(item.Path); !os.IsNotExist(err) {
+		t.Fatalf("驳回后文件应被删掉: %v", err)
+	}
+	// 原因必填
+	res, _, _ = e.write(http.MethodPost, "/api/v1/admin/uploads/reject-batch",
+		map[string]any{"ids": []string{keep}})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("批量驳回不填原因应 400，实际 %d", res.StatusCode)
+	}
+	// 空 ids / 超限
+	res, _, _ = e.write(http.MethodPost, "/api/v1/admin/uploads/approve-batch",
+		map[string]any{"ids": []string{}, "library_id": lib.ID})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("空 ids 应 400，实际 %d", res.StatusCode)
+	}
+}

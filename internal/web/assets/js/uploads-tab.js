@@ -9,6 +9,9 @@ export function mountUploadsTab(root) {
   const note = banner();
   const count = el("span", { class: "muted small-note", dataset: { role: "pending-count" } });
   const listBox = el("div", { class: "upload-list", dataset: { role: "pending-rows" } });
+  // 批量审核（A1）：一次几十集时，别让人点几十次
+  const picked = new Set();
+  const batchInfo = el("span", { class: "muted small-note", dataset: { role: "batch-count" }, text: "已选 0 条" });
   // 转码进度行放面板里：reload() 会清空 listBox，放在里面会被"通过后刷新"顺手清掉。
   const transcodeLine = el("div", { class: "muted small-note", dataset: { role: "transcode-progress" } });
   let libraries = [];
@@ -17,7 +20,13 @@ export function mountUploadsTab(root) {
   root.append(el("div", { class: "panel" },
     el("div", { class: "panel-title" }, el("span", { text: "待审上传" }), count),
     el("div", { class: "muted small-note", text: "通过前先看一眼预览：通过后文件移进你选的媒体库并立刻可播。" }),
-    note, transcodeLine), listBox);
+    note, transcodeLine,
+    el("div", { class: "row", dataset: { role: "batch-bar" } },
+      el("button", { class: "btn small", type: "button", text: "全选待审", dataset: { role: "batch-all" },
+        onclick: () => { for (const box of listBox.querySelectorAll('[data-role="pending-pick"]')) { box.checked = true; picked.add(box.dataset.id); } paintBatch(); } }),
+      el("button", { class: "btn small", type: "button", text: "清空选择", dataset: { role: "batch-none" },
+        onclick: () => { for (const box of listBox.querySelectorAll('[data-role="pending-pick"]')) box.checked = false; picked.clear(); paintBatch(); } }),
+      batchInfo)), listBox);
 
   async function loadLibraries() {
     try {
@@ -54,6 +63,68 @@ export function mountUploadsTab(root) {
     return result;
   }
 
+  function paintBatch() {
+    batchInfo.textContent = "已选 " + picked.size + " 条";
+  }
+
+  // 批量工具条上的控件：目标库 / 剧场 / 尺寸 / 原因，一次选好套用到全部勾选项
+  const batchLib = el("select", { class: "input", dataset: { role: "batch-library" } });
+  const batchSeries = el("select", { class: "input", dataset: { role: "batch-series" } });
+  const batchSeriesName = el("input", { class: "input hidden", placeholder: "新剧场名（集号按文件名识别）",
+    dataset: { role: "batch-series-name" } });
+  const batchSize = sizeSelect("batch-size");
+  const batchBar2 = el("div", { class: "row", dataset: { role: "batch-actions" } });
+  batchSeries.addEventListener("change", () => {
+    batchSeriesName.classList.toggle("hidden", batchSeries.value !== "new");
+  });
+
+  function seriesPayloadOf(pick, nameInput) {
+    if (pick.value === "new") {
+      const t = nameInput.value.trim();
+      return t ? { series_title: t } : null;
+    }
+    if (pick.value.startsWith("id:")) return { series_id: pick.value.slice(3) };
+    return {};
+  }
+
+  async function runBatchApprove() {
+    const ids = Array.from(picked);
+    if (!ids.length) { setBanner(note, "先勾选要通过的条目"); return; }
+    if (!batchLib.value) { setBanner(note, "先选目标媒体库"); return; }
+    const sp = seriesPayloadOf(batchSeries, batchSeriesName);
+    if (sp === null) { setBanner(note, "填一下新剧场名"); return; }
+    setBanner(note, "");
+    const res = await api.approveUploadBatch(Object.assign({ ids, library_id: batchLib.value,
+      transcode_height: Number(batchSize.value) || 0 }, sp));
+    await reload();
+    const failed = Number(res.failed) || 0;
+    const msg = "批量通过 " + (Number(res.approved) || 0) + " 条"
+      + (failed ? "，" + failed + " 条失败：" + (res.results || []).filter((r) => !r.ok)
+        .map((r) => (r.error || "失败")).slice(0, 3).join("；") : "");
+    setBanner(note, msg);
+    if (res.results) {
+      const tid = (res.results || []).map((r) => r.item && r.item.transcode_job_id).filter(Boolean)[0];
+      if (tid) pollTranscode(tid);
+    }
+  }
+
+  async function runBatchReject() {
+    const ids = Array.from(picked);
+    if (!ids.length) { setBanner(note, "先勾选要驳回的条目"); return; }
+    const noteText = await confirmDialog({
+      title: "批量驳回 " + ids.length + " 条",
+      message: "填写驳回原因（会给上传者看）",
+      input: { placeholder: "例如：内容不合适 / 不是视频", required: true },
+      confirmText: "驳回",
+    });
+    if (noteText === null) return;
+    setBanner(note, "");
+    const res = await api.rejectUploadBatch(ids, noteText);
+    await reload();
+    setBanner(note, "批量驳回 " + (Number(res.rejected) || 0) + " 条"
+      + (Number(res.failed) ? "，" + res.failed + " 条失败" : ""));
+  }
+
   // 转码任务进度（复用任务中心 /admin/tasks/{id} 的 percent）
   let transcodeTimer = 0;
   function pollTranscode(jobId) {
@@ -86,6 +157,15 @@ export function mountUploadsTab(root) {
 
   async function reload() {
     clear(listBox);
+    picked.clear();
+    paintBatch();
+    // 批量工具条的下拉按当前库/剧场列表重建
+    clear(batchLib);
+    for (const lib of libraries) batchLib.append(el("option", { value: lib.id, text: lib.name }));
+    clear(batchSeries);
+    batchSeries.append(el("option", { value: "", text: "不归入剧场" }));
+    for (const x of seriesList) batchSeries.append(el("option", { value: "id:" + x.id, text: "归入：" + (x.title || x.id) }));
+    batchSeries.append(el("option", { value: "new", text: "＋新建剧场草稿…" }));
     setBanner(note, "");
     try {
       const data = await api.pendingUploads();
@@ -210,7 +290,14 @@ export function mountUploadsTab(root) {
         setBanner(note, err && err.message ? err.message : "驳回失败");
       }
     });
+    const pick = el("input", { type: "checkbox", title: "勾选后可批量通过/驳回",
+      dataset: { role: "pending-pick", id: item.id } });
+    pick.addEventListener("change", () => {
+      if (pick.checked) picked.add(item.id); else picked.delete(item.id);
+      paintBatch();
+    });
     return el("div", { class: "upload-row review", dataset: { role: "pending-row", id: item.id } },
+      el("span", { class: "video-lead" }, pick),
       cover,
       el("div", { class: "review-body" },
         el("div", { class: "upload-name" }, el("span", { text: item.name }),
@@ -222,6 +309,13 @@ export function mountUploadsTab(root) {
         el("div", { class: "actions" }, approve, approveTranscode, reject)));
   }
 
+  batchBar2.append(
+    el("span", { class: "muted small-note", text: "批量：" }), batchLib, batchSeries, batchSeriesName, batchSize,
+    el("button", { class: "btn primary small", type: "button", text: "批量通过", dataset: { role: "batch-approve" },
+      onclick: () => { runBatchApprove().catch((err) => setBanner(note, err && err.message ? err.message : "批量通过失败")); } }),
+    el("button", { class: "btn danger small", type: "button", text: "批量驳回", dataset: { role: "batch-reject" },
+      onclick: () => { runBatchReject().catch((err) => setBanner(note, err && err.message ? err.message : "批量驳回失败")); } }));
+  listBox.after(batchBar2);
   loadLibraries().then(reload);
   return null;
 }

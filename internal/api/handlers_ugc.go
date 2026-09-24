@@ -538,32 +538,51 @@ type ugcApproveReq struct {
 	SeriesTitle string `json:"series_title"`
 }
 
-// HandleAdminApproveUpload 通过：把文件从 inbox 移进选定的媒体库并登记 media（立刻可播）。
-// 探测失败就把文件移回 inbox 并如实报错——绝不把放不了的内容塞进库。
-func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request) {
-	admin := UserFrom(r.Context())
-	it, err := s.DB.GetUploadItem(r.PathValue("id"))
-	if err != nil {
-		s.fail(w, r, err)
-		return
+// approveResult 单条通过的结果（单条与批量共用一份结构，线形状保持一致）。
+type approveResult struct {
+	MediaID        string
+	LibraryID      string
+	Path           string
+	Title          string
+	SeriesID       string
+	SeriesError    string
+	TranscodeJobID string
+	TranscodeError string
+}
+
+func (r approveResult) json() map[string]any {
+	out := map[string]any{"media_id": r.MediaID, "library_id": r.LibraryID,
+		"path": r.Path, "title": r.Title}
+	if r.SeriesID != "" {
+		out["series_id"] = r.SeriesID
 	}
+	if r.SeriesError != "" {
+		out["series_error"] = r.SeriesError
+	}
+	if r.TranscodeJobID != "" {
+		out["transcode_job_id"] = r.TranscodeJobID
+	}
+	if r.TranscodeError != "" {
+		out["transcode_error"] = r.TranscodeError
+	}
+	return out
+}
+
+// approveOne 是一条待审上传的完整通过流程：校验 → 移进目标库 → 探测登记 media → 记状态
+// →（可选）归入剧场 →（可选）排队转码。单条接口与批量接口**只有这一份实现**。
+// 调用方负责已取到 it（并确认 id 存在）；这里只做状态/归属校验，失败一律不动状态。
+func (s *Server) approveOne(ctx context.Context, adminID string, it *domain.UploadItem,
+	req ugcApproveReq) (approveResult, error) {
+	var out approveResult
 	if it.State != domain.UploadPending {
-		s.fail(w, r, domain.New("UPLOAD_STATE_INVALID", "这条上传不在待审状态", 409))
-		return
+		return out, domain.New("UPLOAD_STATE_INVALID", "这条上传不在待审状态", 409)
 	}
 	if !media.Within(it.Path, s.inboxRoot()) {
-		s.fail(w, r, domain.ErrPathNotAllowed)
-		return
+		return out, domain.ErrPathNotAllowed
 	}
-	var req ugcApproveReq
-	if derr := s.decodeJSON(w, r, &req); derr != nil {
-		s.fail(w, r, derr)
-		return
-	}
-	lib, lerr := s.uploadLibrary(req.LibraryID)
-	if lerr != nil {
-		s.fail(w, r, lerr)
-		return
+	lib, err := s.uploadLibrary(req.LibraryID)
+	if err != nil {
+		return out, err
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
@@ -574,39 +593,31 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 		dest = filepath.Join(filepath.Clean(lib.RootPath), uniqueName(lib.RootPath, it.Name))
 	}
 	if err := moveIntoRoot(s.Roots.List(), lib.RootPath, it.Path, dest); err != nil {
-		s.fail(w, r, err)
-		return
+		return out, err
 	}
-	mediaID, perr := s.probeApproved(r.Context(), lib, dest, title)
+	mediaID, perr := s.probeApproved(ctx, lib, dest, title)
 	if perr != nil {
 		// 移回去，保持待审：坏文件不该进库，也不该凭空消失。
 		if back := moveBack(s.inboxRoot(), dest, it.Path); back != nil {
 			s.Log.Error("审核通过失败后回滚文件失败", "upload", it.ID, "error", back.Error())
 		}
-		s.fail(w, r, domain.New("UPLOAD_PROBE_FAILED",
-			"这个文件探测不出视频信息（可能损坏或不是视频），已退回待审", 422))
-		return
+		return out, domain.New("UPLOAD_PROBE_FAILED",
+			"这个文件探测不出视频信息（可能损坏或不是视频），已退回待审", 422)
 	}
-	ok, aerr := s.DB.ApproveUploadItem(it.ID, mediaID, lib.ID, admin.ID)
+	ok, aerr := s.DB.ApproveUploadItem(it.ID, mediaID, lib.ID, adminID)
 	if aerr != nil {
-		s.fail(w, r, aerr)
-		return
+		return out, aerr
 	}
 	if !ok {
-		s.fail(w, r, domain.New("UPLOAD_STATE_INVALID", "这条上传已经被别人审过了", 409))
-		return
+		return out, domain.New("UPLOAD_STATE_INVALID", "这条上传已经被别人审过了", 409)
 	}
-	out := map[string]any{"media_id": mediaID, "library_id": lib.ID,
-		"path": dest, "title": title}
+	out = approveResult{MediaID: mediaID, LibraryID: lib.ID, Path: dest, Title: title}
 	// P1：顺手归入剧场（已有 or 按标题新建的草稿）。失败只如实带回错误，不影响"已经通过"这件事。
-	if seriesID, serr := s.linkApprovedSeries(r, req, lib, mediaID); serr != nil {
-		out["series_error"] = serr.Error()
+	if seriesID, serr := s.linkApprovedSeries(ctx, req, lib, mediaID); serr != nil {
+		out.SeriesError = serr.Error()
 	} else if seriesID != "" {
-		out["series_id"] = seriesID
+		out.SeriesID = seriesID
 	}
-	s.audit(r, "upload.ugc.approve", "upload:"+it.ID, true,
-		fmt.Sprintf("media:%s library:%s transcode:%v series:%v",
-			mediaID, lib.ID, req.Transcode, out["series_id"]))
 	// 顺手转码：排队失败不影响"已经通过"这个事实，如实把错误一起带回去。
 	if req.Transcode && s.Transcodes != nil && transcodeHeightOK(req.TranscodeHeight) {
 		jobID, terr := s.Transcodes.Enqueue([]transcode.Item{
@@ -614,12 +625,160 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 				MaxHeight: req.TranscodeHeight}},
 			domain.JobTriggerUploadApprove)
 		if terr != nil {
-			out["transcode_error"] = terr.Error()
+			out.TranscodeError = terr.Error()
 		} else {
-			out["transcode_job_id"] = jobID
+			out.TranscodeJobID = jobID
 		}
 	}
-	respond(w, http.StatusOK, out, nil)
+	return out, nil
+}
+
+// rejectOne 驳回一条：**先删文件（回读确认）再改状态**，删不掉就不改状态。
+func (s *Server) rejectOne(adminID, uploadID, note string) error {
+	it, err := s.DB.GetUploadItem(uploadID)
+	if err != nil {
+		return err
+	}
+	if it.State != domain.UploadPending {
+		return domain.New("UPLOAD_STATE_INVALID", "这条上传不在待审状态", 409)
+	}
+	if !media.Within(it.Path, s.inboxRoot()) {
+		return domain.ErrPathNotAllowed
+	}
+	if err := os.Remove(it.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return domain.New("UPLOAD_REJECT_FAILED", "文件删不掉，未改状态："+err.Error(), 500)
+	}
+	if _, err := os.Stat(it.Path); err == nil {
+		return domain.New("UPLOAD_REJECT_FAILED", "文件仍在磁盘上，未改状态", 500)
+	}
+	ok, rerr := s.DB.RejectUploadItem(it.ID, note, adminID)
+	if rerr != nil {
+		return rerr
+	}
+	if !ok {
+		return domain.New("UPLOAD_STATE_INVALID", "这条上传已经被别人审过了", 409)
+	}
+	_ = os.Remove(filepath.Join(s.Cfg.CoversDir(), "ugc-"+it.ID+".jpg"))
+	return nil
+}
+
+// HandleAdminApproveUpload 通过：把文件从 inbox 移进选定的媒体库并登记 media（立刻可播）。
+// 探测失败就把文件移回 inbox 并如实报错——绝不把放不了的内容塞进库。
+func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request) {
+	admin := UserFrom(r.Context())
+	id := r.PathValue("id")
+	it, err := s.DB.GetUploadItem(id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var req ugcApproveReq
+	if derr := s.decodeJSON(w, r, &req); derr != nil {
+		s.fail(w, r, derr)
+		return
+	}
+	out, err := s.approveOne(r.Context(), admin.ID, it, req)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "upload.ugc.approve", "upload:"+it.ID, true,
+		fmt.Sprintf("media:%s library:%s transcode:%v series:%v",
+			out.MediaID, out.LibraryID, req.Transcode, out.SeriesID))
+	respond(w, http.StatusOK, out.json(), nil)
+}
+
+// 批量审核（用户 2026-09-24 规划 A1）：一次几十集的场景，别让人点几十次。
+// 一次上限：与批量识别同量级，防止一次请求里塞几千条把审核拖成分钟级。
+const ugcBatchMax = 200
+
+// batchItem 是批量里每一条的**如实结果**：一条失败不影响其它条，原因逐条给。
+type batchItem struct {
+	ID    string         `json:"id"`
+	OK    bool           `json:"ok"`
+	Error string         `json:"error,omitempty"`
+	Item  map[string]any `json:"item,omitempty"`
+}
+
+type ugcBatchApproveReq struct {
+	IDs []string `json:"ids"`
+	ugcApproveReq
+}
+
+// HandleAdminApproveBatch 批量通过：逐条走 approveOne（**与单条同一份实现**），逐条如实报结果。
+// HTTP 一律 200：成功/失败条数与每条原因都在 body 里（部分成功是常态，不该整批报错）。
+func (s *Server) HandleAdminApproveBatch(w http.ResponseWriter, r *http.Request) {
+	admin := UserFrom(r.Context())
+	var req ugcBatchApproveReq
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > ugcBatchMax {
+		s.fail(w, r, domain.New("VALIDATION_BATCH", fmt.Sprintf("一次 1-%d 条", ugcBatchMax), 400))
+		return
+	}
+	if _, err := s.uploadLibrary(req.LibraryID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	results := make([]batchItem, 0, len(req.IDs))
+	approved := 0
+	for _, id := range req.IDs {
+		it, err := s.DB.GetUploadItem(id)
+		if err != nil {
+			results = append(results, batchItem{ID: id, Error: "这条上传不存在（可能已被处理）"})
+			continue
+		}
+		out, aerr := s.approveOne(r.Context(), admin.ID, it, req.ugcApproveReq)
+		if aerr != nil {
+			results = append(results, batchItem{ID: id, Error: aerr.Error()})
+			s.audit(r, "upload.ugc.approve", "upload:"+id, false, errCode(aerr))
+			continue
+		}
+		approved++
+		results = append(results, batchItem{ID: id, OK: true, Item: out.json()})
+		s.audit(r, "upload.ugc.approve", "upload:"+id, true,
+			fmt.Sprintf("media:%s library:%s series:%v", out.MediaID, out.LibraryID, out.SeriesID))
+	}
+	respond(w, http.StatusOK, map[string]any{"approved": approved, "failed": len(req.IDs) - approved,
+		"total": len(req.IDs), "results": results}, nil)
+}
+
+// HandleAdminRejectBatch 批量驳回：原因必填（与单条同语义），逐条如实报结果。
+func (s *Server) HandleAdminRejectBatch(w http.ResponseWriter, r *http.Request) {
+	admin := UserFrom(r.Context())
+	var req struct {
+		IDs  []string `json:"ids"`
+		Note string   `json:"note"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > ugcBatchMax {
+		s.fail(w, r, domain.New("VALIDATION_BATCH", fmt.Sprintf("一次 1-%d 条", ugcBatchMax), 400))
+		return
+	}
+	note := strings.TrimSpace(req.Note)
+	if note == "" {
+		s.fail(w, r, domain.New("UPLOAD_REJECT_NOTE_REQUIRED", "请填写驳回原因", 400))
+		return
+	}
+	results := make([]batchItem, 0, len(req.IDs))
+	rejected := 0
+	for _, id := range req.IDs {
+		if err := s.rejectOne(admin.ID, id, note); err != nil {
+			results = append(results, batchItem{ID: id, Error: err.Error()})
+			s.audit(r, "upload.ugc.reject", "upload:"+id, false, errCode(err))
+			continue
+		}
+		rejected++
+		results = append(results, batchItem{ID: id, OK: true})
+		s.audit(r, "upload.ugc.reject", "upload:"+id, true, "note:"+note)
+	}
+	respond(w, http.StatusOK, map[string]any{"rejected": rejected, "failed": len(req.IDs) - rejected,
+		"total": len(req.IDs), "results": results}, nil)
 }
 
 // linkApprovedSeries 把刚通过的 media 挂进剧场（P1 剧场草稿）：
@@ -627,7 +786,7 @@ func (s *Server) HandleAdminApproveUpload(w http.ResponseWriter, r *http.Request
 //   · 集号/季号用**文件名识别**（与后台"识别"同一套 detect.EpisodesFor）；
 //   · 挂完按 (season, episode) 重排一次 —— 批量审核很可能乱序通过，不重排播放顺序就乱了。
 // 返回挂上的剧场 id（没要求归入剧场时返回空串）。
-func (s *Server) linkApprovedSeries(r *http.Request, req ugcApproveReq, lib *domain.Library, mediaID string) (string, error) {
+func (s *Server) linkApprovedSeries(ctx context.Context, req ugcApproveReq, lib *domain.Library, mediaID string) (string, error) {
 	wantID := strings.TrimSpace(req.SeriesID)
 	wantTitle := strings.TrimSpace(req.SeriesTitle)
 	if wantID == "" && wantTitle == "" {
@@ -659,7 +818,7 @@ func (s *Server) linkApprovedSeries(r *http.Request, req ugcApproveReq, lib *dom
 	if _, err := s.DB.AddSeriesMedia(series.ID, []storage.SeriesMediaInput{seriesMediaFromMedia(*m)}); err != nil {
 		return "", err
 	}
-	if err := s.reorderSeriesByEpisode(r.Context(), series.ID); err != nil {
+	if err := s.reorderSeriesByEpisode(ctx, series.ID); err != nil {
 		s.Log.Warn("剧场草稿重排失败", "series", series.ID, "error", err.Error())
 	}
 	return series.ID, nil
@@ -741,19 +900,7 @@ type ugcRejectReq struct {
 // HandleAdminRejectUpload 驳回：先删文件（回读确认没了）再改状态，删不掉就不改状态。
 func (s *Server) HandleAdminRejectUpload(w http.ResponseWriter, r *http.Request) {
 	admin := UserFrom(r.Context())
-	it, err := s.DB.GetUploadItem(r.PathValue("id"))
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	if it.State != domain.UploadPending {
-		s.fail(w, r, domain.New("UPLOAD_STATE_INVALID", "这条上传不在待审状态", 409))
-		return
-	}
-	if !media.Within(it.Path, s.inboxRoot()) {
-		s.fail(w, r, domain.ErrPathNotAllowed)
-		return
-	}
+	id := r.PathValue("id")
 	var req ugcRejectReq
 	if derr := s.decodeJSON(w, r, &req); derr != nil {
 		s.fail(w, r, derr)
@@ -764,25 +911,12 @@ func (s *Server) HandleAdminRejectUpload(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, domain.New("UPLOAD_REJECT_NOTE_REQUIRED", "请填写驳回原因", 400))
 		return
 	}
-	if err := os.Remove(it.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.fail(w, r, domain.New("UPLOAD_REJECT_FAILED", "文件删不掉，未改状态："+err.Error(), 500))
+	if err := s.rejectOne(admin.ID, id, note); err != nil {
+		s.audit(r, "upload.ugc.reject", "upload:"+id, false, errCode(err))
+		s.fail(w, r, err)
 		return
 	}
-	if _, err := os.Stat(it.Path); err == nil {
-		s.fail(w, r, domain.New("UPLOAD_REJECT_FAILED", "文件仍在磁盘上，未改状态", 500))
-		return
-	}
-	ok, rerr := s.DB.RejectUploadItem(it.ID, note, admin.ID)
-	if rerr != nil {
-		s.fail(w, r, rerr)
-		return
-	}
-	if !ok {
-		s.fail(w, r, domain.New("UPLOAD_STATE_INVALID", "这条上传已经被别人审过了", 409))
-		return
-	}
-	_ = os.Remove(filepath.Join(s.Cfg.CoversDir(), "ugc-"+it.ID+".jpg"))
-	s.audit(r, "upload.ugc.reject", "upload:"+it.ID, true, "note:"+note)
+	s.audit(r, "upload.ugc.reject", "upload:"+id, true, "note:"+note)
 	respond(w, http.StatusOK, map[string]any{"rejected": true}, nil)
 }
 

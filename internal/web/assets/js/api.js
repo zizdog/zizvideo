@@ -176,6 +176,9 @@ export const api = {
   pendingUploads: () => request("GET", "/api/v1/admin/uploads/pending"),
   approveUpload: (id, body) => request("POST", "/api/v1/admin/uploads/" + encodeURIComponent(id) + "/approve", body),
   rejectUpload: (id, note) => request("POST", "/api/v1/admin/uploads/" + encodeURIComponent(id) + "/reject", { note }),
+  // 批量审核（A1）：一次几十集时用，逐条结果由后端如实返回
+  approveUploadBatch: (body) => request("POST", "/api/v1/admin/uploads/approve-batch", body),
+  rejectUploadBatch: (ids, note) => request("POST", "/api/v1/admin/uploads/reject-batch", { ids, note }),
 
   systemInfo: () => request("GET", "/api/v1/admin/system/info"),
 
