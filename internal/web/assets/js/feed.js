@@ -743,7 +743,8 @@ export function mountFeed(view, options = {}) {
       feed.classList.toggle("clean");
       const on = feed.classList.contains("clean");
       btn.title = on ? "显示图标" : "清屏播放";
-      setIcon(btn, on ? "expand" : "down");
+      // 清屏后显示**反向（向上）箭头**：换 expand 那种四角图标会被看成"箭头没了"（用户报障）
+      setIcon(btn, on ? "up" : "down");
       showToast(on ? "已清屏，点箭头还原" : "已显示图标");
     });
     return btn;

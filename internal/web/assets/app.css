@@ -511,7 +511,12 @@ body.playing .ov-corner { top: calc(62px + env(safe-area-inset-top, 0px)); }
 .feed.clean .ov-rail > *:not(.rail-restore),
 .feed.clean .ov-corner,
 .feed.clean .overlay { display: none; }
-.feed.clean .rail-restore { display: inline-flex; }
+.feed.clean .rail-restore {
+  display: inline-flex;
+  /* 清屏后只剩这一个按钮：给个淡淡的圆底，免得在亮画面上"看着像没了"（不喜欢删这行） */
+  background: rgba(0, 0, 0, .38);
+  border-radius: 999px;
+}
 
 /* 顶栏左侧的侧面板（内容先留空，后续开发） */
 .side-panel {
