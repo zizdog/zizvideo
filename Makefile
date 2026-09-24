@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.2.5-mvp
+VERSION   ?= 0.2.6-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 DIST      ?= dist
 APPDIR    ?= $(DIST)/apps/zizvideo
@@ -45,6 +45,8 @@ check-run: ## 真正跑一遍门禁（不做指纹跳过）
 	 if [ "$$src" != "$(VERSION)" ]; then \
 	   echo "!! internal/api/api.go 的 Version=$$src 与 Makefile 的 $(VERSION) 不一致"; exit 1; fi; \
 	 echo "   ok：$(VERSION)"
+	@echo "==> 版本号守规矩（末段 0～10：0.1.10 之后是 0.2.0，绝不许 0.1.11）"
+	@node tools/check-version-rule.mjs .
 	@echo "==> 前端 JS 语法（真 ES 解析器；缺 acorn 直接失败，不静默跳过）"
 	@[ -d node_modules/acorn ] || { echo "!! 缺 node_modules/acorn —— 先 npm install（白屏级错误只有它能抓）"; exit 1; }
 	@node tools/check-js-syntax.mjs internal/web/assets
