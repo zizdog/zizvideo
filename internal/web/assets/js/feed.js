@@ -343,8 +343,9 @@ export function mountFeed(view, options = {}) {
     });
     video.addEventListener("pause", () => {
       if (entry.paintPlayPause) entry.paintPlayPause();
-      // 全屏里暂停要让中间的播放键看得见（收起状态下先展开控件）
-      if (immersiveOn()) { full.uiHidden = false; paintImmersive(); }
+      // 全屏里**当前这条**暂停要让中间的播放键看得见（收起状态下先展开控件）。
+      // ⚠️ 必须是活跃条目：连播切走时上一条会 pause，那时展开控件会莫名其妙弹出来（实测踩到）。
+      if (immersiveOn() && entry.index === state.active) { full.uiHidden = false; paintImmersive(); }
       if (!entry.video.ended && !immersiveOn()) showPlayButton(entry);
     });
     video.addEventListener("ended", () => onEnded(entry));
@@ -790,12 +791,22 @@ export function mountFeed(view, options = {}) {
   // 用户 2026-09-24：「全屏播放时不显示任何按钮/进度、边栏收起；点屏幕切换显示；
   // 左上角显示返回按钮（左箭头）」。所以全屏 = 沉浸态：进去先全收起，点屏幕来回切换。
   const full = { rotated: false, native: false, uiHidden: false };
+  let lastImmersive = null;
   function paintImmersive() {
-    // 转屏靠 CSS（rot）—— 忘了它就会出现"进了全屏但画面没横过来"（我自己踩过）
+    const on = full.rotated || full.native;
+    // CSS 旋转只在"系统没横过来"时用 —— 忘了它会出现"进了全屏但画面没横过来"（我自己踩过）
     feed.classList.toggle("rot", full.rotated);
-    document.body.classList.toggle("rot-play", full.rotated);
-    feed.classList.toggle("immersive", full.rotated || full.native);
+    // ⚠️ 沉浸态（收顶栏/底栏/控件）**与转屏方式无关**：手机/App 里是系统横屏（native=true、
+    // rotated=false），只按 rotated 判断会让顶栏、底栏大喇喇留在屏幕上（用户 2026-09-24 报障：
+    // "电脑端显示不出来，手机端无论浏览器还是 App 都显示"）。
+    document.body.classList.toggle("rot-play", on);
+    feed.classList.toggle("immersive", on);
     feed.classList.toggle("blank", full.uiHidden);
+    // 告诉 App 现在是不是全屏：系统返回手势要"先退出全屏"（见 WebActivity.handleOnBackPressed）
+    if (on !== lastImmersive) {
+      lastImmersive = on;
+      try { if (window.ZvAndroid && window.ZvAndroid.setImmersive) window.ZvAndroid.setImmersive(on); } catch (err) { /* 老版本 App 没有这个口 */ }
+    }
   }
   function setImmersive(on) {
     full.uiHidden = on;            // 进全屏先收起，退出全屏恢复
@@ -1370,7 +1381,24 @@ export function mountFeed(view, options = {}) {
     loadMore();
   }
 
+  // App 的系统返回手势进来先问这里：全屏中就只退出全屏（符合播放器习惯），否则交给路由。
+  window.__zvExitFullscreen = () => {
+    if (!immersiveOn()) return false;
+    exitFullscreen();
+    return true;
+  };
+
+  // 系统/浏览器自己退出了全屏（比如切走、按了系统的退出全屏）：同步收掉沉浸态，
+  // 别让界面卡在"以为还在全屏"（顶栏底栏一直藏着）。
+  const onFullscreenChange = () => {
+    if (document.fullscreenElement) return;
+    if (full.rotated || full.native) releaseFullscreen();
+  };
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+
   return function cleanup() {
+    document.removeEventListener("fullscreenchange", onFullscreenChange);
+    try { delete window.__zvExitFullscreen; } catch (err) { window.__zvExitFullscreen = null; }
     releaseFullscreen(); // 返回/换页时把系统横屏与 document 全屏一并交还
     document.body.classList.remove("playing");
     document.body.classList.remove("rot-play");

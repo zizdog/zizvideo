@@ -105,6 +105,12 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
+        @android.webkit.JavascriptInterface
+        fun setImmersive(on: Boolean) {
+            webImmersive = on
+        }
+
         @android.webkit.JavascriptInterface
         fun prepare(payload: String) {
             val service = PlaybackService.instance ?: return
@@ -207,6 +213,9 @@ class WebActivity : AppCompatActivity() {
         })();
     """.trimIndent()
     private var pickOnLoad = false
+
+    /** 网页是否处于全屏（沉浸）态：系统返回手势要先退出全屏，而不是直接导航/退出。 */
+    private var webImmersive = false
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -261,6 +270,10 @@ class WebActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when {
                     customView != null -> customViewCallback?.onCustomViewHidden()
+                    // 全屏（沉浸）中：系统返回手势先只退出全屏，留在当前视频上
+                    // （用户 2026-09-24 报障："手机端滑动侧边返回不能退出全屏，只有左上角按钮行"）
+                    webImmersive -> web.evaluateJavascript(
+                        "window.__zvExitFullscreen && window.__zvExitFullscreen()", null)
                     web.canGoBack() -> web.goBack()
                     else -> finish()
                 }
