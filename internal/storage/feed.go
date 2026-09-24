@@ -78,15 +78,32 @@ type UserPrefs struct {
 	AutoplayEnter bool
 	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24）。默认关（保持原行为）。
 	FeedHideSeries bool
+	// PlaybackRate = 播放倍速（B5）：0.5~2.0，默认 1.0。
+	PlaybackRate float64
+}
+
+// 倍速白名单：界面只给这几档，后端也只认这几档（避免出现 0.07× 这种奇怪值）。
+var PlaybackRates = []float64{0.5, 0.75, 1, 1.25, 1.5, 2}
+
+// PlaybackRateOK 只接受白名单里的档位（留 0.01 容差给浮点）。
+func PlaybackRateOK(v float64) bool {
+	for _, r := range PlaybackRates {
+		if v > r-0.01 && v < r+0.01 {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserPrefs returns the player settings; autoplay defaults on, loop off.
 func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
-	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds, AutoplayEnter: true}
+	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds, AutoplayEnter: true,
+		PlaybackRate: 1}
 	var loop, auto, enter, hideSeries int
-	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter, feed_hide_series
+	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter,
+			feed_hide_series, playback_rate
 		FROM user_prefs WHERE user_id = ?`, userID).
-		Scan(&loop, &auto, &p.SeekSeconds, &enter, &hideSeries)
+		Scan(&loop, &auto, &p.SeekSeconds, &enter, &hideSeries, &p.PlaybackRate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, nil
 	}
@@ -95,6 +112,9 @@ func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
 	}
 	p.LoopPlay, p.AutoplayNext, p.AutoplayEnter = loop != 0, auto != 0, enter != 0
 	p.FeedHideSeries = hideSeries != 0
+	if !PlaybackRateOK(p.PlaybackRate) {
+		p.PlaybackRate = 1 // 库里出现意外值时按 1× 走，别把视频放成 0.07 倍速
+	}
 	if p.SeekSeconds <= 0 {
 		p.SeekSeconds = DefaultSeekSeconds
 	}
@@ -107,16 +127,20 @@ func (db *DB) SaveUserPrefs(userID string, p *UserPrefs) error {
 	if seek <= 0 {
 		seek = DefaultSeekSeconds
 	}
+	rate := p.PlaybackRate
+	if !PlaybackRateOK(rate) {
+		rate = 1
+	}
 	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds,
-			autoplay_enter, feed_hide_series, updated_at)
-		VALUES (?,?,?,?,?,?,?)
+			autoplay_enter, feed_hide_series, playback_rate, updated_at)
+		VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			loop_play = excluded.loop_play, autoplay_next = excluded.autoplay_next,
 			seek_seconds = excluded.seek_seconds, autoplay_enter = excluded.autoplay_enter,
-			feed_hide_series = excluded.feed_hide_series,
+			feed_hide_series = excluded.feed_hide_series, playback_rate = excluded.playback_rate,
 			updated_at = excluded.updated_at`,
 		userID, boolToInt(p.LoopPlay), boolToInt(p.AutoplayNext), seek,
-		boolToInt(p.AutoplayEnter), boolToInt(p.FeedHideSeries), domain.NowString())
+		boolToInt(p.AutoplayEnter), boolToInt(p.FeedHideSeries), rate, domain.NowString())
 	return err
 }
 

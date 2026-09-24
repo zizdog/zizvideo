@@ -248,10 +248,10 @@ export function mountFeed(view, options = {}) {
     const entry = {
       index, item, layer, video: null, fill: null, elapsed: null, total: null,
       fav: null, like: null, later: null, eps: null, epsPanel: null,
-      hint: null, soundHint: null, playBtn: null, flash: null,
+      hint: null, soundHint: null, ffHint: null, playBtn: null, flash: null,
       bubble: null, bar: null, barWrap: null, sound: null, gear: null, panel: null,
       settingsForm: null, seekRatio: 0,
-      seeking: false, flashTimer: 0, hintTimer: 0,
+      seeking: false, flashTimer: 0, hintTimer: 0, ffTimer: 0, fastForward: false, suppressClick: false,
       resumeDone: false, playRejected: false, broken: false, destroyed: false,
     };
     state.built.set(index, entry);
@@ -329,6 +329,12 @@ export function mountFeed(view, options = {}) {
     // 页面级行为（连播/手势/进度上报/声音提示）留在下面；"造 <video>"这一步是共享的。
     const video = createMediaVideo(item, { muted: !state.soundOn, loop: loopEnabled() });
     entry.video = video;
+    video.playbackRate = state.settings.playback_rate; // B5 倍速：造出来就按设置
+    // B5 长按快进：按住画面 350ms ⇒ 2×（松手还原），与单击/双击/滑动互不干扰
+    video.addEventListener("pointerdown", () => startFastForward(entry));
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
+      video.addEventListener(ev, () => stopFastForward(entry));
+    }
     video.addEventListener("loadedmetadata", () => onMetadata(entry));
     video.addEventListener("loadeddata", () => { hideLoading(entry); checkFrames(entry); });
     video.addEventListener("canplay", () => hideLoading(entry));
@@ -354,6 +360,7 @@ export function mountFeed(view, options = {}) {
     // 单击要等 ~260ms 看有没有第二下 —— 这是双击手势的固有代价。
     let tapTimer = 0;
     video.addEventListener("click", () => {
+      if (entry.suppressClick) return; // 刚长按快进过：这一下不算点击（别再暂停）
       if (tapTimer) {
         clearTimeout(tapTimer);
         tapTimer = 0;
@@ -408,6 +415,7 @@ export function mountFeed(view, options = {}) {
     if (!entry) return;
     entry.destroyed = true;
     if (entry.hintTimer) clearTimeout(entry.hintTimer);
+    if (entry.ffTimer) clearTimeout(entry.ffTimer);
     if (entry.flashTimer) clearTimeout(entry.flashTimer);
     if (entry.video) {
       try { entry.video.pause(); } catch (err) { /* ignore */ }
@@ -523,6 +531,44 @@ export function mountFeed(view, options = {}) {
     entry.flashTimer = setTimeout(() => {
       if (entry.flash) entry.flash.classList.add("fade");
     }, 300);
+  }
+
+  /* ---------- B5 长按快进 ---------- */
+  // 按住画面 350ms ⇒ 临时 2× 并提示；松手/移出/取消 ⇒ 回到用户设置的倍速（默认 1×）。
+  // 松手后 400ms 内那一次 click 要吞掉，否则"长按快进"会被当成单击把视频暂停（实测踩到）。
+  function startFastForward(entry) {
+    if (entry.destroyed || !entry.video || entry.ffTimer || entry.fastForward) return;
+    entry.ffTimer = setTimeout(() => {
+      entry.ffTimer = 0;
+      if (entry.destroyed || !entry.video || entry.video.paused) return;
+      entry.fastForward = true;
+      entry.video.playbackRate = 2;
+      showFastHint(entry, "2× 快进中");
+    }, 350);
+  }
+
+  function stopFastForward(entry) {
+    if (entry.ffTimer) { clearTimeout(entry.ffTimer); entry.ffTimer = 0; }
+    if (!entry.fastForward) return;
+    entry.fastForward = false;
+    if (entry.video) entry.video.playbackRate = state.settings.playback_rate;
+    hideFastHint(entry);
+    entry.suppressClick = true;
+    setTimeout(() => { entry.suppressClick = false; }, 400);
+  }
+
+  function showFastHint(entry, text) {
+    if (entry.destroyed || !entry.layer) return;
+    if (!entry.ffHint) {
+      entry.ffHint = el("div", { class: "hint fast" });
+      entry.layer.append(entry.ffHint);
+    }
+    entry.ffHint.textContent = text;
+    entry.ffHint.classList.remove("hidden");
+  }
+
+  function hideFastHint(entry) {
+    if (entry.ffHint) entry.ffHint.classList.add("hidden");
   }
 
   function togglePlay(entry) {
@@ -764,7 +810,11 @@ export function mountFeed(view, options = {}) {
   function applySettings() {
     const loop = loopEnabled();
     for (const entry of state.built.values()) {
-      if (entry.video) entry.video.loop = loop;
+      if (entry.video) {
+        entry.video.loop = loop;
+        // 正在长按快进时不要被设置刷新覆盖（松手时按新倍速还原）
+        if (!entry.fastForward) entry.video.playbackRate = state.settings.playback_rate;
+      }
       paintPanel(entry);
     }
   }

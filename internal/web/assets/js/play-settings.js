@@ -5,8 +5,12 @@ import { el } from "./dom.js";
 
 export const FEED_SETTINGS_DEFAULTS = {
   loop_play: false, autoplay_next: true, seek_seconds: 10, autoplay_enter: true,
-  feed_hide_series: false,
+  feed_hide_series: false, playback_rate: 1,
 };
+
+// 倍速档位（B5）：与后端白名单一致
+export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+export function rateLabel(r) { return (Number(r) === 1 ? "1×（正常）" : String(r) + "×"); }
 
 // normalizeFeedSettings 把任意响应收敛成三项合法值：非法/缺省一律用默认（10 秒、上限 120）。
 export function normalizeFeedSettings(data) {
@@ -22,6 +26,9 @@ export function normalizeFeedSettings(data) {
     // 用户 2026-09-24：首页不显示剧场内容（默认关）—— 免得刷到剧集打乱「观看中」的进度
     feed_hide_series: src.feed_hide_series === undefined
       ? FEED_SETTINGS_DEFAULTS.feed_hide_series : !!src.feed_hide_series,
+    // B5 播放倍速：只认白名单档位，其它值按 1×
+    playback_rate: PLAYBACK_RATES.some((r) => Math.abs(r - Number(src.playback_rate)) < 0.01)
+      ? Number(src.playback_rate) : FEED_SETTINGS_DEFAULTS.playback_rate,
   };
 }
 
@@ -45,6 +52,8 @@ export function createFeedSettingsForm(options) {
   const auto = el("input", { type: "checkbox" });
   const loop = el("input", { type: "checkbox" });
   const seek = el("input", { type: "number", min: "1", max: "120", step: "1" });
+  const rate = el("select", { class: "input", dataset: { role: "set-rate" } },
+    ...PLAYBACK_RATES.map((r) => el("option", { value: String(r), text: rateLabel(r) })));
   const note = el("div", { class: "set-note", text: "连播开启时循环不生效" });
   const hideSeriesRow = el("label", { class: "set-row" }, hideSeries,
     el("span", { text: "首页不显示剧场内容" }));
@@ -52,11 +61,13 @@ export function createFeedSettingsForm(options) {
   const autoRow = el("label", { class: "set-row" }, auto, el("span", { text: "自动播放下一个" }));
   const loopRow = el("label", { class: "set-row" }, loop, el("span", { text: "循环播放" }));
   const seekRow = el("label", { class: "set-row" }, el("span", { text: "左右键跳转" }), seek, el("span", { text: "秒" }));
+  const rateRow = el("label", { class: "set-row" }, el("span", { text: "播放倍速" }), rate);
   const form = el("div", { class: "set-form" },
     lockAutoplay ? null : hideSeriesRow,
     lockAutoplay ? null : enterRow,
     lockAutoplay ? null : autoRow,
     lockAutoplay ? null : loopRow,
+    rateRow,
     seekRow,
     lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note);
 
@@ -67,6 +78,7 @@ export function createFeedSettingsForm(options) {
   let last = normalizeFeedSettings(opts.settings);
 
   hideSeries.addEventListener("change", () => emit({ feed_hide_series: hideSeries.checked }));
+  rate.addEventListener("change", () => emit({ playback_rate: Number(rate.value) }));
   enter.addEventListener("change", () => emit({ autoplay_enter: enter.checked }));
   auto.addEventListener("change", () => emit({ autoplay_next: auto.checked }));
   loop.addEventListener("change", () => emit({ loop_play: loop.checked }));
@@ -79,6 +91,7 @@ export function createFeedSettingsForm(options) {
 
   function paint(settings) {
     last = normalizeFeedSettings(settings || last);
+    rate.value = String(last.playback_rate);
     hideSeries.checked = !!last.feed_hide_series;
     enter.checked = !!last.autoplay_enter;
     auto.checked = !!last.autoplay_next;

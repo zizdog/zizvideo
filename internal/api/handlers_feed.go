@@ -162,6 +162,8 @@ type feedSettingsReq struct {
 	AutoplayEnter *bool `json:"autoplay_enter"`
 	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24 选"用户级开关"）。
 	FeedHideSeries *bool `json:"feed_hide_series"`
+	// PlaybackRate = 播放倍速（B5）：只认白名单档位。
+	PlaybackRate *float64 `json:"playback_rate"`
 }
 
 // 左右键跳转秒数的合法区间；越界/非法保留原值，不改写也不报错。
@@ -198,6 +200,9 @@ func (s *Server) HandlePatchFeedSettings(w http.ResponseWriter, r *http.Request)
 	if req.FeedHideSeries != nil {
 		prefs.FeedHideSeries = *req.FeedHideSeries
 	}
+	if req.PlaybackRate != nil && storage.PlaybackRateOK(*req.PlaybackRate) {
+		prefs.PlaybackRate = *req.PlaybackRate
+	}
 	if err := s.DB.SaveUserPrefs(u.ID, prefs); err != nil {
 		s.fail(w, r, err)
 		return
@@ -216,6 +221,8 @@ func feedSettingsBody(p *storage.UserPrefs) map[string]any {
 		"autoplay_enter": p.AutoplayEnter,
 		// 首页是否排除剧场内容（用户级开关）
 		"feed_hide_series": p.FeedHideSeries,
+		// 播放倍速（B5）：界面按这个显示当前档位
+		"playback_rate": p.PlaybackRate,
 	}
 }
 
