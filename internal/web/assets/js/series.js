@@ -43,7 +43,7 @@ export function mountSeries(view) {
   // 用户 2026-09-23 要求：剧场列表分三块 —— 所有内容 / 观看中 / 分类（按媒体库选项卡）
   function renderTabs() {
     clear(tabsNav);
-    const defs = [["all", "所有内容"], ["watching", "观看中"], ["category", "分类"]];
+    const defs = [["all", "所有内容"], ["watching", "观看中"], ["done", "已看完"], ["category", "分类"]];
     for (const [key, label] of defs) {
       tabsNav.append(el("button", {
         class: "tab" + (key === current ? " on" : ""), type: "button", text: label,
@@ -53,12 +53,23 @@ export function mountSeries(view) {
     }
   }
 
-  // 观看中 = 有进度但没看完的剧场（watched_count 由后端按当前用户聚合，前端不做 N+1）
+  // 观看中 = 有进度但**没全看完**；已看完 = 每一集都看完（completed_count 由后端按当前用户聚合）
+  // 用户 2026-09-23 的语义：看完的剧如果又打开某一集、没看完就退出，那集 completed 会被改回 0
+  // ⇒ 它自动回到「观看中」（进度上报天然做到，前端不需要特殊逻辑）。
   function watching() {
     return list.filter((it) => {
       const total = Number(it.episode_count) || 0;
       const seen = Number(it.watched_count) || 0;
-      return seen > 0 && seen < total;
+      const done = Number(it.completed_count) || 0;
+      return seen > 0 && !(total > 0 && done >= total);
+    });
+  }
+
+  function finished() {
+    return list.filter((it) => {
+      const total = Number(it.episode_count) || 0;
+      const done = Number(it.completed_count) || 0;
+      return total > 0 && done >= total;
     });
   }
 
@@ -78,6 +89,12 @@ export function mountSeries(view) {
         return;
       }
       body.append(posterGrid(items, { progress: true }));
+      return;
+    }
+    if (current === "done") {
+      const items = finished();
+      count.textContent = items.length + " 个已看完";
+      body.append(items.length ? posterGrid(items, { finished: true }) : el("div", { class: "muted", text: "还没有看完的剧场" }));
       return;
     }
     if (current === "category") {
@@ -138,6 +155,9 @@ function seriesPoster(item, opts) {
       : null,
     options.progress && seen > 0
       ? el("span", { class: "poster-seen", text: "看到 " + seen + "/" + total + " 集" })
+      : null,
+    options.finished && total > 0
+      ? el("span", { class: "poster-seen done", text: "全 " + total + " 集看完" })
       : null,
     el("div", { class: "poster-mask" },
       el("div", { class: "poster-name", text: item.title || "-" })));

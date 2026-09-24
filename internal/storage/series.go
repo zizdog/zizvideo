@@ -564,33 +564,42 @@ func (db *DB) seriesIDsInLibrary(libraryID string, requireNew bool, since string
 	return out, rows.Err()
 }
 
-// SeriesWatchCounts 按人算"每个剧场已看几集"（一次查询，避免前端 N+1）。
-// 已看 = 该集有进度且没看完（completed=0 且 position_ms>0）；软删的集与其进度都不计。
-// scope 只用来限制"可见的集"，与 ListSeries 的可见性判据一致（S3/S4）。
-func (db *DB) SeriesWatchCounts(scope domain.LibraryScope, userID string) (map[string]int, error) {
+// SeriesCounts 是"这个剧场对这个人"的两个计数（「观看中 / 已看完」两个板块要用）。
+type SeriesCounts struct {
+	Watching  int // 有进度且没看完的集数
+	Completed int // 看完的集数
+}
+
+// SeriesWatchCounts 按人算"每个剧场在看几集、看完几集"（**一次查询**，避免前端 N+1）。
+// 看完的剧如果用户又打开某一集、没看完就退出 ⇒ 那集的 completed 会被进度上报改回 0，
+// 于是它自动回到「观看中」（用户 2026-09-23 明确要求的语义）。
+// 软删的集与其进度都不计；scope 只用来限制"可见的集"，与 ListSeries 的可见性判据一致（S3/S4）。
+func (db *DB) SeriesWatchCounts(scope domain.LibraryScope, userID string) (map[string]SeriesCounts, error) {
 	where := `m.deleted_at IS NULL AND sm.media_id = m.id`
 	args := []any{userID}
 	if w, sargs := scopeWhere(scope, "m.library_id"); w != "" {
 		where += w
 		args = append(args, sargs...)
 	}
-	rows, err := db.Query(`SELECT sm.series_id, COUNT(1) FROM series_media sm
+	rows, err := db.Query(`SELECT sm.series_id,
+		  SUM(CASE WHEN wp.completed = 0 AND wp.position_ms > 0 THEN 1 ELSE 0 END),
+		  SUM(CASE WHEN wp.completed = 1 THEN 1 ELSE 0 END)
+		FROM series_media sm
 		JOIN media m ON `+where+`
-		JOIN watch_progress wp ON wp.media_id = sm.media_id AND wp.user_id = ?
-		  AND wp.completed = 0 AND wp.position_ms > 0
+		LEFT JOIN watch_progress wp ON wp.media_id = sm.media_id AND wp.user_id = ?
 		GROUP BY sm.series_id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]int{}
+	out := map[string]SeriesCounts{}
 	for rows.Next() {
 		var id string
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
+		var watching, completed int
+		if err := rows.Scan(&id, &watching, &completed); err != nil {
 			return nil, err
 		}
-		out[id] = n
+		out[id] = SeriesCounts{Watching: watching, Completed: completed}
 	}
 	return out, rows.Err()
 }

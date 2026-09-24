@@ -23,6 +23,8 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var password: TextInputEditText
     private lateinit var login: MaterialButton
     private lateinit var status: TextView
+    private lateinit var tlsBox: android.widget.CheckBox
+    private lateinit var rememberBox: android.widget.CheckBox
 
     /** 快捷方式要求直接开播的队列（zizvideo://listen/feed ⇒ "feed"）。 */
     private var listenKind = ""
@@ -39,8 +41,16 @@ class LoginActivity : AppCompatActivity() {
         login = findViewById(R.id.login)
         status = findViewById(R.id.status)
 
+        tlsBox = findViewById(R.id.tls)
+        rememberBox = findViewById(R.id.remember)
         server.setText(prefs.baseUrl)
         username.setText(prefs.username)
+        tlsBox.isChecked = prefs.useTLS
+        rememberBox.isChecked = prefs.remember
+        // 勾过"记住口令"就直接自动登录（用户 2026-09-23：不要每次都输）
+        if (prefs.remember && prefs.password.isNotBlank()) {
+            login.performClick()
+        }
         login.setOnClickListener { submit() }
 
         // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
@@ -88,20 +98,24 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun submit() {
-        val base = ZvApi.normalizeBase(server.text?.toString() ?: "")
+        val base = ZvApi.normalizeBase(server.text?.toString() ?: "", tlsBox.isChecked)
         if (base.isEmpty()) {
             status.text = getString(R.string.err_server_empty)
             return
         }
         val user = username.text?.toString()?.trim() ?: ""
-        val pass = password.text?.toString() ?: ""
+        var pass = password.text?.toString() ?: ""
+        if (pass.isEmpty() && rememberBox.isChecked) pass = prefs.password // 自动登录时用记住的口令
         if (user.isEmpty() || pass.isEmpty()) {
             status.text = getString(R.string.err_credentials_empty)
             return
         }
-        // 记住地址与用户名（口令不落盘）
+        // 记住地址/用户名/TLS；口令只在勾选时落盘（界面上写明是明文）
         prefs.baseUrl = base
         prefs.username = user
+        prefs.useTLS = tlsBox.isChecked
+        prefs.remember = rememberBox.isChecked
+        prefs.password = if (rememberBox.isChecked) pass else ""
         server.setText(base)
 
         setBusy(true, getString(R.string.action_checking))

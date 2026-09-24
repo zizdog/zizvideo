@@ -69,7 +69,7 @@ func (s *Server) HandleListSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 观看中/进度比例要用：一次聚合查询拿到"每个剧场已看几集"（按当前用户，避免前端 N+1）
-	watched := map[string]int{}
+	watched := map[string]storage.SeriesCounts{}
 	if u := UserFrom(r.Context()); u != nil {
 		if m, err := s.DB.SeriesWatchCounts(scope, u.ID); err == nil {
 			watched = m
@@ -87,7 +87,8 @@ func (s *Server) HandleListSeries(w http.ResponseWriter, r *http.Request) {
 	list := make([]map[string]any, 0, len(rows))
 	for _, item := range rows {
 		view := seriesJSON(item, scope)
-		view["watched_count"] = watched[item.ID]
+		view["watched_count"] = watched[item.ID].Watching
+		view["completed_count"] = watched[item.ID].Completed
 		if n, ok := names[item.LibraryID]; ok {
 			view["library_name"] = n
 		}

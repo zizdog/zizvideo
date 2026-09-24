@@ -26,8 +26,9 @@ body {
 
 /* ---------- header（抖音式：左返回、右搜索、中间空） ---------- */
 .header {
+  /* 用户 2026-09-23：顶栏**不要背景横条** —— 只留两个按钮浮在内容上 */
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  height: 52px; padding: 0 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+  height: 52px; padding: 0 10px; background: transparent; border-bottom: 0;
 }
 .top-btn {
   font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
@@ -118,9 +119,9 @@ body {
 }
 /* 抖音式右侧竖排操作栏：右下角、竖向排列（用户 2026-09-22 要求） */
 .ov-rail {
-  position: absolute; z-index: 7; right: 10px;  /* 用户 2026-09-23：贴右侧 10px */
-  bottom: calc(92px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  position: absolute; z-index: 7; right: 8px;  /* 用户 2026-09-23：再近一些，8px */
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
   pointer-events: none;
 }
 .ov-rail > * { pointer-events: auto; }
@@ -150,14 +151,14 @@ body {
 .ov-corner {
   /* 顶部要躲开状态栏/刘海：安卓 App 里由原生把 WebView 垫到状态栏下方，
      浏览器/刘海屏这里再用 env() 兜一道（0 时无副作用）。 */
-  position: absolute; z-index: 7; top: env(safe-area-inset-top, 0px);
-  display: flex; gap: 8px; padding: 10px 12px;
+  position: absolute; z-index: 7; top: calc(15px + env(safe-area-inset-top, 0px));
+  display: flex; gap: 8px; padding: 0 12px; align-items: center;
   pointer-events: none; max-width: 100%;
 }
 .ov-corner.left { left: 0; }
 .ov-corner > * { pointer-events: auto; }
 .lib-chip {
-  font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer; position: static;
   border: 1px solid rgba(255,255,255,.28); background: rgba(0,0,0,.42); color: #fff;
   max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -455,3 +456,46 @@ body {
   position: absolute; z-index: 3; left: 6px; bottom: 8px; padding: 1px 8px; border-radius: 999px;
   font-size: 11px; background: rgba(0,0,0,.62); color: #fff;
 }
+
+/* 清屏播放（用户 2026-09-23）：把边栏/标题/角标都收起来，只留一个小箭头可以还原 */
+.feed.clean .ov-rail > *:not(.rail-restore),
+.feed.clean .ov-corner,
+.feed.clean .overlay { display: none; }
+.feed.clean .rail-restore { display: inline-flex; }
+
+/* 顶栏左侧的侧面板（内容先留空，后续开发） */
+.side-panel {
+  position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(78vw, 320px);
+  background: var(--panel); border-right: 1px solid var(--line);
+  transform: translateX(-100%); transition: transform .18s ease; display: flex; flex-direction: column;
+}
+.side-panel.open { transform: translateX(0); }
+.side-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 14px 10px; border-bottom: 1px solid var(--line);
+}
+.side-panel-body { padding: 14px; overflow: auto; color: var(--muted); font-size: 13px; }
+.side-mask { position: fixed; inset: 0; z-index: 39; background: rgba(0,0,0,.5); }
+.side-mask.hidden { display: none; }
+
+/* 提示（toast）：用户 2026-09-23 要求更大、居中 —— 原来贴在底栏很难被注意到 */
+.toast {
+  left: 50%; transform: translateX(-50%); bottom: auto; top: 50%;
+  font-size: 17px; padding: 12px 20px; border-radius: 14px; max-width: 76vw; text-align: center;
+}
+
+/* 加载中：进入/切换视频时显示，而不是先甩一个大播放按钮（用户 2026-09-23） */
+.center-loading {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  color: #fff; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+.spinner {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.25); border-top-color: #fff;
+  animation: zv-spin .8s linear infinite;
+}
+@keyframes zv-spin { to { transform: rotate(360deg); } }
+
+/* 真正的全屏（含旋转）：全屏时藏掉顶栏与底栏（参考抖音精选版） */
+:fullscreen .header, :fullscreen .nav, :-webkit-full-screen .header, :-webkit-full-screen .nav { display: none; }
+:fullscreen .view, :-webkit-full-screen .view { height: 100vh; }

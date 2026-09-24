@@ -79,6 +79,18 @@
             android:layout_marginTop="18dp"
             android:text="@string/action_login" />
 
+        <CheckBox
+            android:id="@+id/tls"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/use_tls" />
+
+        <CheckBox
+            android:id="@+id/remember"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/remember_me" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/battery"
             style="@style/Widget.Material3.Button.TextButton"

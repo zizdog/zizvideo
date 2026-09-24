@@ -31,10 +31,11 @@ object ZvApi {
     }
 
     /** 把用户输入变成 base：补 scheme、砍掉 #/path 与多余的路径尾巴、去尾斜杠。 */
-    fun normalizeBase(raw: String): String {
+    fun normalizeBase(raw: String, forceTLS: Boolean = false): String {
         var s = raw.trim()
         if (s.isEmpty()) return ""
-        if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://$s"
+        // 勾了"使用 HTTPS"就按 https 走（用户 2026-09-23：登录界面支持选择 SSL，不用自己敲 scheme）
+        if (!s.startsWith("http://") && !s.startsWith("https://")) s = if (forceTLS) "https://$s" else "http://$s"
         s = s.substringBefore("#")
         return try {
             val u = URL(s)

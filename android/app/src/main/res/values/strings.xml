@@ -12,4 +12,6 @@
     <string name="shortcut_listen_feed">听首页</string>
     <string name="shortcut_open_app">打开浏览</string>
     <string name="allow_background">允许后台运行（后台听视频更稳）</string>
+    <string name="use_tls">使用 HTTPS</string>
+    <string name="remember_me">记住口令（下次自动登录，明文存本机）</string>
 </resources>

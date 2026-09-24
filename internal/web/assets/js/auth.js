@@ -18,26 +18,49 @@ export async function loadMe() {
 export async function doLogout() {
   try { await api.logout(); } catch (err) { /* 退出失败也要回到登录页 */ }
   session.user = null;
+  // 主动退出后**不要**再被"自动登录"顶回去（否则一点退出就又进去了）
+  try { sessionStorage.setItem("zv_no_auto", "1"); } catch (err) { /* 隐私模式忽略 */ }
 }
 
 export function mountLogin(view, onSuccess) {
   const username = input({ type: "text", autocomplete: "username", placeholder: "用户名", required: true });
   const password = input({ type: "password", autocomplete: "current-password", placeholder: "口令", required: true });
   const note = banner();
+  const remember = el("input", { type: "checkbox" });
   const submit = el("button", { class: "btn primary", type: "submit", text: "登录" });
   const form = el("form", { class: "panel narrow" },
     el("h1", { class: "title", text: "Zizvideo" }),
     field("用户名", username),
     field("口令", password),
+    // 用户 2026-09-23：记住与自动登录（口令明文存本机浏览器 —— 界面上如实写明）
+    el("label", { class: "check" }, remember,
+      el("span", { class: "muted small-note", text: "记住我（自动登录，口令明文存本机）" })),
     note,
     submit
   );
+  const KEY = "zv_login";
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (err) { return null; }
+  })();
+  const noAuto = (() => { try { return sessionStorage.getItem("zv_no_auto") === "1"; } catch (err) { return false; } })();
+  if (saved && saved.u && saved.p && !noAuto) {
+    username.value = saved.u;
+    password.value = saved.p;
+    remember.checked = true;
+    // 下一次自动登录（等表单挂好再提交）
+    setTimeout(() => { form.dispatchEvent(new Event("submit", { cancelable: true })); }, 0);
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setBanner(note, "");
     submit.disabled = true;
     try {
       session.user = await api.login({ username: username.value.trim(), password: password.value });
+      try { sessionStorage.removeItem("zv_no_auto"); } catch (err) { /* 忽略 */ }
+      try {
+        if (remember.checked) localStorage.setItem(KEY, JSON.stringify({ u: username.value.trim(), p: password.value }));
+        else localStorage.removeItem(KEY);
+      } catch (err) { /* 隐私模式忽略 */ }
       onSuccess();
     } catch (err) {
       setBanner(note, err && err.message ? err.message : "登录失败");

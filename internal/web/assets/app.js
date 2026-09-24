@@ -1,7 +1,7 @@
 // 入口：hash 路由 + 启动引导（setup 判定 → 会话判定）
 
 import { api } from "./js/api.js";
-import { clear } from "./js/dom.js";
+import { clear, el } from "./js/dom.js";
 import { session, loadMe, mountLogin, mountRegister, mountSetup, doLogout } from "./js/auth.js";
 import { mountFeed } from "./js/feed.js";
 import { mountAdmin } from "./js/admin.js";
@@ -54,9 +54,26 @@ function show(mount) {
   renderTopBar(headerEl, {
     showBack: canGoBack(),
     onBack: () => { location.hash = "#" + backTarget(); },
+    onMenu: () => openSidePanel(),
     onSearch: () => { location.hash = "#/search"; },
   });
   current = { cleanup: mount(viewEl) || null };
+}
+
+// 侧面板（用户 2026-09-23 要求）：**内容先留空**，后续再往里放功能。
+function openSidePanel() {
+  if (document.querySelector(".side-panel")) return;
+  const panel = el("aside", { class: "side-panel", dataset: { role: "side-panel" } });
+  const mask = el("div", { class: "side-mask", dataset: { role: "side-mask" } });
+  const close = () => { panel.remove(); mask.remove(); };
+  mask.addEventListener("click", close);
+  panel.append(
+    el("div", { class: "side-panel-head" },
+      el("span", { text: "菜单" }),
+      el("button", { class: "btn small", type: "button", text: "关闭", onclick: close })),
+    el("div", { class: "side-panel-body", text: "这里先留空，后续再放内容。" }));
+  document.body.append(mask, panel);
+  requestAnimationFrame(() => panel.classList.add("open"));
 }
 
 function route() {

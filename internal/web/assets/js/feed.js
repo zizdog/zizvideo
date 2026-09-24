@@ -101,10 +101,10 @@ export function mountFeed(view, options = {}) {
   const toast = el("div", { class: "toast hidden" });
   // 选库入口（P1）：库列表只来自 GET /me/libraries，不再从当前视频反推。
   // 播放列表模式（剧场）没有"切库"概念，所以这两个节点不建。
+  // 用户 2026-09-23：「来自 X」与「选库」贴顶栏（15px）且**同一行**，不再一上一下还互相压住
   const pickerBtn = playlist ? null : el("button", {
     class: "lib-chip hidden", type: "button", text: "选库",
-    // 原来固定 top:44px；刘海屏上「来自 X」被 env() 推下来后会压住它（用户报障）⇒ 一起躲
-    style: { position: "absolute", zIndex: "8", top: "calc(44px + env(safe-area-inset-top, 0px))", left: "12px" },
+    dataset: { role: "pick-library" },
   });
   const picker = playlist ? null : el("div", {
     class: "set-panel hidden",
@@ -116,7 +116,7 @@ export function mountFeed(view, options = {}) {
       event.stopPropagation();
       picker.classList.toggle("hidden");
     });
-    feed.append(track, chip, pickerBtn, picker);
+    feed.append(track, chip, picker);
   } else {
     feed.append(track, chip);
   }
@@ -176,6 +176,28 @@ export function mountFeed(view, options = {}) {
     const entry = state.built.get(index);
     if (entry && entry.video && !entry.broken) tryPlay(entry);
     maybeLoadMore(index);
+    warmUpcoming(); // 预加载后面几条：等切过去再拉就来不及
+  }
+
+  /**
+   * 预加载后面 N 条（首页 2 条、播放列表 1 条）：把壳里的 video 建出来、preload=auto 并 load()。
+   * 用户会连着快速滑动，不预热就会"滑过去先转圈"（用户 2026-09-23 明确要求）。
+   * 注意：只预热，不播放、不动进度。
+   */
+  function warmUpcoming() {
+    const want = playlist ? 1 : 2;
+    for (let k = 1; k <= want; k++) {
+      const idx = state.active + k;
+      const item = state.items[idx];
+      if (!item) break;
+      const entry = ensureEntry(idx);
+      if (!entry || !entry.video || entry.broken) continue;
+      if (entry.video.getAttribute("src") !== item.stream_url) entry.video.src = item.stream_url;
+      if (entry.video.preload !== "auto") {
+        entry.video.preload = "auto";
+        try { entry.video.load(); } catch (err) { /* 忽略：预热失败不影响播放 */ }
+      }
+    }
   }
 
   // 一次手势只前进一条：goTo 只按最终目标走一步，不会叠加
@@ -271,7 +293,8 @@ export function mountFeed(view, options = {}) {
     // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
     layer.append(el("div", { class: "ov-rail" },
-      entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del));
+      entry.fav, entry.like, entry.later, entry.eps, soundButton(entry), gearButton(entry), entry.del,
+      cleanButton(entry), fullscreenButton(entry)));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
     if (!playlist) layer.append(libraryCorner(item));
@@ -293,9 +316,13 @@ export function mountFeed(view, options = {}) {
     const video = createMediaVideo(item, { muted: !state.soundOn, loop: loopEnabled() });
     entry.video = video;
     video.addEventListener("loadedmetadata", () => onMetadata(entry));
-    video.addEventListener("loadeddata", () => checkFrames(entry));
+    video.addEventListener("loadeddata", () => { hideLoading(entry); checkFrames(entry); });
+    video.addEventListener("canplay", () => hideLoading(entry));
+    // 播放中途卡住（缓冲/网络慢）也如实提示"在等数据"
+    video.addEventListener("waiting", () => showLoading(entry));
     video.addEventListener("timeupdate", () => paintTime(entry));
     video.addEventListener("play", () => {
+      hideLoading(entry);
       hidePlayButton(entry);
       if (!state.soundOn) showSoundHint(entry);
     });
@@ -304,6 +331,7 @@ export function mountFeed(view, options = {}) {
     video.addEventListener("error", () => showBroken(entry));
     video.addEventListener("click", () => togglePlay(entry));
     stage.append(video);
+    showLoading(entry); // 用户 2026-09-23：先给"加载中"，别一进来就是个大播放按钮
     return entry;
   }
 
@@ -321,7 +349,8 @@ export function mountFeed(view, options = {}) {
       event.stopPropagation();
       switchScope(item.library_id, name);
     });
-    const corner = el("div", { class: "ov-corner left" }, here);
+    // 选库按钮跟「来自 X」放同一行（用户 2026-09-23：贴顶栏 15px、且不要一上一下）
+    const corner = el("div", { class: "ov-corner left" }, here, pickerBtn);
     if (state.scope) {
       const back = el("button", { class: "lib-chip all", type: "button", text: "全部库" });
       back.addEventListener("click", (event) => {
@@ -459,6 +488,7 @@ export function mountFeed(view, options = {}) {
   /** 暂停/播放失败时显示"播放"按钮；可反复出现（不再 latch 成一次性）。 */
   function showPlayButton(entry) {
     if (entry.destroyed || !entry.video || !entry.layer || entry.playBtn) return;
+    hideLoading(entry); // 真正需要用户点播时才显示播放按钮
     entry.playBtn = el("button", {
       class: "center-btn", type: "button", text: "点击播放",
       onclick: () => {
@@ -468,6 +498,24 @@ export function mountFeed(view, options = {}) {
       },
     });
     entry.layer.append(entry.playBtn);
+  }
+
+  // loading 只是"真的在等数据"的提示（用户 2026-09-23）：预加载过、已经有数据的条目**不许闪它**，
+  // 所以这里按真实 readyState 判断，而不是一律先显示。
+  const READY_ENOUGH = 3; // HAVE_FUTURE_DATA
+  function showLoading(entry) {
+    if (!entry || !entry.layer || entry.loadingEl) return;
+    const v = entry.video;
+    if (v && v.readyState >= READY_ENOUGH) return; // 有数据：不需要让用户等
+    entry.loadingEl = el("div", { class: "center-loading" },
+      el("div", { class: "spinner" }), el("div", { text: "加载中…" }));
+    entry.layer.append(entry.loadingEl);
+  }
+
+  function hideLoading(entry) {
+    if (!entry || !entry.loadingEl) return;
+    entry.loadingEl.remove();
+    entry.loadingEl = null;
   }
 
   function hidePlayButton(entry) {
@@ -524,6 +572,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function showBroken(entry, sub) {
+    hideLoading(entry);
     if (entry.broken || entry.destroyed || !entry.layer) return;
     entry.broken = true;
     if (entry.video) { try { entry.video.pause(); } catch (err) { /* ignore */ } }
@@ -678,6 +727,55 @@ export function mountFeed(view, options = {}) {
       showToast(err && err.message ? err.message : "设置保存失败");
     }
     applySettings();
+  }
+
+  /* ---------- 清屏播放 / 旋转全屏（用户 2026-09-23） ---------- */
+
+  // 清屏：把边栏/标题/角标都收起来，只留一个小箭头还原（比"点画面切换"更明确，不会和"点画面=暂停"打架）
+  function cleanButton() {
+    const btn = el("button", {
+      class: "icon-btn rail-restore", type: "button", title: "清屏播放",
+      dataset: { role: "rail-clean" },
+    }, icon("down"));
+    btn.addEventListener("click", () => {
+      feed.classList.toggle("clean");
+      const on = feed.classList.contains("clean");
+      btn.title = on ? "显示图标" : "清屏播放";
+      setIcon(btn, on ? "down" : "down");
+      showToast(on ? "已清屏，点箭头还原" : "已显示图标");
+    });
+    return btn;
+  }
+
+  // 旋转全屏：真全屏（隐藏顶栏/底栏）+ 尽量锁横屏；再点退出（参考抖音精选版）
+  function fullscreenButton() {
+    const btn = el("button", { class: "icon-btn", type: "button", title: "全屏", dataset: { role: "rail-fullscreen" } }, icon("expand"));
+    const sync = () => {
+      const on = !!document.fullscreenElement;
+      setIcon(btn, on ? "collapse" : "expand");
+      btn.title = on ? "退出全屏" : "全屏";
+    };
+    btn.addEventListener("click", async () => {
+      try {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+          if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+          showToast("已退出全屏");
+        } else {
+          await (document.documentElement.requestFullscreen ? document.documentElement.requestFullscreen() : Promise.reject(new Error("unsupported")));
+          if (screen.orientation && screen.orientation.lock) {
+            try { await screen.orientation.lock("landscape"); } catch (err) { /* 桌面/不支持就算了 */ }
+          }
+          showToast("已全屏（横屏）");
+        }
+      } catch (err) {
+        showToast("这台设备不支持全屏");
+      }
+      sync();
+    });
+    document.addEventListener("fullscreenchange", sync);
+    sync();
+    return btn;
   }
 
   /* ---------- 反应 / 收藏 ---------- */

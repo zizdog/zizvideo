@@ -113,10 +113,11 @@ func TestSeriesWatchedCountBacksWatchingSection(t *testing.T) {
 	}
 
 	type listRow struct {
-		ID           string `json:"id"`
-		EpisodeCount int    `json:"episode_count"`
-		WatchedCount int    `json:"watched_count"`
-		LibraryName  string `json:"library_name"`
+		ID             string `json:"id"`
+		EpisodeCount   int    `json:"episode_count"`
+		WatchedCount   int    `json:"watched_count"`
+		CompletedCount int    `json:"completed_count"`
+		LibraryName    string `json:"library_name"`
 	}
 	type listBody struct {
 		List []listRow `json:"list"`
@@ -156,8 +157,18 @@ func TestSeriesWatchedCountBacksWatchingSection(t *testing.T) {
 		PositionMS: 5000, DurationMS: 5000, Completed: true}); err != nil {
 		t.Fatal(err)
 	}
-	if got := row(); got.WatchedCount != 0 {
-		t.Fatalf("看完的不该算在追，实际 %d", got.WatchedCount)
+	got := row()
+	if got.WatchedCount != 0 || got.CompletedCount != 1 {
+		t.Fatalf("看完的应记 completed_count=1、watched_count=0，实际 %+v", got)
+	}
+	// 用户 2026-09-23：看完之后**又打开某一集、没看完就退出** ⇒ 必须回到「观看中」
+	if err := e.DB.UpsertProgress(&domain.Progress{UserID: admin.ID, MediaID: a.ID,
+		PositionMS: 3000, DurationMS: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	got = row()
+	if got.CompletedCount != 0 || got.WatchedCount != 1 {
+		t.Fatalf("重开后应回到观看中（watched=1, completed=0），实际 %+v", got)
 	}
 }
 
