@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 后台听视频在国产 ROM 上常被杀：允许用户在系统弹窗里一次点掉（自用分发，不上架） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 自动检查更新：下载完的 APK 要通过系统安装器装上（用户 2026-09-25："不想再一次次手动下载安装"）。
+         自用分发（不上架），这个权限是唯一能省掉"手动拷包再点安装"的路子；安装界面仍由用户确认。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- 电视端（用户 2026-09-25："同时开发电视端 app"）：同一个包装到 Android TV / 盒子上也能用。
          三个 required=false 是"兼容"的关键：电视没有触摸屏，也不能因为缺 leanback 就装不上手机。
@@ -87,5 +90,17 @@
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- 自动检查更新：把下载好的 APK 以 content:// 形式交给系统安装器
+             （直接给 file:// 在安卓 7+ 会 FileUriExposedException，装不了） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

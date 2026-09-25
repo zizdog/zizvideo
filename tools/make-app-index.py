@@ -4,17 +4,26 @@
 用法：
     tools/make-app-index.py <版本目录> <版本>
 
-产出两份（覆盖写）：
+产出（覆盖写）：
     <版本目录>/manifest.json            每个架构的 sha256/大小（+ upstream）
     <版本目录>/../manifest.json          顶层索引：{"app","latest","generated_at","assets":[{name,version,arch,sha256,size}]}
+    <版本目录>/../android.json           安卓客户端自动更新清单（有 APK 时才写，见下）
+    <版本目录>/../android/<apk>          当前这一份 APK（稳定路径，只留最新）
 
-两份的字段是**面板代码读的契约**（internal/services/zizvideo.go 的 resolveZizvideoRelease），
+前两份的字段是**面板代码读的契约**（internal/services/zizvideo.go 的 resolveZizvideoRelease），
 改字段=破坏兼容，必须先改 CONTRACT.md 并让面板侧同步。
+
+android.json 是**给 App 自己读的**（用户 2026-09-25："给 app 加自动检查更新"），与面板无关：
+    {"app","platform":"android","version","server_version","file","sha256","size","published_at"}
+  · 为什么不塞进 manifest.json：那个 schema 是面板的契约，多塞东西有被面板误当成产物的风险；
+  · 为什么 APK 放 ../android/ 而不是版本目录里：版本目录会被 `make publish` 按规矩 prune 掉，
+    APK 跟着走就 404 了 —— 更新源必须是稳定路径。
 """
 import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -57,6 +66,36 @@ def main() -> int:
     print("   索引已写：%s（latest=%s，%d 个架构）" % (index, ver, len(rows)))
     for row in rows:
         print("     %s  %s  %d B" % (row["name"], row["sha256"][:16] + "…", row["size"]))
+
+    # 安卓客户端的自动更新清单（有 APK 才写；没带客户端时**不动**旧的那份，
+    # 否则会把手上的更新源清掉）
+    apk = None
+    for name in sorted(os.listdir(vdir)):
+        found = re.match(r"^zizvideo-android-(.+)\.apk$", name)
+        if found and os.path.isfile(os.path.join(vdir, name)):
+            apk = (name, found.group(1))
+    if apk:
+        name, appver = apk
+        src = os.path.join(vdir, name)
+        with open(src, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        parent = os.path.dirname(vdir)
+        android_dir = os.path.join(parent, "android")
+        os.makedirs(android_dir, exist_ok=True)
+        # 只留最新这一份（App 只会要最新版；旧包留着既占地方又容易被误链）
+        for old in os.listdir(android_dir):
+            if old != name and re.match(r"^zizvideo-android-.+\.apk$", old):
+                os.remove(os.path.join(android_dir, old))
+        shutil.copy2(src, os.path.join(android_dir, name))
+        android_index = os.path.join(parent, "android.json")
+        with open(android_index, "w", encoding="utf-8") as handle:
+            json.dump({"app": "zizvideo", "platform": "android", "version": appver,
+                       "server_version": ver, "file": "android/" + name,
+                       "sha256": digest, "size": os.path.getsize(src), "published_at": stamp},
+                      handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        print("   安卓更新清单：%s（app %s，%s，%d B）" % (
+            android_index, appver, digest[:16] + "…", os.path.getsize(src)))
     return 0
 
 if __name__ == "__main__":

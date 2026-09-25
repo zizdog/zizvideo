@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自动更新：只把「下载目录/update/」暴露给系统安装器（FileProvider 要求显式声明能分享的路径；
+     写太宽（比如整个 files/）等于把 App 私有数据都开了口子）。 -->
+<paths>
+    <external-files-path name="update" path="Download/update/" />
+</paths>

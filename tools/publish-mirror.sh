@@ -161,6 +161,37 @@ PY
     fi
     info "（未做字节级复验；要整包下载复算：make verify DEEP=1）"
   fi
+  # 安卓更新源（App 自动更新依赖它）：索引可达 + 它指向的 APK 就在线上且大小一致
+  if [ -f "$APPDIR/android.json" ]; then
+    local ajson="$tmp/android.json"
+    if ! curl -fsS --max-time 30 "$MIRROR_BASE/apps/zizvideo/android.json" -o "$ajson"; then
+      die "拉不到镜像上的 apps/zizvideo/android.json（App 自动更新会失效）"
+    fi
+    local apk_url; apk_url="$(python3 - "$ajson" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get("file") or "")
+PY
+)"
+    local apk_ver; apk_ver="$(python3 - "$ajson" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["version"])
+PY
+)"
+    local link="${apk_url##*/}"
+    [ -n "$link" ] || die "android.json 里没有 file 字段"
+    local want_size; want_size="$(python3 - "$ajson" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["size"])
+PY
+)"
+    local got_size
+    got_size="$(curl -fsSI --max-time 30 "$MIRROR_BASE/apps/zizvideo/$apk_url" 2>/dev/null \
+      | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+    [ -n "$got_size" ] || die "线上取不到 APP 更新包：$apk_url"
+    [ "$got_size" = "$want_size" ] || die "线上 APK 大小 ${got_size} ≠ 清单 ${want_size}（$apk_url）"
+    ok "安卓更新源可用：android.json → app ${apk_ver}，${link}（${got_size} B，线上可达）"
+  fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
   phase "复验"
 }
@@ -171,6 +202,42 @@ PY
 #   · 只删名字严格匹配 <数字.数字.数字>-mvp 的**目录**，且路径必须在 $APP_DIR 下；
 #   · 顶层文件（manifest.json / 安装器 / 证书）一律不碰；
 #   · 删完**回读目录**核对，残留就如实报错，不假装成功。
+# 安卓更新源目录只留最新那份 APK（App 只会拉最新版；旧包留着白占镜像空间）。
+# 只在"新 APK 已经传完 + android.json 已指向它"之后调用 —— 顺序反了会把手上的更新源删掉。
+prune_old_apks() {
+  [ -n "${ANDROID_APK:-}" ] || return 0
+  local listing
+  listing="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR/android" 2>/dev/null || true)"
+  [ -n "$listing" ] || { info "（列不出 $APP_DIR/android，跳过旧 APK 清理）"; return 0; }
+  local olds
+  olds="$(printf '%s' "$listing" | KEEP="$ANDROID_APK" APP_DIR="$APP_DIR" python3 -c '
+import json, os, re, sys
+keep, app = os.environ["KEEP"], os.environ["APP_DIR"].rstrip("/")
+pat = re.compile(r"^zizvideo-android-.+\.apk$")
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+for e in (data.get("data") or {}).get("entries") or []:
+    name = str(e.get("name") or "")
+    path = str(e.get("path") or (app + "/android/" + name))
+    if e.get("is_dir") or name == keep or not pat.match(name):
+        continue
+    if not path.startswith(app + "/android/") or ".." in path:
+        continue
+    print(path)
+')"
+  [ -z "$olds" ] && { ok "更新源目录只有最新一份 APK"; return 0; }
+  echo "  将删除旧 APK：$(printf '%s' "$olds" | tr '\n' ' ')"
+  local body
+  body="$(printf '%s' "$olds" | python3 -c 'import json,sys; print(json.dumps({"paths":[l for l in sys.stdin.read().split("\n") if l]}))')"
+  if api POST /api/v1/files/delete -H 'Content-Type: application/json' -d "$body" >/dev/null; then
+    ok "旧 APK 已清理（保留 ${ANDROID_APK}）"
+  else
+    info "（旧 APK 没删掉；不影响更新，只是占地方）"
+  fi
+}
+
 prune_old_versions() {
   info "清理镜像旧版本（只保留 ${VERSION}）"
   local listing
@@ -321,6 +388,14 @@ if [ -f .release-key/codesign/zp-codesign.crt ]; then
   crtdir="$(mktmp)"; cp .release-key/codesign/zp-codesign.crt "$crtdir/zizvideo-codesign.crt"
   queue_upload "$APP_DIR" "$crtdir/zizvideo-codesign.crt" "zizvideo-codesign.crt"
 fi
+# 安卓客户端更新源（App 自己拉）：APK 放稳定路径 apps/zizvideo/android/，不跟着版本目录被 prune
+if [ -d "$APPDIR/android" ]; then
+  for f in "$APPDIR"/android/*.apk; do
+    [ -f "$f" ] || continue
+    queue_upload "$APP_DIR/android" "$f" "$(basename "$f")"
+  done
+  ANDROID_APK="$(basename "$(ls -1 "$APPDIR"/android/*.apk | tail -1)")"
+fi
 
 up_fail=0
 idx=0
@@ -354,6 +429,14 @@ for r in "${UP_ALL_RESP[@]}"; do rm -f "$r"; done
 phase "上传产物（并行）"
 
 # 顶层索引是"latest 指针"，**最后传**：绝不让它指向还没上传完的产物。
+# android.json 也是"指针"（给 App 读），同样放在产物都上传完之后、manifest 之前。
+if [ -f "$APPDIR/android.json" ]; then
+  info "上传安卓更新清单到 $APP_DIR/"
+  api POST /api/v1/files/upload -F "dir=$APP_DIR" -F "on_conflict=overwrite" \
+    -F "files=@$APPDIR/android.json" >/dev/null || die "上传 android.json 失败"
+  ok "android.json（App 自动更新源：$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$APPDIR/android.json")）"
+  prune_old_apks
+fi
 info "上传顶层索引到 $APP_DIR/"
 api POST /api/v1/files/upload -F "dir=$APP_DIR" -F "on_conflict=overwrite" \
   -F "files=@$APPDIR/manifest.json" >/dev/null || die "上传顶层索引失败"

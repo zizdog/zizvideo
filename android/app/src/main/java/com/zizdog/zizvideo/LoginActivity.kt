@@ -232,6 +232,14 @@ class LoginActivity : AppCompatActivity() {
         } else if (explicitPath != null) {
             intent.putExtra(WebActivity.EXTRA_PATH, explicitPath)
         }
+        // 自测用的两个"外部开关"也要**透传**：启动参数落在 LoginActivity 上（launcher），
+        // 不转发的话它们永远到不了 WebActivity（实测：更新源覆盖失效、检查跑去了默认镜像）。
+        this.intent.getStringExtra(WebActivity.EXTRA_UPDATE_BASE)?.let {
+            intent.putExtra(WebActivity.EXTRA_UPDATE_BASE, it)
+        }
+        if (this.intent.hasExtra(WebActivity.EXTRA_TV)) {
+            intent.putExtra(WebActivity.EXTRA_TV, this.intent.getBooleanExtra(WebActivity.EXTRA_TV, false))
+        }
         startActivity(intent)
         finish()
     }

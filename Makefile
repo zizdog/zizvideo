@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.2.9-mvp
+VERSION   ?= 0.2.10-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 DIST      ?= dist
 APPDIR    ?= $(DIST)/apps/zizvideo
@@ -96,7 +96,6 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 	    echo "    !! 没有 $(CODESIGN_CERT)：产物未签名，用户每次升级都要重新授权"; \
 	  fi; \
 	done
-	@python3 tools/make-app-index.py $(VERDIR) $(VERSION)
 	@# 安卓客户端（可选）：有 release APK 就一起放进版本目录，随索引一起发；
 	@# 没有 Android 工具链的机器不会因此失败 —— 服务端发布不依赖客户端。
 	@APK=android/app/build/outputs/apk/release/app-release.apk; \
@@ -107,6 +106,9 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 	 else \
 	   echo "    （没有安卓 release APK，跳过；要带客户端先 cd android && bash tools/build.sh）"; \
 	 fi
+	@# 索引放在**客户端拷好之后**算：make-app-index.py 还要按 APK 生成 android.json（App 自动更新源），
+	@# 顺序反了它就看不到 APK（0.2.10 这轮实测踩到：android.json 一直不生成）。
+	@python3 tools/make-app-index.py $(VERDIR) $(VERSION)
 	@echo "发布件就绪：$(APPDIR)（下一步：make publish）"
 
 index: ## 只按现有版本目录重算索引（产物没重编时用）

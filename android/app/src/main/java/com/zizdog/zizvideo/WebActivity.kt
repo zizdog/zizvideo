@@ -53,6 +53,9 @@ class WebActivity : AppCompatActivity() {
         /** 强制按电视端启动（自测/模拟器用：`--ez tv true`）；真机电视自动判定，不用传。 */
         const val EXTRA_TV = "tv"
 
+        /** 覆盖更新源（自测/模拟器用：`--es update_base http://10.0.2.2:17802/apps/zizvideo`）。 */
+        const val EXTRA_UPDATE_BASE = "update_base"
+
         /**
          * 是不是电视/盒子（用户 2026-09-25）：Android TV 的 UI 模式，或系统带 leanback 特性。
          * 判据用它而不是 Build.MODEL 猜：盒子/电视/投影都算，手机平板都不算。
@@ -74,6 +77,10 @@ class WebActivity : AppCompatActivity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var launchingNative = false
     private var handlingLogin = false
+
+    /** 更新源地址（默认镜像站；自测可覆盖）与"这个进程里已经提示过一次更新"的标记。 */
+    private var updateBase: String = Updater.DEFAULT_BASE
+    private var updatePrompted = false
 
     /**
      * 记住最近一次搜索词：网页里点搜索结果会跳到 #/play/search/<id>，这个地址**不带关键词**，
@@ -210,6 +217,17 @@ class WebActivity : AppCompatActivity() {
             val raw = OfflineStore.rawStatus(this@WebActivity, mediaId)
             val why = OfflineStore.failReason(this@WebActivity, mediaId)
             return if (why != null) raw + " | " + why else raw
+        }
+
+        /** 网页「我的」显示 App 版本（服务端版本是另一个号，别混）。 */
+        @android.webkit.JavascriptInterface
+        fun appVersion(): String = Updater.appVersion(this@WebActivity)
+
+        /** 网页点「检查更新」：interactive=true 时"已是最新"也要说一句（自动检查时不打扰）。 */
+        @android.webkit.JavascriptInterface
+        fun checkUpdate(interactive: Boolean): Boolean {
+            runOnUiThread { this@WebActivity.checkUpdate(interactive) }
+            return true
         }
 
         /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
@@ -378,6 +396,9 @@ class WebActivity : AppCompatActivity() {
         ).buildAsync()
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         pickOnLoad = intent.getBooleanExtra(EXTRA_PICK, false)
+        // 更新源：默认镜像站，自测可用 update_base 覆盖（真机上没有这个参数）
+        updateBase = intent.getStringExtra(EXTRA_UPDATE_BASE)?.takeIf { it.startsWith("http") }
+            ?: Updater.DEFAULT_BASE
         // 带 ?zv=app：告诉前端"原生已经垫过系统栏"，别再叠加 safe-area（见 Ui.padSystemBars）
         // 电视端再多带 ?tv=1：前端走遥控器导航（js/tv.js，方向键落焦 + 播放页按键语义）
         val tv = intent.getBooleanExtra(EXTRA_TV, false) || isTv(this)
@@ -393,6 +414,9 @@ class WebActivity : AppCompatActivity() {
             web.requestFocus()
         }
         web.loadUrl(url)
+        // 自动检查更新：进 App 顺手查一次（已是最新/连不上都**不打扰**），有新版本才弹窗。
+        // 延迟几秒：别跟首屏抢带宽和注意力。
+        web.postDelayed({ checkUpdate(false) }, 3000)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -639,6 +663,107 @@ class WebActivity : AppCompatActivity() {
             // 结果落日志：true = 这次确实被策略摁过静音、已自动恢复；false = 没被摁（正常）
             android.util.Log.i("zv-sound", "回到前台：nudge=" + r)
         }
+    }
+
+    // ---------- 自动检查更新（用户 2026-09-25："不想再一次次手动下载安装了"）----------
+
+    /** 查一次更新。interactive=true（用户点「检查更新」）时，没新版本也说一句。 */
+    fun checkUpdate(interactive: Boolean) {
+        Thread {
+            var info: Updater.Update? = null
+            var err: String? = null
+            try {
+                info = Updater.check(this, updateBase)
+            } catch (e: Exception) {
+                err = e.message ?: e.javaClass.simpleName
+                android.util.Log.w("zv-update", "检查更新失败：" + err + "（base=" + updateBase + "）")
+            }
+            runOnUiThread {
+                val found = info
+                when {
+                    found != null && !updatePrompted -> showUpdateDialog(found)
+                    found != null -> android.util.Log.i("zv-update", "本进程已提示过，跳过重复弹窗")
+                    interactive && err == null -> toast("已是最新版本（" + Updater.appVersion(this) + "）")
+                    interactive -> toast("检查更新失败：" + (err ?: "未知原因"))
+                    else -> android.util.Log.i("zv-update", "已是最新（" + Updater.appVersion(this) + "）")
+                }
+            }
+        }.start()
+    }
+
+    private fun showUpdateDialog(info: Updater.Update) {
+        updatePrompted = true
+        android.util.Log.i("zv-update", "发现新版本 " + info.version + "（当前 " + Updater.appVersion(this) + "）")
+        AlertDialog.Builder(this)
+            .setTitle("发现新版本 " + info.version)
+            .setMessage("当前 " + Updater.appVersion(this) + "，共 " + (info.size / 1024 / 1024) +
+                " MB。点「立即更新」自动下载，下载完在系统界面点一下「安装」即可。")
+            .setPositiveButton("立即更新") { _, _ -> startUpdate(info) }
+            .setNegativeButton("稍后", null)
+            .show()
+    }
+
+    private fun startUpdate(info: Updater.Update) {
+        if (!Updater.canInstall(this)) {
+            android.util.Log.w("zv-update", "缺少「安装未知应用」权限，先引导用户去设置")
+            AlertDialog.Builder(this)
+                .setTitle("还差一步：允许安装")
+                .setMessage("安卓要求你自己允许一次：设置 → 应用 → 特殊应用权限 → 安装未知应用 → zizvideo → 允许。" +
+                    "允许之后再点一次「检查更新」，之后就能一键升级了。")
+                .setPositiveButton("去设置") { _, _ ->
+                    try {
+                        startActivity(
+                            Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + packageName)))
+                    } catch (e: Exception) {
+                        toast("打不开设置页，请手动去「安装未知应用」里允许：" + (e.message ?: ""))
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+        val progress = android.app.ProgressDialog(this)
+        progress.setTitle("正在下载 " + info.version)
+        progress.setMessage("0%")
+        progress.setCancelable(false)
+        progress.show()
+        Thread {
+            try {
+                val file = Updater.download(this, updateBase, info) { pct ->
+                    runOnUiThread { progress.setMessage(pct.toString() + "%") }
+                }
+                runOnUiThread {
+                    progress.dismiss()
+                    installApk(file)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("zv-update", "下载失败：" + (e.message ?: ""))
+                runOnUiThread {
+                    progress.dismiss()
+                    AlertDialog.Builder(this)
+                        .setTitle("更新失败")
+                        .setMessage(e.message ?: "未知原因")
+                        .setPositiveButton("知道了", null)
+                        .show()
+                }
+            }
+        }.start()
+    }
+
+    private fun installApk(apk: java.io.File) {
+        try {
+            val intent = Updater.install(this, apk)
+            startActivity(intent)
+            android.util.Log.i("zv-update", "已拉起系统安装器：" + apk.name + "（" + apk.length() + " B）")
+        } catch (e: Exception) {
+            android.util.Log.w("zv-update", "拉起安装器失败：" + (e.message ?: ""))
+            toast("打不开安装界面：" + (e.message ?: "未知原因") + "，安装包在 " + apk.absolutePath)
+        }
+    }
+
+    private fun toast(text: String) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
     }
 
     override fun onDestroy() {

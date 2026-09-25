@@ -56,6 +56,22 @@ export function mountMe(view, options) {
     }
   }
   if (user.role === "admin") settings.append(cell("#/admin", "管理后台", "", "me-admin"));
+  // 检查更新（App 才有原生桥；用户 2026-09-25："给 app 加自动检查更新，不想再一次次手动下载安装"）：
+  // 平时进 App 就自动查一次，这里是"手动再查一次"的入口（自动那次被划掉/错过时用）。
+  if (window.ZvAndroid && typeof window.ZvAndroid.checkUpdate === "function") {
+    const updateCell = cell("#/me", "检查更新", "App 读取中…", "me-update");
+    settings.append(updateCell);
+    const note = updateCell.querySelector(".cell-note");
+    try {
+      note.textContent = "App " + (window.ZvAndroid.appVersion ? window.ZvAndroid.appVersion() : "?");
+    } catch (err) {
+      note.textContent = "App 版本读取失败";
+    }
+    updateCell.addEventListener("click", (event) => {
+      event.preventDefault(); // 不跳页：就地让原生去查（弹窗/提示都由原生给）
+      try { window.ZvAndroid.checkUpdate(true); } catch (err) { /* 老版本 App 没这个口 */ }
+    });
+  }
   // 用户上传（UGC）：只有开了白名单的账号才显示入口（管理员天然有）
   if (user.role === "admin" || user.can_upload) {
     settings.append(cell("#/upload", "上传视频", "进了待审区，管理员通过后入库", "me-upload"));
