@@ -390,9 +390,19 @@ if [ -f .release-key/codesign/zp-codesign.crt ]; then
 fi
 # 安卓客户端更新源（App 自己拉）：APK 放稳定路径 apps/zizvideo/android/，不跟着版本目录被 prune
 if [ -d "$APPDIR/android" ]; then
+  # 面板的上传接口不会自动建目录（目标目录不存在 → 400），子目录同样要先 mkdir 一次
+  adir="$APP_DIR/android"
+  abody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$adir")"
+  if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$abody" >/dev/null 2>&1; then
+    ok "已创建 android/（App 更新源目录）"
+  elif api GET /api/v1/files -G --data-urlencode "path=$adir" 2>/dev/null | grep -q '"entries"'; then
+    ok "android/ 已存在"
+  else
+    die "创建更新源目录失败：$adir（面板接口不建目录）"
+  fi
   for f in "$APPDIR"/android/*.apk; do
     [ -f "$f" ] || continue
-    queue_upload "$APP_DIR/android" "$f" "$(basename "$f")"
+    queue_upload "$adir" "$f" "$(basename "$f")"
   done
   ANDROID_APK="$(basename "$(ls -1 "$APPDIR"/android/*.apk | tail -1)")"
 fi
