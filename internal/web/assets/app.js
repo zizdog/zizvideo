@@ -14,6 +14,7 @@ import { mountSettings } from "./js/settings.js";
 import { mountUpload, mountMyUploads } from "./js/upload.js";
 import { mountSearch } from "./js/search.js";
 import { renderTopBar } from "./js/topbar.js";
+import { installTvKeys, focusFirst } from "./js/tv.js";
 
 const viewEl = document.getElementById("view");
 const headerEl = document.getElementById("header");
@@ -57,7 +58,8 @@ function show(mount) {
   teardown();
   clear(viewEl);
   const path = (location.hash || "").replace(/^#/, "");
-  if (isPlayerRoute(path)) {
+  const player = isPlayerRoute(path);
+  if (player) {
     renderTopBar(headerEl, {
       showBack: canGoBack(),
       onBack: () => { location.hash = "#" + backTarget(); },
@@ -70,6 +72,9 @@ function show(mount) {
     headerEl.hidden = true;
   }
   current = { cleanup: mount(viewEl) || null };
+  // 电视端（遥控器）：非播放页把焦点落到第一个可点元素，否则"按了没反应"。
+  // 播放页不抢焦点 —— 那边方向键的语义由 feed.js 决定（见 tv.js 的说明）。
+  if (!player) setTimeout(focusFirst, 0);
 }
 
 // 侧面板（用户 2026-09-23 要求）：**内容先留空**，后续再往里放功能。
@@ -206,6 +211,8 @@ async function onLogout() {
 }
 
 async function boot() {
+  // 电视端：先把遥控器按键装上（路由渲染前就要在），其它一律不变。
+  installTvKeys();
   try {
     const status = await api.setupStatus();
     needsSetup = !!(status && status.needs_setup);

@@ -13,8 +13,16 @@
     <!-- 后台听视频在国产 ROM 上常被杀：允许用户在系统弹窗里一次点掉（自用分发，不上架） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- 电视端（用户 2026-09-25："同时开发电视端 app"）：同一个包装到 Android TV / 盒子上也能用。
+         三个 required=false 是"兼容"的关键：电视没有触摸屏，也不能因为缺 leanback 就装不上手机。
+         有了 leanback 特性 + 入口里的 LEANBACK_LAUNCHER + banner，电视桌面才会列出这个应用。 -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+
     <application
         android:allowBackup="false"
+        android:banner="@drawable/tv_banner"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -29,6 +37,8 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- 电视桌面（Leanback）也列这个入口：遥控器点开就是同一套界面 -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             <!-- 快捷方式用自家 scheme 进来（zizvideo://listen/feed 等） -->
             <intent-filter>

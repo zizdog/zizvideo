@@ -32,6 +32,40 @@ object OfflineStore {
         return File(File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), DIR), "$safe.mp4")
     }
 
+    /**
+     * 元数据副档（同名 .json）：原始 id / 标题 / 封面 / 时长。
+     * 为什么需要它：文件名做过安全替换、且只有 id —— 网页只能拿 id 去 API 查标题，
+     * 查不到（或没网）就只剩一串 "med_xxxx" 看不出是什么，也永远没有封面（用户 2026-09-25 报障）。
+     * 副档在**下载那一刻**由网页给的元数据写入，于是离线也能显示标题和封面。
+     */
+    private fun metaFile(context: Context, mediaId: String): File =
+        File(fileFor(context, mediaId).absolutePath.removeSuffix(".mp4") + ".json")
+
+    private fun writeMeta(context: Context, mediaId: String, json: String) {
+        try {
+            val f = metaFile(context, mediaId)
+            // ⚠️ 目录必须先建：offline/ 是 DownloadManager 开始下载时才创建的，先写副档会 ENOENT
+            //（实测：副档没写成 ⇒ 列表里又只剩一串 med_xxxx，正是这次要修的毛病）
+            f.parentFile?.mkdirs()
+            f.writeText(json)
+        } catch (e: Exception) {
+            android.util.Log.w("zv-offline", "写元数据失败: ${e.message}")
+        }
+    }
+
+    private fun readMeta(context: Context, mediaId: String): String? {
+        val f = metaFile(context, mediaId)
+        if (!f.exists()) return null
+        return try {
+            f.readText().ifBlank { null }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun escape(s: String): String =
+        s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
+
     fun downloaded(context: Context, mediaId: String): File? {
         val f = fileFor(context, mediaId)
         return if (f.exists() && f.length() > 0) f else null
@@ -40,8 +74,8 @@ object OfflineStore {
     fun localUri(context: Context, mediaId: String): String? =
         downloaded(context, mediaId)?.let { Uri.fromFile(it).toString() }
 
-    /** 开始下载；返回 downloadId（-1 = 排队失败）。 */
-    fun enqueue(context: Context, base: String, mediaId: String, title: String): Long {
+    /** 开始下载；返回 downloadId（-1 = 排队失败）。metaJson 见 metaFile 的说明。 */
+    fun enqueue(context: Context, base: String, mediaId: String, title: String, metaJson: String = ""): Long {
         if (base.isBlank()) return -1
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
         val url = base.trimEnd('/') + "/api/v1/media/" + Uri.encode(mediaId) + "/stream"
@@ -54,6 +88,12 @@ object OfflineStore {
         if (cookie.isNotBlank()) req.addRequestHeader("Cookie", cookie)
         // 用 App 私有外部目录（DownloadManager 官方支持的目标之一，不需要存储权限）
         req.setDestinationInExternalFilesDir(context, Environment.DIRECTORY_MOVIES, "$DIR/${fileFor(context, mediaId).name}")
+        // 先写元数据（标题/封面/原始 id），排在下载之前 —— 下到一半也是"看得懂的一条"
+        if (metaJson.isNotBlank()) {
+            writeMeta(context, mediaId, metaJson)
+        } else if (title.isNotBlank()) {
+            writeMeta(context, mediaId, "{\"id\":\"" + escape(mediaId) + "\",\"title\":\"" + escape(title) + "\"}")
+        }
         return try {
             val id = manager(context).enqueue(req)
             prefs(context).edit().putLong(mediaId, id).apply()
@@ -153,27 +193,40 @@ object OfflineStore {
         if (f.exists()) {
             removed = f.delete() || removed
         }
+        metaFile(context, mediaId).delete()
         return removed
     }
 
     /**
-     * 已缓存清单的 JSON（给网页「我的 → 已缓存」）：`[{"id":"med_x","size":123}]`。
-     * 文件名就是 media id（enqueue 时定的），所以不用另建索引表。
+     * 已缓存清单的 JSON（给网页「我的 → 已缓存」）：
+     * `[{"id":"med_x","size":123,"title":"第 1 集","cover":"/api/v1/media/med_x/cover","duration_ms":90000}]`。
+     * id/标题/封面/时长来自下载时写的副档；没有副档（老缓存）就只给 id + size，网页再去 API 补。
      */
     fun listJson(context: Context): String {
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), DIR)
         val files = dir.listFiles() ?: return "[]"
-        val sb = StringBuilder("[")
-        var first = true
+        val arr = org.json.JSONArray()
         for (f in files) {
             if (!f.isFile || f.length() <= 0 || !f.name.endsWith(".mp4")) continue
-            if (!first) sb.append(",")
-            first = false
-            val id = f.name.removeSuffix(".mp4")
-            sb.append("{\"id\":\"").append(id).append("\",\"size\":").append(f.length()).append("}")
+            val fromName = f.name.removeSuffix(".mp4")
+            val o = org.json.JSONObject()
+            try {
+                readMeta(context, fromName)?.let { meta ->
+                    val parsed = org.json.JSONObject(meta)
+                    val keys = parsed.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        o.put(k, parsed.get(k))
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("zv-offline", "副档读不出来（用文件名兜底）: ${e.message}")
+            }
+            if (o.optString("id").isBlank()) o.put("id", fromName)
+            o.put("size", f.length())
+            arr.put(o)
         }
-        sb.append("]")
-        return sb.toString()
+        return arr.toString()
     }
 
     /** 已缓存了多少集 + 占多大（播放页显示"已缓存 N 集 / X MB"用）。 */

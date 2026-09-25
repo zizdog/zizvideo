@@ -714,3 +714,12 @@ body.rot-play .header, body.rot-play .bottom-nav { display: none; }
 /* 真正的全屏（含旋转）：全屏时藏掉顶栏与底栏（参考抖音精选版） */
 :fullscreen .header, :fullscreen .nav, :-webkit-full-screen .header, :-webkit-full-screen .nav { display: none; }
 :fullscreen .view, :-webkit-full-screen .view { height: 100vh; }
+
+/* 电视端（Android TV / 盒子）：遥控器焦点框。
+   只在 html.tv 下生效（原生带 ?tv=1 进来才加这个 class），手机/网页一行都不受影响。
+   为什么自己画焦点框：WebView 里 .focus() 不一定给 :focus-visible 样式，而且焦点常常落在 div 行上
+   （面板行），必须有个看得见的框，否则"遥控器按了不知道焦点在哪"。字号/间距先不动 —— 等真机上看了再说。 */
+html.tv .tv-focus {
+  outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 10px;
+  box-shadow: 0 0 0 6px rgba(0,0,0,.45);
+}

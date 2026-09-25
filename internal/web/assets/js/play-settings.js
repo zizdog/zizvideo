@@ -75,16 +75,28 @@ export function createFeedSettingsForm(options) {
   // 为什么要两套：面板要"抖音样式"（分组卡片 + 行 + 开关），而「我的→设置」页沿用列表式。
   // 逻辑（emit/paint）只有一份，只是 DOM 不同 —— 别写第二份设置逻辑。
   const sheet = opts.variant === "sheet";
-  function sheetRow(iconName, labelText, right) {
-    return el("div", { class: "sheet-row" },
+  // activate：整行可点/可确定（电视端遥控器要能落焦到行上；开关行点行=切换，跟抖音一致）
+  function sheetRow(iconName, labelText, right, activate) {
+    const row = el("div", { class: "sheet-row", tabindex: "0" },
       icon(iconName),
       el("span", { class: "sheet-label", text: labelText }),
       el("span", { class: "sheet-right" }, right));
+    if (activate) row.addEventListener("click", (event) => { event.stopPropagation(); activate(); });
+    return row;
   }
   function switchEl(input) {
     const box = el("span", { class: "sheet-switch" }, input);
     input.classList.add("sheet-switch-input");
+    // 开关本身不进焦点序列：焦点落在整行上（否则遥控器会停在看不见的复选框上）
+    input.tabIndex = -1;
     return box;
+  }
+  function toggleOf(input) {
+    return () => {
+      if (input.disabled) return;
+      input.checked = !input.checked;
+      input.dispatchEvent(new Event("change"));
+    };
   }
   function paintSwitch(input) {
     input.parentNode.classList.toggle("on", !!input.checked);
@@ -128,10 +140,10 @@ export function createFeedSettingsForm(options) {
     const pairs = [
       [rateSheetRow, null],
       [seekRow, sheetRow("seek", "左右键跳转", seek)],
-      [loopRow, sheetRow("repeat", "循环播放", switchEl(loop))],
-      [autoRow, sheetRow("next", "自动播放下一个", switchEl(auto))],
-      [enterRow, sheetRow("play", "进入自动播放", switchEl(enter))],
-      [hideSeriesRow, sheetRow("theater", "首页不显示剧场内容", switchEl(hideSeries))],
+      [loopRow, sheetRow("repeat", "循环播放", switchEl(loop), toggleOf(loop))],
+      [autoRow, sheetRow("next", "自动播放下一个", switchEl(auto), toggleOf(auto))],
+      [enterRow, sheetRow("play", "进入自动播放", switchEl(enter), toggleOf(enter))],
+      [hideSeriesRow, sheetRow("theater", "首页不显示剧场内容", switchEl(hideSeries), toggleOf(hideSeries))],
     ];
     // 原节点换成行式节点（顺序按上面的数组；rateSheetRow/seekRow 已在 form 里，不动）
     for (const [oldNode, newNode] of pairs) {

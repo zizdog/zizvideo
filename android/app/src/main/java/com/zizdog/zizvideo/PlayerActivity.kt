@@ -507,4 +507,55 @@ class PlayerActivity : AppCompatActivity() {
         controller = null
         super.onDestroy()
     }
+
+    // ---------- 电视端（遥控器，用户 2026-09-25）----------
+    // 电视没有触摸：长按快进/双击点赞都用不了，遥控器只给"上下左右 + 确定 + 返回"。
+    //   确定/播放键 播放暂停 · ←→ 快退快进 10 秒 · ↑↓ 上一集/下一集
+    // 焦点在按钮上时**不抢**：电视上也要能用确定键点到「缓存/倍速/收藏」这些按钮。
+    private val tv: Boolean by lazy { WebActivity.isTv(this) }
+    private val tvSeekMs = 10_000L
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (event == null || !tv) return super.onKeyDown(keyCode, event)
+        val focus = currentFocus
+        if (focus is android.widget.Button || focus is android.widget.ImageButton) {
+            return super.onKeyDown(keyCode, event)
+        }
+        val c = controller
+        when (keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            android.view.KeyEvent.KEYCODE_SPACE -> {
+                if (c != null) {
+                    if (c.isPlaying) c.pause() else c.play()
+                    Log.i("zv-tv", "toggle playing=" + c.isPlaying)
+                }
+                view.showController()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> return tvSeek(-tvSeekMs)
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> return tvSeek(tvSeekMs)
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                c?.seekToPreviousMediaItem()
+                view.showController()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                c?.seekToNextMediaItem()
+                view.showController()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun tvSeek(deltaMs: Long): Boolean {
+        val c = controller ?: return false
+        val pos = (c.currentPosition + deltaMs).coerceAtLeast(0L)
+        c.seekTo(pos)
+        view.showController()
+        Log.i("zv-tv", "seek to=" + pos)
+        return true
+    }
 }

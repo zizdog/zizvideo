@@ -49,6 +49,23 @@ class WebActivity : AppCompatActivity() {
 
         /** 启动即拉起系统文件选择器（zizvideo://upload 快捷方式用）。 */
         const val EXTRA_PICK = "pick_uploads"
+
+        /** 强制按电视端启动（自测/模拟器用：`--ez tv true`）；真机电视自动判定，不用传。 */
+        const val EXTRA_TV = "tv"
+
+        /**
+         * 是不是电视/盒子（用户 2026-09-25）：Android TV 的 UI 模式，或系统带 leanback 特性。
+         * 判据用它而不是 Build.MODEL 猜：盒子/电视/投影都算，手机平板都不算。
+         */
+        fun isTv(context: Context): Boolean {
+            try {
+                val ui = context.getSystemService(Context.UI_MODE_SERVICE) as android.app.UiModeManager
+                if (ui.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) return true
+            } catch (e: Exception) {
+                // 拿不到 UiModeManager 就退回特性判定
+            }
+            return context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        }
     }
 
     private lateinit var web: WebView
@@ -133,10 +150,7 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
-        /**
-         * 网页的「缓存视频」调这个：把这一集下到本机（离线看）。
-         * 复用 OfflineStore（系统 DownloadManager + App 私有目录），与原生播放页那个按钮同一份实现。
-         */
+        /** 老的缓存口（只有标题）：新网页优先用下面的 cacheVideo2。 */
         @android.webkit.JavascriptInterface
         fun cacheVideo(mediaId: String, title: String): Boolean {
             if (mediaId.isBlank()) return false
@@ -152,7 +166,28 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
-        /** 网页「我的 → 已缓存」要的清单：JSON 数组 [{id,size}]（标题由网页按 id 去 API 查）。 */
+        /**
+         * 网页的「缓存视频」（带元数据）：metaJson = {id,title,cover,duration_ms}，
+         * 与文件一起落盘 ⇒「我的 → 已缓存」离线也能显示标题和封面（用户 2026-09-25 报障：
+         * 之前只存 id，列表里就是一串看不出标题的字符串、还没有预览）。
+         */
+        @android.webkit.JavascriptInterface
+        fun cacheVideo2(mediaId: String, metaJson: String): Boolean {
+            if (mediaId.isBlank()) return false
+            runOnUiThread {
+                val title = try { org.json.JSONObject(metaJson).optString("title") } catch (e: Exception) { "" }
+                val id = OfflineStore.enqueue(this@WebActivity, base, mediaId, title, metaJson)
+                if (id < 0) {
+                    android.widget.Toast.makeText(this@WebActivity, "开始缓存失败（看通知栏或稍后再试）",
+                        android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    android.util.Log.i("zv-offline", "web cache id=" + mediaId)
+                }
+            }
+            return true
+        }
+
+        /** 网页「我的 → 已缓存」要的清单：JSON 数组 [{id,size,title,cover,duration_ms}]。 */
         @android.webkit.JavascriptInterface
         fun listCached(): String {
             return OfflineStore.listJson(this@WebActivity)
@@ -165,11 +200,27 @@ class WebActivity : AppCompatActivity() {
             return OfflineStore.delete(this@WebActivity, mediaId)
         }
 
+        /**
+         * 诊断某一集的下载状态（系统 DownloadManager 的 status/reason/进度 + 失败原因）。
+         * 为什么留着它：点「缓存」没反应时，只有这个能说清"卡在哪"（上一轮查这个问题查了很久）。
+         */
+        @android.webkit.JavascriptInterface
+        fun cachedRaw(mediaId: String): String {
+            if (mediaId.isBlank()) return ""
+            val raw = OfflineStore.rawStatus(this@WebActivity, mediaId)
+            val why = OfflineStore.failReason(this@WebActivity, mediaId)
+            return if (why != null) raw + " | " + why else raw
+        }
+
         /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
         @android.webkit.JavascriptInterface
         fun setImmersive(on: Boolean) {
             webImmersive = on
         }
+
+        /** 网页问"这是不是电视"：遥控器导航（js/tv.js）据此开关（真判据在 isTv()）。 */
+        @android.webkit.JavascriptInterface
+        fun isTv(): Boolean = tvMode
 
         @android.webkit.JavascriptInterface
         fun prepare(payload: String) {
@@ -274,6 +325,9 @@ class WebActivity : AppCompatActivity() {
     """.trimIndent()
     private var pickOnLoad = false
 
+    /** 电视端（Android TV / 盒子）：网页据此走遥控器导航（?tv=1）。 */
+    private var tvMode = false
+
     /** 网页是否处于全屏（沉浸）态：系统返回手势要先退出全屏，而不是直接导航/退出。 */
     private var webImmersive = false
     private var customView: View? = null
@@ -325,9 +379,19 @@ class WebActivity : AppCompatActivity() {
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         pickOnLoad = intent.getBooleanExtra(EXTRA_PICK, false)
         // 带 ?zv=app：告诉前端"原生已经垫过系统栏"，别再叠加 safe-area（见 Ui.padSystemBars）
-        val flagged = if (path.contains("#")) path.replaceFirst("#", "?zv=app#") else path + "?zv=app"
+        // 电视端再多带 ?tv=1：前端走遥控器导航（js/tv.js，方向键落焦 + 播放页按键语义）
+        val tv = intent.getBooleanExtra(EXTRA_TV, false) || isTv(this)
+        tvMode = tv
+        val flag = if (tv) "?zv=app&tv=1" else "?zv=app"
+        val flagged = if (path.contains("#")) path.replaceFirst("#", flag + "#") else path + flag
         val url = base + flagged
-        android.util.Log.i("zv-nav", "loadUrl=$url")
+        android.util.Log.i("zv-nav", "loadUrl=$url tv=$tv")
+        // 电视端：按键事件要落到 WebView 上（遥控器没有触摸，没人帮它 requestFocus）
+        if (tv) {
+            web.isFocusable = true
+            web.isFocusableInTouchMode = true
+            web.requestFocus()
+        }
         web.loadUrl(url)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -354,9 +418,21 @@ class WebActivity : AppCompatActivity() {
         })
     }
 
+    /**
+     * 电视端遥控器的「菜单」键：实测 WebView 不一定把它交给网页（网页里收不到 keydown）⇒
+     * 原生自己接住，让网页打开设置面板（网页侧在 tv 模式下注册 window.__zvTvMenu）。
+     * 其它按键一律不拦：方向键/确定由网页的遥控器导航处理（js/tv.js）。
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (tvMode && keyCode == android.view.KeyEvent.KEYCODE_MENU) {
+            web.evaluateJavascript("(function(){var f=window.__zvTvMenu;return f?f():false;})()", null)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configure(view: WebView) {
-        // 只有"可调试"的包开远程调试：自测（模拟器 + adb forward）要靠它读网页里的真实状态。
+    private fun configure(view: WebView) {        // 只有"可调试"的包开远程调试：自测（模拟器 + adb forward）要靠它读网页里的真实状态。
         // release 包绝不开 —— 那等于把调试端口暴露给同机的任何程序。
         val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debuggable) WebView.setWebContentsDebuggingEnabled(true)

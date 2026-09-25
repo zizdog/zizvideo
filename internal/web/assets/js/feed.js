@@ -7,6 +7,7 @@ import { mountNav } from "./nav.js";
 import { session } from "./auth.js";
 import { choiceDialog } from "./confirm.js";
 import { createFeedSettingsForm, normalizeFeedSettings, seekSecondsOf, loopEffective } from "./play-settings.js";
+import { setFeedKeys, tvMode } from "./tv.js";
 
 const WHEEL_STEP = 40;
 const TOUCH_STEP = 50;
@@ -333,7 +334,7 @@ export function mountFeed(view, options = {}) {
     // 边栏就 4 个（用户 2026-09-24 明确：点赞 / 收藏 / 声音 / 全屏，**不要再往里加**）。
     // 其余入口全在底部设置面板里（长按画面或网页右键打开）；选集/删除也搬进面板，不占边栏。
     layer.append(el("div", { class: "ov-rail" },
-      entry.like, entry.fav, soundButton(entry), fullscreenButton()));
+      entry.like, entry.fav, soundButton(entry), (entry.fullscreen = fullscreenButton())));
     layer.append(centerPlayPause(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
@@ -806,9 +807,34 @@ export function mountFeed(view, options = {}) {
     if (pipAvailable()) tools.append(actionRow("pip", "小窗播放", () => { closePanels(); togglePip(entry); }));
     if (nativeCacheAvailable()) {
       tools.append(actionRow("download", "缓存视频", () => {
-        try { window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || ""); showToast("开始缓存，看通知栏进度"); closePanels(); }
-        catch (err) { showToast("这台设备缓存不了"); }
+        // 元数据跟着文件一起落盘（标题/封面/时长/原始 id）⇒「我的 → 已缓存」离线也能显示
+        // 标题和封面，不再是一串 med_xxxx（用户 2026-09-25 报障）。
+        const meta = JSON.stringify({
+          id: String(entry.item.id),
+          title: entry.item.title || "",
+          cover: entry.item.cover_url || "",
+          duration_ms: Number(entry.item.duration_ms) || 0,
+        });
+        try {
+          if (typeof window.ZvAndroid.cacheVideo2 === "function") window.ZvAndroid.cacheVideo2(String(entry.item.id), meta);
+          else window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || "");
+          showToast("开始缓存，看通知栏进度");
+          closePanels();
+        } catch (err) { showToast("这台设备缓存不了"); }
       }));
+    }
+
+    // 电视端（遥控器）够不着右侧栏（没有触摸）⇒ 把侧栏那 4 个动作原样搬一份到这里
+    // （用户 2026-09-25 选了"复用网页界面 + 方向键"，手机上/网页上这一组不显示）。
+    // 只是"换个地方放"，不新增任何功能。
+    const tvQuick = tvMode() ? el("div", { class: "sheet-group" }) : null;
+    if (tvQuick) {
+      tvQuick.append(
+        actionRow("thumb", "点赞", () => { entry.like.click(); }),
+        actionRow("heart", "收藏", () => { entry.fav.click(); }),
+        actionRow("volume", "声音", () => { entry.sound.click(); }),
+        actionRow("expand", "全屏", () => { entry.fullscreen.click(); }),
+      );
     }
 
     // 第 2 组：常用（清屏/稍后再看 + 播放设置那一堆行，同一张卡片里）
@@ -837,6 +863,7 @@ export function mountFeed(view, options = {}) {
 
     const groups = [];
     if (tools.childNodes.length) groups.push(tools);
+    if (tvQuick) groups.push(tvQuick);
     groups.push(common);
 
     // 第 3 组：剧场入口（图3 的「合集 · 这是一个小短剧 更新至 N 集 >」）
@@ -880,7 +907,8 @@ export function mountFeed(view, options = {}) {
   // "任何操作完成都应该收起面板，如点了稍后再看后立刻收起，显示视频播放"）。
   function actionRow(iconName, label, onClick, rightText, collapse) {
     const right = el("span", { class: "sheet-right muted", text: rightText || "" });
-    const row = el("div", { class: "sheet-row", dataset: { role: "sheet-action" } },
+    // tabindex=0：电视端遥控器要能落焦到这一行（div 默认不可聚焦），确定键由 tv.js 代点
+    const row = el("div", { class: "sheet-row", tabindex: "0", dataset: { role: "sheet-action" } },
       icon(iconName), el("span", { class: "sheet-label", text: label }), right);
     row.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1629,6 +1657,58 @@ export function mountFeed(view, options = {}) {
     if (entry) openPanel(entry);
   }
 
+  // 电视端（遥控器）：按键语义与键盘不同（用户 2026-09-25）。
+  //   ↑↓ 换视频（电视就是"换台"）· ←→ 快退快进 · 确定 播放/暂停
+  //   长按确定（或遥控器菜单键）开设置面板 · 面板里 ↑↓ 走焦点、← 收面板
+  // 只在 tv 模式下注册；返回 true = 这次按键播放页吃了，通用空间导航不再插手（见 tv.js）。
+  let tvEnterTimer = null;
+  function tvPanelOpen() {
+    const entry = state.built.get(state.active);
+    return !!(entry && entry.panel && !entry.panel.classList.contains("hidden"));
+  }
+  function onTvKeyDown(event) {
+    const entry = state.built.get(state.active);
+    if (!entry || entry.destroyed) return false;
+    if (tvPanelOpen()) {
+      // 面板开着：↑↓ 交给通用焦点导航（行与行之间走），← 收面板
+      if (event.key === "ArrowLeft") { closePanels(); return true; }
+      return false;
+    }
+    const active = document.activeElement;
+    if (active && active.closest && active.closest(".ov-rail")) {
+      // 焦点在侧栏上：←→ 退出侧栏回画面，↑↓ 交给通用导航在侧栏里走
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (active.blur) active.blur();
+        return true;
+      }
+      return false;
+    }
+    switch (event.key) {
+      case "ArrowDown": goTo(state.active + 1); return true;
+      case "ArrowUp": goTo(state.active - 1); return true;
+      case "ArrowLeft": seekBy(-1); return true;
+      case "ArrowRight": seekBy(1); return true;
+      case "Enter":
+        // 短按 = 播放/暂停，长按 = 开面板（手机上就是长按弹面板）：动作等 keyup/超时再定。
+        // 400ms 不是 550ms：`input keyevent --longpress` 只按住 ~500ms，阈值太贴近会"长按当短按"。
+        if (!event.repeat) {
+          if (tvEnterTimer) clearTimeout(tvEnterTimer);
+          tvEnterTimer = setTimeout(() => { tvEnterTimer = null; openPanel(entry); }, 400);
+        }
+        return true;
+      case "ContextMenu": openPanel(entry); return true; // 遥控器"菜单"键（部分机型能到 JS）
+      default: return false;
+    }
+  }
+  function onTvKeyUp(event) {
+    if (event.key !== "Enter" || !tvEnterTimer) return false;
+    clearTimeout(tvEnterTimer);
+    tvEnterTimer = null;
+    const entry = state.built.get(state.active);
+    if (entry && !entry.destroyed) togglePlay(entry);
+    return true;
+  }
+
   function onKeyDown(event) {
     const target = event.target;
     const tag = target && target.tagName ? target.tagName : "";
@@ -1670,6 +1750,18 @@ export function mountFeed(view, options = {}) {
   document.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("pagehide", onPageHide);
   document.addEventListener("visibilitychange", onVisibility);
+  // 电视端：把遥控器按键接过来（tv.js 的通用空间导航在它之后跑）
+  if (tvMode()) {
+    setFeedKeys({ down: onTvKeyDown, up: onTvKeyUp });
+    // 遥控器"菜单"键：实测 WebView 不一定把它交给网页 ⇒ 原生按键口子直接调这个（见 WebActivity.onKeyDown）
+    window.__zvTvMenu = () => {
+      const entry = state.built.get(state.active);
+      if (!entry || entry.destroyed) return false;
+      openPanel(entry);
+      return true;
+    };
+    setTimeout(() => showToast("遥控器：↑↓ 换视频，← → 快退快进，确定 播放/暂停，长按确定 设置"), 900);
+  }
 
   if (playlist) {
     // 剧场/稍后再看：数据一次给全，不取游标、不翻页、不选库。
@@ -1737,6 +1829,11 @@ export function mountFeed(view, options = {}) {
     document.removeEventListener("contextmenu", onContextMenu);
     window.removeEventListener("pagehide", onPageHide);
     document.removeEventListener("visibilitychange", onVisibility);
+    if (tvMode()) {
+      if (tvEnterTimer) clearTimeout(tvEnterTimer);
+      setFeedKeys(null);
+      try { delete window.__zvTvMenu; } catch (err) { window.__zvTvMenu = null; }
+    }
     flushProgress(state.active, false);
     for (const index of Array.from(state.built.keys())) destroyEntry(index);
   };

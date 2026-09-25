@@ -4,6 +4,7 @@
 import { el, fmtDate, fmtBytes, clear, banner, setBanner } from "./dom.js";
 import { api } from "./api.js";
 import { session } from "./auth.js";
+import { videoCard } from "./cards.js";
 
 function kv(label, value) {
   return el("div", { class: "kv" },
@@ -79,16 +80,20 @@ export function mountMe(view, options) {
 }
 
 // mountCached：手机 App 的「已缓存」列表（离线缓存管理，用户 2026-09-24 要求）。
-// 缓存文件在 App 私有目录里，网页看不见 ⇒ 清单与删除都走原生桥；
-// 标题按 media id 去 API 查（查不到就显示 id —— 库里的记录可能已经删了，但文件还在）。
+// 缓存文件在 App 私有目录里，网页看不见 ⇒ 清单与删除都走原生桥。
+// 显示逻辑**必须与收藏/点赞列表一致**（用户 2026-09-25 报障：原来只有一串 med_xxxx、没有封面）：
+//   · 下载时就把标题/封面/时长写进本地副档（App 侧 OfflineStore）⇒ 离线也看得懂；
+//   · 老缓存没有副档，才回落到按 id 查 API；
+//   · 渲染复用 cards.js 的 videoGrid/videoCard（16:9 封面 + 时长角标 + 两行标题），不另做一套。
 export function mountCached(view, options) {
   const opts = options || {};
   const note = banner();
   const listBox = el("div", { class: "panel", dataset: { role: "cached-list" } });
+  const countLine = el("div", { class: "muted small-note", dataset: { role: "cached-count" } });
   const head = el("div", { class: "page-head" },
     el("h2", { class: "page-title", text: "已缓存" }),
     el("a", { class: "link small-note", href: "#/me", text: "‹ 我的" }));
-  view.append(el("div", { class: "page" }, head, note, listBox));
+  view.append(el("div", { class: "page" }, head, note, countLine, listBox));
 
   const bridge = window.ZvAndroid;
   if (!bridge || typeof bridge.listCached !== "function") {
@@ -96,56 +101,90 @@ export function mountCached(view, options) {
     return null;
   }
 
-  async function refresh() {
-    let items = [];
+  // 回落到 API 补齐的元数据（只有老缓存才用得上），键是 media id。
+  const fetched = {};
+
+  function itemsFromBridge() {
+    let raw = [];
     try {
-      items = JSON.parse(bridge.listCached() || "[]");
+      raw = JSON.parse(bridge.listCached() || "[]");
     } catch (err) {
+      return null;
+    }
+    return raw.map((it) => {
+      const id = String(it.id || "");
+      const extra = fetched[id] || {};
+      const cover = it.cover || extra.cover_url || (id ? ("/api/v1/media/" + encodeURIComponent(id) + "/cover") : "");
+      return {
+        id,
+        title: it.title || extra.title || "",
+        cover_url: cover,
+        duration_ms: Number(it.duration_ms) || Number(extra.duration_ms) || 0,
+        size: Number(it.size) || 0,
+        progress: {},
+      };
+    }).filter((it) => it.id);
+  }
+
+  function render() {
+    const items = itemsFromBridge();
+    if (items === null) {
+      clear(listBox);
       setBanner(note, "读取缓存清单失败");
       return;
     }
     clear(listBox);
     if (!items.length) {
+      countLine.textContent = "";
       listBox.append(el("div", { class: "muted small-note", text: "还没有缓存。播放页长按弹面板 →「缓存视频」。" }));
       return;
     }
-    const total = items.reduce((sum, it) => sum + (Number(it.size) || 0), 0);
-    listBox.append(el("div", { class: "muted small-note",
-      text: "共 " + items.length + " 集 · " + fmtBytes(total) + "（存在手机里，删掉不影响服务器）" }));
-    for (const it of items) {
-      const title = el("span", { class: "cell-label", text: it.id });
-      const row = el("div", { class: "cell", dataset: { role: "cached-row", media: String(it.id) } },
-        title,
-        el("span", { class: "cell-note", text: fmtBytes(Number(it.size) || 0) }));
-      // 播放：走深链交给原生播放器（它会优先用本地文件）
-      const play = el("button", { class: "btn small primary", type: "button", text: "播放",
-        dataset: { role: "cached-play" } });
-      play.addEventListener("click", (event) => {
-        event.stopPropagation();
-        location.hash = "#/play/feed/" + encodeURIComponent(it.id);
-      });
-      const del = el("button", { class: "btn small danger", type: "button", text: "删除",
-        dataset: { role: "cached-delete" } });
-      del.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (!window.confirm("删掉这一集的离线缓存？（只删手机上的文件）")) return;
-        try { bridge.deleteCached(String(it.id)); } catch (err) { /* 老版本 App 没有这个口 */ }
-        refresh();
-      });
-      row.append(el("span", { class: "actions" }, play, del));
-      listBox.append(row);
-    }
-    // 标题：按 id 查 API（有就换成真标题；没有就算了，别编）
-    for (const it of items) {
-      api.media(String(it.id)).then((m) => {
-        if (m && m.title) {
-          const row = listBox.querySelector('[data-role="cached-row"][media="' + it.id + '"] .cell-label');
-          if (row) row.textContent = m.title;
-        }
-      }).catch(() => { /* 记录没了就显示 id */ });
-    }
+    const total = items.reduce((sum, it) => sum + it.size, 0);
+    countLine.textContent = "共 " + items.length + " 集 · " + fmtBytes(total) + "（存在手机里，删掉不影响服务器）";
+    // 网格自己拼：videoGrid 只接受"数据项"、卡片选项由它自己定；这里每条要带自己的
+    // 深链与「删除缓存」按钮，所以直接用同一个 videoCard（样式/DOM 仍然只有一份）。
+    const grid = el("div", { class: "video-grid", dataset: { role: "cached-grid" } });
+    for (const it of items) grid.append(cachedCard(it));
+    listBox.append(grid);
+    hydrate(items);
   }
 
-  refresh();
+  // cachedCard：同一套卡片，角标给时长（和收藏一致），大小 + 删除放在标题下面的补充行里。
+  function cachedCard(item) {
+    const del = el("button", { class: "btn small danger", type: "button", text: "删除缓存",
+      dataset: { role: "cached-delete", media: item.id } });
+    del.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!window.confirm("删掉这一集的离线缓存？（只删手机上的文件）")) return;
+      try { bridge.deleteCached(item.id); } catch (err) { /* 老版本 App 没有这个口 */ }
+      render();
+    });
+    const card = videoCard(item, {
+      list: { key: "cached", navKey: "feed" },
+      href: "#/play/feed/" + encodeURIComponent(item.id),
+      meta: [el("span", { class: "muted small-note", text: fmtBytes(item.size) }), del],
+    });
+    card.dataset.role = "cached-row";
+    card.dataset.media = item.id;
+    const open = card.querySelector(".video-open");
+    if (open) open.dataset.role = "cached-play";
+    return card;
+  }
+
+  // 老缓存（升级前下的）本地没有标题：按 id 查一次 API 补上，补完重绘一次。
+  // 查不到就如实显示 #id（服务器记录可能已经删了，但手机上的文件还在）。
+  let hydrating = false;
+  function hydrate(items) {
+    const missing = items.filter((it) => !fetched[it.id] && (!it.title || !it.duration_ms));
+    if (hydrating || !missing.length) return;
+    hydrating = true;
+    Promise.all(missing.map((it) => api.media(it.id).then((m) => { if (m) fetched[it.id] = m; })
+      .catch(() => { fetched[it.id] = { title: "", duration_ms: 0 }; })))
+      .then(() => { hydrating = false; render(); })
+      .catch(() => { hydrating = false; });
+  }
+
+  render();
   return null;
 }
