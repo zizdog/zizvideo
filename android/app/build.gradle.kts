@@ -20,8 +20,8 @@ android {
         applicationId = "com.zizdog.zizvideo"
         minSdk = 24
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.2.6"
+        versionCode = 23
+        versionName = "0.2.8"
     }
 
     signingConfigs {
@@ -39,6 +39,9 @@ android {
         release {
             // 自用发布：正式签名（换包不用卸载重装）；不混淆，省得跟反射/媒体库打架。
             isMinifyEnabled = false
+            // ⚠️ 关掉 PNG 压缩：AGP 会把图**缩小**（实测 432 的自适应前景 → 128、512 的登录图 → 72，
+            // 图标直接糊）。图标/logo 这点体积不值得换清晰度（用户 2026-09-25 这轮踩到）。
+            isCrunchPngs = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
