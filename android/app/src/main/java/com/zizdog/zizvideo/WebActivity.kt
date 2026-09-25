@@ -624,6 +624,23 @@ class WebActivity : AppCompatActivity() {
         CookieManager.getInstance().flush() // 会话 cookie 落盘，重启免登录
     }
 
+    /**
+     * 窗口重新拿到焦点（App 回前台/退出小窗）时，请网页把"被浏览器策略摁成静音"的那次恢复回来。
+     * 为什么 App 能自动恢复、网页不能：这里设了 mediaPlaybackRequiresUserGesture=false，
+     * 页面可见就该允许有声；网页端浏览器一定要用户手势，只能由用户点喇叭。
+     * （用户 2026-09-25 报障：图标显示有声却没声，得点两下才有声音 —— 网页侧已改成图标跟着实际走，
+     *   App 侧再补这一下自动恢复。）
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || !::web.isInitialized) return
+        web.evaluateJavascript(
+            "(function(){var f=window.__zvSoundNudge;return f?f():false;})()") { r ->
+            // 结果落日志：true = 这次确实被策略摁过静音、已自动恢复；false = 没被摁（正常）
+            android.util.Log.i("zv-sound", "回到前台：nudge=" + r)
+        }
+    }
+
     override fun onDestroy() {
         mediaFuture?.let { MediaController.releaseFuture(it) }
         // 全屏视频要先收干净，否则会漏一个 SurfaceView

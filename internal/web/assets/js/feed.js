@@ -163,6 +163,9 @@ export function mountFeed(view, options = {}) {
     // 首页靠游标无限翻页；播放列表模式一次给全，没有"更多页"（goTo 到末尾就 clamp）
     hasMore: !playlist, loading: false,
     soundOn: readSoundPref(), // 与首页共用同一个偏好（localStorage 同一个键）
+    // 浏览器把"有声自动播放"摁掉过一次（没有用户手势时一定会被摁）⇒ 这一页实际是静音的。
+    // 图标必须跟着它走，否则就是用户报障的"图标显示有声、其实没声，要点两下"（2026-09-25）。
+    soundBlocked: false,
     scope: "", scopeName: "", nextCursor: "",
     libraries: [], librariesLoaded: !!playlist,
     // 剧场：自动连播写死开启、循环写死关闭（用户："自动连播且无法设置"）
@@ -356,7 +359,7 @@ export function mountFeed(view, options = {}) {
     }
 
     // 页面级行为（连播/手势/进度上报/声音提示）留在下面；"造 <video>"这一步是共享的。
-    const video = createMediaVideo(item, { muted: !state.soundOn, loop: loopEnabled() });
+    const video = createMediaVideo(item, { muted: !effectiveSoundOn(), loop: loopEnabled() });
     entry.video = video;
     video.playbackRate = state.settings.playback_rate; // B5 倍速：造出来就按设置
     // 长按画面 = 弹设置面板（用户 2026-09-24，同抖音）。
@@ -377,7 +380,7 @@ export function mountFeed(view, options = {}) {
       if (entry.paintPlayPause) entry.paintPlayPause();
       hideLoading(entry);
       hidePlayButton(entry);
-      if (!state.soundOn) showSoundHint(entry);
+      if (!effectiveSoundOn()) showSoundHint(entry);
     });
     video.addEventListener("pause", () => {
       if (entry.paintPlayPause) entry.paintPlayPause();
@@ -474,11 +477,15 @@ export function mountFeed(view, options = {}) {
   function tryPlay(entry) {
     const result = entry.video.play();
     if (result && typeof result.catch === "function") {
-      result.catch(() => {
+      result.then(() => {
+        // 这次真的按偏好播起来了（有手势之后浏览器就放行）⇒ 解除"被摁静音"的标记
+        if (entry.video && !entry.video.muted) clearSoundBlocked();
+      }).catch(() => {
         // 浏览器策略：没交互过不许"有声自动播放"。退回静音自动播（用户要的是"进入就播"），
         // 播起来了就提示一句去哪里开声音；真播不了才退回播放按钮。
         if (entry.destroyed || !entry.video || entry.video.muted) { showPlayButton(entry); return; }
-        entry.video.muted = true;
+        // ⚠️ 只改元素不改图标 = 用户看到"声音开着却没声、得点两下"（用户 2026-09-25 报障）。
+        markSoundBlocked();
         const retry = entry.video.play();
         if (retry && typeof retry.then === "function") {
           retry.then(() => showHint(entry, "已静音自动播放，点右下角喇叭开声"))
@@ -492,22 +499,56 @@ export function mountFeed(view, options = {}) {
 
   /* ---------- 声音（角落按钮，不再是单击画面） ---------- */
 
+  // 唯一的判据：**这一刻实际听不听得到**。偏好（localStorage）说"开"、但浏览器把有声自动播放
+  // 摁掉了（soundBlocked）时，实际是静音 —— 图标/提示/元素三者都必须按这个来。
+  // 原来只有"用户点喇叭"那一处会同步元素，被策略摁静音那次不同步 ⇒ 图标显示有声、实际没声，
+  // 用户得点两下（先静音、再开声）才有声音（用户 2026-09-25 报障）。
+  function effectiveSoundOn() {
+    return state.soundOn && !state.soundBlocked;
+  }
+
+  /** 把"实际该不该有声"落到**所有**已建条目上，并同步图标/提示（只此一处改 audio 状态）。 */
+  function applySound() {
+    const on = effectiveSoundOn();
+    for (const entry of state.built.values()) {
+      if (entry.video) entry.video.muted = !on;
+      paintSound(entry);
+      if (on) hideSoundHint(entry);
+    }
+  }
+
   function paintSound(entry) {
-    if (entry && entry.sound) setIcon(entry.sound, state.soundOn ? "volume" : "mute");
+    if (!entry || !entry.sound) return;
+    const on = effectiveSoundOn();
+    setIcon(entry.sound, on ? "volume" : "mute");
+    entry.sound.dataset.sound = on ? "on" : "off"; // 给验收脚本一个稳的判据（不是文案）
+  }
+
+  /** 浏览器不许"有声自动播放"：标记 + 图标与元素一起变静音（偏好不动，等用户点一下）。 */
+  function markSoundBlocked() {
+    if (state.soundBlocked) return;
+    state.soundBlocked = true;
+    applySound();
+  }
+
+  /** 有手势之后浏览器放行了：解除标记，按用户偏好恢复（图标与元素同时回到"有声"）。 */
+  function clearSoundBlocked() {
+    if (!state.soundBlocked) return;
+    state.soundBlocked = false;
+    applySound();
   }
 
   let soundToastReady = false
   function setSound(on) {
-    const changed = soundToastReady && state.soundOn !== !!on
-    soundToastReady = true
-    if (changed) showToast(on ? "声音已开" : "已静音")
+    const before = effectiveSoundOn();
+    // 这个调用只来自"用户点了喇叭/按了确定"⇒ 已经是手势，策略不再拦
+    state.soundBlocked = false;
     state.soundOn = !!on;
     writeSoundPref(state.soundOn);
-    for (const entry of state.built.values()) {
-      if (entry.video) entry.video.muted = !state.soundOn;
-      paintSound(entry);
-      if (state.soundOn) hideSoundHint(entry);
-    }
+    applySound();
+    const after = effectiveSoundOn();
+    if (soundToastReady && before !== after) showToast(after ? "声音已开" : "已静音");
+    soundToastReady = true;
   }
 
   function soundButton(entry) {
@@ -515,7 +556,8 @@ export function mountFeed(view, options = {}) {
     paintSound(entry);
     entry.sound.addEventListener("click", (event) => {
       event.stopPropagation();
-      setSound(!state.soundOn);
+      // 按"实际听不听得到"决定下一次 —— 被策略摁成静音时，点一下就该有声（不是先静音再开声）
+      setSound(!effectiveSoundOn());
     });
     return entry.sound;
   }
@@ -1787,6 +1829,15 @@ export function mountFeed(view, options = {}) {
   };
   window.zvPipMode = onPipMode;
 
+  // App（WebView）回到前台时由原生调它：WebView 设了 mediaPlaybackRequiresUserGesture=false，
+  // 只要页面可见就该有声 ⇒ 那次"被浏览器策略摁成的静音"可以自动恢复，用户不用再点一下喇叭。
+  // 网页端没有这个口（那种情况下浏览器一定要用户手势，只能由用户点）。
+  window.__zvSoundNudge = () => {
+    if (!state.soundBlocked || !state.soundOn) return false;
+    clearSoundBlocked();
+    return true;
+  };
+
   // App 的返回手势/返回键先问这里：
   //   ① 有面板开着 ⇒ 只关面板（播放内容一点不动）；
   //   ② 在全屏 ⇒ 退全屏；
@@ -1815,6 +1866,7 @@ export function mountFeed(view, options = {}) {
     if (window.zvPipMode === onPipMode) {
       try { delete window.zvPipMode; } catch (err) { window.zvPipMode = null; }
     }
+    try { delete window.__zvSoundNudge; } catch (err) { window.__zvSoundNudge = null; }
     releaseFullscreen(); // 返回/换页时把系统横屏与 document 全屏一并交还
     document.body.classList.remove("playing");
     document.body.classList.remove("rot-play");
