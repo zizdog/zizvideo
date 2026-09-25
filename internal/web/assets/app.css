@@ -201,6 +201,11 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 }
 .center-flash.fade { opacity: 0; }
 /* ⚙ 二级设置（从右下竖排栏的左侧弹出） */
+/* 播放区/面板都不许"选中文字"：长按弹面板时会顺带选中底下的文字，
+   系统随即弹出文字选择菜单（用户 2026-09-24 报障）。输入框例外，否则没法编辑数字。 */
+.feed, .feed * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.feed input, .feed textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+
 /* 设置面板（用户 2026-09-24：同抖音 —— 从下方弹出、宽度 100%、高度按内容适应） */
 .set-panel {
   position: absolute; z-index: 12; left: 0; right: 0;
@@ -224,11 +229,16 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 /* 抖音式分组卡片（参考用户给的图1/图2：内缩圆角卡片 + 每行"图标+文字+右侧值/开关"） */
 .sheet-group {
   display: flex; flex-direction: column;
+  /* ⚠️ flex: 0 0 auto 必须有：面板是 overflow:auto 的滚动容器，卡片作为 flex 子项会被"压缩"，
+      行就被裁到卡片背景之外（用户 2026-09-24 报障："列表超出 .sheet-group 容器"）。
+      同理行也要 flex: 0 0 auto，别让它们缩。 */
+  flex: 0 0 auto;
   margin: 8px 10px; border-radius: 12px; overflow: hidden;
   background: rgba(255,255,255,.07);
 }
 .sheet-row {
   display: flex; align-items: center; gap: 12px;
+  flex: 0 0 auto;   /* 同上：别被滚动容器压扁 */
   padding: 14px 16px; cursor: pointer; font-size: 15px; color: #fff;
 }
 .sheet-row + .sheet-row { border-top: 1px solid rgba(255,255,255,.06); }
@@ -259,9 +269,9 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 /* 行里的输入框（左右键跳转秒数）不要撑破卡片 */
 .sheet-form .set-row input[type="number"] { width: 64px; }
 /* 倍速分段（图2：0.75 / 1.0 / 1.25 … 当前档红色） */
-.sheet-seg { display: flex; gap: 14px; }
+.sheet-seg { display: flex; gap: 10px; }
 .sheet-seg-btn {
-  font: inherit; font-size: 15px; padding: 0; border: 0; background: transparent;
+  font: inherit; font-size: 14px; padding: 0; border: 0; background: transparent;
   color: rgba(255,255,255,.6); cursor: pointer;
 }
 .sheet-seg-btn.on { color: var(--accent); font-weight: 600; }
@@ -269,6 +279,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .set-form.sheet-form { gap: 0; }
 .sheet-form .set-row {
   justify-content: space-between; padding: 14px 16px; font-size: 15px;
+  flex: 0 0 auto;   /* 同上 */
   border-top: 1px solid rgba(255,255,255,.06);
 }
 .sheet-form .set-row:first-child { border-top: 0; }
@@ -432,8 +443,8 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 /* 用户 2026-09-24：底栏**只留文字**（去掉图标）、高度降下来，别占播放画面 */
 .nav-item {
   flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
-  padding: 10px 4px calc(10px + var(--sab)); text-decoration: none;
-  color: var(--muted); font-size: 14px;
+  padding: 15px 4px calc(15px + var(--sab)); text-decoration: none;
+  color: var(--muted); font-size: 15px;
 }
 .nav-item.on { color: var(--accent); font-weight: 600; }
 

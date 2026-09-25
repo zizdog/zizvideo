@@ -330,14 +330,10 @@ export function mountFeed(view, options = {}) {
 
     // 抖音式：操作图标竖排在右下角（收藏/喜欢/稍后再看/声音/设置，管理员多一个删除；
     // 剧场再多一个「选集」）—— 与首页**同一份代码**，不许各写一套。
-    // 边栏（用户 2026-09-24 最终定稿）：喜欢 / 收藏 / 缓存(App) / 选集 / 声音 / 删除 / 设置(仅 web) / 全屏。
-    // 小窗播放、投屏、稍后再看、清屏、播放设置在底部面板里；**分享暂时不出现**（用户：以后或许用到）。
+    // 边栏就 4 个（用户 2026-09-24 明确：点赞 / 收藏 / 声音 / 全屏，**不要再往里加**）。
+    // 其余入口全在底部设置面板里（长按画面或网页右键打开）；选集/删除也搬进面板，不占边栏。
     layer.append(el("div", { class: "ov-rail" },
-      entry.like, entry.fav,
-      nativeCacheAvailable() ? cacheButton(entry) : null,
-      entry.eps, soundButton(entry), entry.del,
-      inAppWebView() ? null : settingsButton(entry),
-      fullscreenButton()));
+      entry.like, entry.fav, soundButton(entry), fullscreenButton()));
     layer.append(centerPlayPause(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过。
@@ -637,6 +633,8 @@ export function mountFeed(view, options = {}) {
 
   function onEnded(entry) {
     flushProgress(entry.index, false);
+    // 面板开着时：只循环当前这条，不连播、不换条（用户 2026-09-24 的改进 3）
+    if (state.panelOpen) return;
     if (playlist) {
       // 剧场：自动连播（不可设置）；播完最后一集停止并说明，绝不循环回第一集。
       if (entry.index + 1 < state.items.length) {
@@ -798,6 +796,8 @@ export function mountFeed(view, options = {}) {
       // 剧场：自动连播写死开启且**不可设置**（用户要求），只留"跳转秒数"。
       lockAutoplay: !!playlist,
       variant: "sheet",
+      // 左右键跳转只在 web 有意义，App 里不显示这一行（用户 2026-09-24）
+      hideSeek: inAppWebView(),
     });
 
     // 第 1 组：投屏 / 小窗播放 / 缓存视频（能做才显示）
@@ -811,14 +811,28 @@ export function mountFeed(view, options = {}) {
       }));
     }
 
-    // 第 2 组：常用（清屏/稍后再看/分享 + 播放设置那一堆行，同一张卡片里）
+    // 第 2 组：常用（清屏/稍后再看 + 播放设置那一堆行，同一张卡片里）
     const common = el("div", { class: "sheet-group" });
+    if (playlist) {
+      // 剧场：选集（原来在边栏，边栏只留 4 个后搬到这里）
+      common.append(actionRow("theater", "选集", () => {
+        closePanels();
+        if (!entry.epsPanel) entry.layer.append(buildEpisodePanel(entry));
+        entry.epsPanel.classList.remove("hidden");
+      }, state.items.length + " 集"));
+    }
     const cleanRow = actionRow("down", "清屏播放", () => { toggleClean(); paintCommon(); });
     cleanRow.dataset.role = "sheet-clean";
     common.append(cleanRow);
     const laterRow = actionRow("clock", "稍后再看", () => { toggleWatchLater(entry); paintCommon(); });
     laterRow.dataset.role = "sheet-later";
     common.append(laterRow);
+    if (isAdmin()) {
+      // 管理员：删除入口（原来在边栏）。删除要弹确认框，所以这里**不自动收面板**
+      const delRow = actionRow("trash", "删除这个视频", () => askDelete(entry), "", false);
+      delRow.dataset.role = "sheet-delete";
+      common.append(delRow);
+    }
     common.append(entry.settingsForm.node);
 
     const groups = [];
@@ -862,13 +876,16 @@ export function mountFeed(view, options = {}) {
   }
 
   // 抖音式行：[图标] 标签 ………… 右侧值
-  function actionRow(iconName, label, onClick, rightText) {
+  // collapse=true（默认）：点完**立刻收起面板**回到播放（用户 2026-09-24：
+  // "任何操作完成都应该收起面板，如点了稍后再看后立刻收起，显示视频播放"）。
+  function actionRow(iconName, label, onClick, rightText, collapse) {
     const right = el("span", { class: "sheet-right muted", text: rightText || "" });
     const row = el("div", { class: "sheet-row", dataset: { role: "sheet-action" } },
       icon(iconName), el("span", { class: "sheet-label", text: label }), right);
     row.addEventListener("click", (event) => {
       event.stopPropagation();
       onClick();
+      if (collapse !== false) closePanels();
     });
     return row;
   }
@@ -877,6 +894,9 @@ export function mountFeed(view, options = {}) {
     if (entry.destroyed || !entry.layer) return;
     if (!entry.panel) entry.layer.append(ensureScrim(), buildPanel(entry));
     closePanels();
+    holdCurrent(true);   // 面板开着期间：当前这条一直循环，不许自动下一个
+    // 长按/右键可能顺带选中了底下的文字，进而弹出系统选择菜单（用户报障）——开面板时清掉选区
+    try { const sel = window.getSelection(); if (sel) sel.removeAllRanges(); } catch (err) { /* 忽略 */ }
     paintPanel(entry);
     ensureScrim().classList.remove("hidden");
     entry.panel.classList.remove("hidden");
@@ -910,6 +930,17 @@ export function mountFeed(view, options = {}) {
     }
     if (sheetScrim) sheetScrim.classList.add("hidden");
     if (picker) picker.classList.add("hidden");
+    holdCurrent(false); // 面板收起 ⇒ 恢复用户设置的连播/循环行为
+  }
+
+  // 面板开着时：当前这条一直循环，绝不自动下一个（用户 2026-09-24 的改进 3）。
+  // 收起后怎么播由用户的设置决定：开了连播/循环就照旧，都没开就播完暂停。
+  function holdCurrent(on) {
+    state.panelOpen = !!on;
+    const loop = on ? true : loopEnabled();
+    for (const entry of state.built.values()) {
+      if (entry.video) entry.video.loop = loop;
+    }
   }
 
   // 有面板开着吗？（返回手势/App 返回键先关它，再管全屏）
@@ -927,22 +958,14 @@ export function mountFeed(view, options = {}) {
     return !!window.ZvAndroid || /[?&]zv=app(&|#|$)/.test(location.search + location.hash);
   }
 
-  // 设置入口（侧栏，仅网页端显示；App 里靠长按弹面板 —— 与抖音一致）
-  function settingsButton(entry) {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "播放设置",
-      dataset: { role: "rail-settings" } }, icon("gear"));
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openPanel(entry);
-    });
-    return btn;
-  }
+  // 设置入口：**不放边栏**（用户 2026-09-24 定稿：边栏只有 4 个）。
+  // 网页端右键（contextmenu）或长按画面打开；App 里只有长按。
 
   function applySettings() {
     const loop = loopEnabled();
     for (const entry of state.built.values()) {
       if (entry.video) {
-        entry.video.loop = loop;
+        entry.video.loop = state.panelOpen ? true : loop;
         // 正在长按快进时不要被设置刷新覆盖（松手时按新倍速还原）
         if (!entry.fastForward) entry.video.playbackRate = state.settings.playback_rate;
       }
@@ -1050,35 +1073,12 @@ export function mountFeed(view, options = {}) {
     }
   }
 
-  function shareButton(entry) {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "分享",
-      dataset: { role: "rail-share" } }, icon("share"));
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      shareItem(entry);
-    });
-    return btn;
-  }
-
   // 缓存视频：只有 App 里有原生桥（ZvAndroid.cacheVideo）才显示 —— 网页端下不了"到本机离线看"
   function nativeCacheAvailable() {
     return !!(window.ZvAndroid && typeof window.ZvAndroid.cacheVideo === "function");
   }
 
-  function cacheButton(entry) {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "缓存视频",
-      dataset: { role: "rail-cache" } }, icon("download"));
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      try {
-        window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || "");
-        showToast("开始缓存，进度看通知栏");
-      } catch (err) {
-        showToast("这台设备缓存不了");
-      }
-    });
-    return btn;
-  }
+
 
   // 旋转全屏（用户 2026-09-24）：**不许依赖系统自动旋转**。
   // 三级策略：① 安卓原生桥能接管就交给它（真·系统横屏）；
@@ -1617,6 +1617,18 @@ export function mountFeed(view, options = {}) {
     showToast((direction > 0 ? "前进 " : "后退 ") + seconds + " 秒");
   }
 
+  // 网页端：右键 = 打开设置面板（用户 2026-09-24），并且**屏蔽浏览器自己的右键菜单**。
+  // 面板/输入框里的右键照旧（不拦），否则编辑数字时没法用系统菜单。
+  function onContextMenu(event) {
+    if (event.target && typeof event.target.closest === "function" &&
+        event.target.closest(".set-panel, .sheet-scrim, input, textarea")) {
+      return;
+    }
+    event.preventDefault();
+    const entry = state.built.get(state.active);
+    if (entry) openPanel(entry);
+  }
+
   function onKeyDown(event) {
     const target = event.target;
     const tag = target && target.tagName ? target.tagName : "";
@@ -1655,6 +1667,7 @@ export function mountFeed(view, options = {}) {
   feed.addEventListener("touchstart", onTouchStart, { passive: true });
   feed.addEventListener("touchend", onTouchEnd, { passive: true });
   document.addEventListener("keydown", onKeyDown);
+  document.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("pagehide", onPageHide);
   document.addEventListener("visibilitychange", onVisibility);
 
@@ -1721,6 +1734,7 @@ export function mountFeed(view, options = {}) {
     feed.removeEventListener("touchstart", onTouchStart);
     feed.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("keydown", onKeyDown);
+    document.removeEventListener("contextmenu", onContextMenu);
     window.removeEventListener("pagehide", onPageHide);
     document.removeEventListener("visibilitychange", onVisibility);
     flushProgress(state.active, false);

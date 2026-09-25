@@ -103,10 +103,12 @@ export function createFeedSettingsForm(options) {
   }
   const rateSheetRow = sheetRow("speed", "倍速", rateSeg);
 
+  // 左右键跳转只对 web 有意义（App 里没有键盘）⇒ sheet 变体下可以整行不显示（用户 2026-09-24）
+  const hideSeek = !!opts.hideSeek;
   const form = sheet
     ? el("div", { class: "set-form sheet-form" },
         rateSheetRow,
-        seekRow,
+        hideSeek ? null : seekRow,
         lockAutoplay ? null : loopRow,
         lockAutoplay ? null : autoRow,
         lockAutoplay ? null : enterRow,

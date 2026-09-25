@@ -156,6 +156,26 @@ object OfflineStore {
         return removed
     }
 
+    /**
+     * 已缓存清单的 JSON（给网页「我的 → 已缓存」）：`[{"id":"med_x","size":123}]`。
+     * 文件名就是 media id（enqueue 时定的），所以不用另建索引表。
+     */
+    fun listJson(context: Context): String {
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), DIR)
+        val files = dir.listFiles() ?: return "[]"
+        val sb = StringBuilder("[")
+        var first = true
+        for (f in files) {
+            if (!f.isFile || f.length() <= 0 || !f.name.endsWith(".mp4")) continue
+            if (!first) sb.append(",")
+            first = false
+            val id = f.name.removeSuffix(".mp4")
+            sb.append("{\"id\":\"").append(id).append("\",\"size\":").append(f.length()).append("}")
+        }
+        sb.append("]")
+        return sb.toString()
+    }
+
     /** 已缓存了多少集 + 占多大（播放页显示"已缓存 N 集 / X MB"用）。 */
     fun usage(context: Context): Pair<Int, Long> {
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), DIR)

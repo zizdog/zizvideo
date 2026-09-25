@@ -9,7 +9,7 @@ import { mountNav } from "./js/nav.js";
 import { mountSeries, mountSeriesPlay } from "./js/series.js";
 import { mountFavorites } from "./js/favorites.js";
 import { mountRecordPlay } from "./js/cards.js";
-import { mountMe } from "./js/me.js";
+import { mountMe, mountCached } from "./js/me.js";
 import { mountSettings } from "./js/settings.js";
 import { mountUpload, mountMyUploads } from "./js/upload.js";
 import { mountSearch } from "./js/search.js";
@@ -171,6 +171,11 @@ function route() {
   }
   if (path === "/me/uploads") {
     show((view) => withNav(view, "me", () => mountMyUploads(view)));
+    return;
+  }
+  // 手机 App 的离线缓存管理（清单/删除走原生桥，播放在 App 里交给原生播放器）
+  if (path === "/me/cached") {
+    show((view) => withNav(view, "me", () => mountCached(view)));
     return;
   }
   if (path !== "/feed") { replace("#/feed"); return; }

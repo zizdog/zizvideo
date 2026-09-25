@@ -152,6 +152,19 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /** 网页「我的 → 已缓存」要的清单：JSON 数组 [{id,size}]（标题由网页按 id 去 API 查）。 */
+        @android.webkit.JavascriptInterface
+        fun listCached(): String {
+            return OfflineStore.listJson(this@WebActivity)
+        }
+
+        /** 删掉某一集的离线缓存（只删手机上的文件）。 */
+        @android.webkit.JavascriptInterface
+        fun deleteCached(mediaId: String): Boolean {
+            if (mediaId.isBlank()) return false
+            return OfflineStore.delete(this@WebActivity, mediaId)
+        }
+
         /** 网页进入/退出全屏（沉浸态）时告知原生：返回手势要据此先退出全屏。 */
         @android.webkit.JavascriptInterface
         fun setImmersive(on: Boolean) {
