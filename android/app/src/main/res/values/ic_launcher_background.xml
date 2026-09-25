@@ -2,4 +2,6 @@
 <!-- 自适应图标的背景色：与 App 的深色主题一致（用户 2026-09-24 只保留暗色） -->
 <resources>
     <color name="ic_launcher_background">#FF0B0D10</color>
+    <!-- 图2（可选图标）的底色 -->
+    <color name="ic_launcher_fig2_background">#FF111111</color>
 </resources>

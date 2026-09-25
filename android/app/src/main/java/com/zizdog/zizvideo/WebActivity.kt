@@ -223,6 +223,17 @@ class WebActivity : AppCompatActivity() {
         @android.webkit.JavascriptInterface
         fun appVersion(): String = Updater.appVersion(this@WebActivity)
 
+        /** 现在用的是哪个 App 图标（dog / fig2；用户 2026-09-25）。 */
+        @android.webkit.JavascriptInterface
+        fun appIcon(): String = AppIcon.current(this@WebActivity)
+
+        /** 网页点「App 图标」：原生弹一个二选一（带说明），选完就地切换。 */
+        @android.webkit.JavascriptInterface
+        fun chooseAppIcon(): Boolean {
+            runOnUiThread { showIconChooser() }
+            return true
+        }
+
         /** 网页点「检查更新」：interactive=true 时"已是最新"也要说一句（自动检查时不打扰）。 */
         @android.webkit.JavascriptInterface
         fun checkUpdate(interactive: Boolean): Boolean {
@@ -244,7 +255,8 @@ class WebActivity : AppCompatActivity() {
         fun prepare(payload: String) {
             val service = PlaybackService.instance ?: return
             val p = parsePayload(payload) ?: return
-            service.prepareItems(p.ids, p.titles, p.index)
+            // positionMs 一起带上：预热位置跟着网页进度走，交接时不用从头缓冲（用户 2026-09-25）
+            service.prepareItems(p.ids, p.titles, p.index, p.positionMs)
         }
 
         @android.webkit.JavascriptInterface
@@ -329,15 +341,27 @@ class WebActivity : AppCompatActivity() {
             if (!p || !window.ZvAndroid || !window.ZvAndroid.prepare) return;
             try { ZvAndroid.prepare(JSON.stringify(p)); } catch (e) {}
           }, true);
+          // 播放中每隔几秒把**当前进度**也报给原生：预热位置跟着往前走，
+          // 退后台交接时就不用从很旧的位置重新缓冲（"退到桌面卡一下"的根子）
+          document.addEventListener('timeupdate', function (e) {
+            var v = e.target;
+            if (!v || v.paused || !window.ZvAndroid || !window.ZvAndroid.prepare) return;
+            var p = payload();
+            if (!p) return;
+            try { ZvAndroid.prepare(JSON.stringify(p)); } catch (err) {}
+          }, true);
           document.addEventListener('visibilitychange', function () {
             if (document.visibilityState !== 'hidden') return;
             var p = payload();
             if (!p || !window.ZvAndroid) return;
-            try { ZvAndroid.handOff(JSON.stringify(p)); } catch (e) { return; }
             window.__zvHandedOff = p.ids[p.index];
+            // ⚠️ 顺序很重要（用户 2026-09-25 报障："退到桌面声音回退一两秒"）：
+            // 先**暂停网页这一路**，再把位置交给原生。反过来的话网页还会继续播几百毫秒~一两秒，
+            // 而原生是从"交出去那一刻"的位置开始放 ⇒ 这段时间的声音被放了两遍（听着就是回退/卡一下）。
             try {
               [].slice.call(document.querySelectorAll('video')).forEach(function (v) { v.pause(); });
             } catch (e) {}
+            try { ZvAndroid.handOff(JSON.stringify(p)); } catch (e) { return; }
           });
         })();
     """.trimIndent()
@@ -764,6 +788,27 @@ class WebActivity : AppCompatActivity() {
 
     private fun toast(text: String) {
         android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * 换 App 图标：二选一（dog 默认 / 图2）。
+     * 为什么用原生弹窗而不是网页画：图标是桌面那边的东西，弹窗里能把两个选项说清楚，
+     * 而且切完当场就能告诉用户"回桌面看看"（启动器刷新有延迟，不能默默换完就算）。
+     */
+    private fun showIconChooser() {
+        val keys = AppIcon.KEYS
+        val labels = keys.map { AppIcon.label(it) + if (AppIcon.current(this) == it) "（当前）" else "" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("App 图标")
+            .setItems(labels) { _, which ->
+                val key = keys[which]
+                val changed = AppIcon.set(this, key)
+                toast(if (!changed) "已经是这个图标了" else "已换成「" + AppIcon.label(key) + "」，回桌面看一眼（启动器可能要等一会儿）")
+                // 让网页那一行跟着刷新
+                web.evaluateJavascript("window.__zvPaintIcon && window.__zvPaintIcon()", null)
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     override fun onDestroy() {

@@ -25,7 +25,7 @@ import (
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.2.10-mvp"
+var Version = "0.3.0-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {

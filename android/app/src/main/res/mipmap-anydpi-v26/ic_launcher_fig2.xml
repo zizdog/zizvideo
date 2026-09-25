@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 可选图标（用户 2026-09-25 给的图2）：深色底 + 音符 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_fig2_background" />
+    <foreground android:drawable="@drawable/ic_launcher_fig2_foreground" />
+</adaptive-icon>

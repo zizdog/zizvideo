@@ -158,7 +158,19 @@ class PlaybackService : MediaSessionService() {
             this, 0, Intent(this, PlayerActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        session = MediaSession.Builder(this, player).setSessionActivity(openApp).build()
+        // 系统通知/锁屏/状态栏里的封面：媒体库自己会去拉 MediaMetadata.artworkUri，
+        // 但封面接口要会话 cookie ⇒ 给它一个**带 cookie 的数据源**（用同一份 header 注入逻辑）。
+        // 没有这一句，通知里就只有文字、没有抖音那种封面/预览（用户 2026-09-25 报障）。
+        val artExecutor = com.google.common.util.concurrent.MoreExecutors.listeningDecorator(
+            java.util.concurrent.Executors.newSingleThreadExecutor(),
+        )
+        val artLoader = androidx.media3.session.CacheBitmapLoader(
+            androidx.media3.datasource.DataSourceBitmapLoader(artExecutor, factory),
+        )
+        session = MediaSession.Builder(this, player)
+            .setSessionActivity(openApp)
+            .setBitmapLoader(artLoader)
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -166,20 +178,40 @@ class PlaybackService : MediaSessionService() {
     /** 已经预热过的队列指纹（ids+index）：重复 prepare 不重置缓冲，交接才能"无缝"。 */
     private var preparedKey = ""
 
+    /** 预热带到哪个位置了（网页每隔一会儿报一次进度，见 prepareItems）。 */
+    private var warmPositionMs = 0L
+
     /**
      * 预热：只把队列准备好 + prepare()（不播）。网页一开播就调它 ⇒ 退后台交接时不用现拉流，
      * 不会"卡一下"（用户 2026-09-23 报障）。
+     *
+     * positionMs（用户 2026-09-25 新增）：网页播放中会隔一会儿报一次**当前进度**，同一条时
+     * 只把预热位置往前挪（一次 seek，不用重建队列）—— 退后台交接时就不用从很旧的位置重新缓冲，
+     * 这才是"退到桌面卡一下 / 声音回退一两秒"的根子。
      */
-    fun prepareItems(ids: List<String>, titles: List<String>, index: Int) {
+    fun prepareItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long = 0L) {
         if (ids.isEmpty()) return
         val key = ids.joinToString(",") + "#" + index
-        if (key == preparedKey) return
-        preparedKey = key
         base = Prefs(this).baseUrl
+        if (key == preparedKey) {
+            // 同一条：只挪预热位置。只在"确实往前走了"时动，避免每几秒来一次无意义的 seek。
+            if (positionMs > warmPositionMs + 2000) {
+                warmPositionMs = positionMs
+                val start = index.coerceIn(0, ids.size - 1)
+                handler.post {
+                    if (player.mediaItemCount > start && !player.isPlaying) {
+                        player.seekTo(start, positionMs)
+                    }
+                }
+            }
+            return
+        }
+        preparedKey = key
+        warmPositionMs = positionMs
         val items = buildItems(ids, titles)
         val start = index.coerceIn(0, items.size - 1)
         handler.post {
-            player.setMediaItems(items, start, 0L)
+            player.setMediaItems(items, start, positionMs.coerceAtLeast(0L))
             player.prepare()
             player.pause()
         }
@@ -194,6 +226,11 @@ class PlaybackService : MediaSessionService() {
             .setMediaMetadata(
                 androidx.media3.common.MediaMetadata.Builder()
                     .setTitle(titles.getOrNull(i)?.ifBlank { id } ?: id)
+                    // 封面：系统媒体通知/锁屏/状态栏里那个大图（用户 2026-09-25："状态栏播放没有图标，
+                    // 抖音/bilibili 都有封面"）。封面接口要会话 cookie ⇒ MediaSession 配了带 cookie 的
+                    // DataSourceBitmapLoader（见 onCreate）。
+                    .setArtworkUri(android.net.Uri.parse(
+                        "$base/api/v1/media/" + android.net.Uri.encode(id) + "/cover"))
                     .build(),
             )
             .build()
@@ -207,6 +244,9 @@ class PlaybackService : MediaSessionService() {
         val warm = key == preparedKey
         val items = buildItems(ids, titles)
         val start = index.coerceIn(0, items.size - 1)
+        // 交接日志：定位"退到桌面卡一下 / 声音回退一两秒"必须看得见两边的时间点
+        android.util.Log.i("zv-handoff", "playItems warm=$warm index=$start pos=$positionMs key=" +
+            key.take(24) + "… items=${items.size} warmPos=$warmPositionMs")
         handler.post {
             if (warm && player.mediaItemCount == items.size) {
                 // 已经预热过同一条：只对齐位置就播，省掉重新拉流那一下（"卡一下"就是这个）
@@ -216,7 +256,13 @@ class PlaybackService : MediaSessionService() {
                 player.prepare()
             }
             preparedKey = key
+            warmPositionMs = positionMs
             player.play()
+            // 起来之后回报一次真实位置：和交接前的网页位置一比，就知道有没有回退/空档
+            handler.postDelayed({
+                android.util.Log.i("zv-handoff", "native started at " + player.currentPosition +
+                    "ms（交接时给的是 " + positionMs + "ms）")
+            }, 1200)
         }
     }
 
@@ -234,7 +280,13 @@ class PlaybackService : MediaSessionService() {
                 MediaItem.Builder()
                     .setUri(local ?: m.streamUrl)
                     .setMediaId(m.id)
-                    .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(m.title).build())
+                    .setMediaMetadata(
+                        androidx.media3.common.MediaMetadata.Builder()
+                            .setTitle(m.title)
+                            .setArtworkUri(android.net.Uri.parse(
+                                "$base/api/v1/media/" + android.net.Uri.encode(m.id) + "/cover"))
+                            .build(),
+                    )
                     .build()
             }
             val index = list.indexOfFirst { it.id == mediaId }.coerceAtLeast(0)

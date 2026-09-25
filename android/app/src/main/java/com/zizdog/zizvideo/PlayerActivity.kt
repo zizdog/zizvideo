@@ -479,7 +479,14 @@ class PlayerActivity : AppCompatActivity() {
                 MediaItem.Builder()
                     .setUri(local ?: m.streamUrl)
                     .setMediaId(m.id)
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(m.title).build())
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(m.title)
+                            // 封面：系统媒体通知/锁屏上的大图（与后台服务那套一致）
+                            .setArtworkUri(android.net.Uri.parse(
+                                base.trimEnd('/') + "/api/v1/media/" + android.net.Uri.encode(m.id) + "/cover"))
+                            .build(),
+                    )
                     .build()
             }
             val index = list.indexOfFirst { it.id == mediaId }.coerceAtLeast(0)

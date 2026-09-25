@@ -72,6 +72,22 @@ export function mountMe(view, options) {
       try { window.ZvAndroid.checkUpdate(true); } catch (err) { /* 老版本 App 没这个口 */ }
     });
   }
+  // 换 App 图标（用户 2026-09-25）：desktop 图标是原生的事，这里只做一个入口 + 显示当前用的是哪个。
+  if (window.ZvAndroid && typeof window.ZvAndroid.chooseAppIcon === "function") {
+    const iconCell = cell("#/me", "App 图标", "读取中…", "me-icon");
+    settings.append(iconCell);
+    const note = iconCell.querySelector(".cell-note");
+    const paint = () => {
+      try { note.textContent = window.ZvAndroid.appIcon() === "fig2" ? "图2（音符）" : "dog（默认）"; }
+      catch (err) { note.textContent = "读取失败"; }
+    };
+    paint();
+    window.__zvPaintIcon = paint; // 原生切完图标回调它刷新这一行
+    iconCell.addEventListener("click", (event) => {
+      event.preventDefault();
+      try { window.ZvAndroid.chooseAppIcon(); } catch (err) { /* 老版本 App 没这个口 */ }
+    });
+  }
   // 用户上传（UGC）：只有开了白名单的账号才显示入口（管理员天然有）
   if (user.role === "admin" || user.can_upload) {
     settings.append(cell("#/upload", "上传视频", "进了待审区，管理员通过后入库", "me-upload"));

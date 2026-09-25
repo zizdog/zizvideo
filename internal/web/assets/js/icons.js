@@ -50,22 +50,34 @@ export const ICONS = {
   speed: "M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.44zm-9.79 6.84a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z",
   // B4 投屏（AirPlay / Chromecast，走 Remote Playback API）
   cast: "M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11z",
+  // 清屏播放（用户 2026-09-25 给的图1：一把刷子/扫把 ⇒ 顾名思义"扫干净画面"）。
+  // 它是 1024 画布的单条路径，所以这里用 {paths, box} 形式（见 icon() 的两种取值）。
+  clean: {
+    box: "0 0 1024 1024",
+    paths: ["M224.463 567.537H872.73c21.438 0 31.53-15.88 22.39-35.281l-76.464-162.6c-9.14-19.4-34.158-35.28-55.597-35.28H628.963v-148.34c0-21.459-17.554-38.994-38.992-38.994h-77.987c-21.438 0-38.994 17.535-38.994 38.994v148.341H334.133c-21.457 0-46.457 15.878-55.578 35.28l-76.501 162.599c-9.12 19.4 0.951 35.28 22.409 35.28z m630.027 36.206H257.06c3.255 60.108 1.847 132.478-48.037 175.414-69.857 60.108-46.306 125.89 3.256 151.898h101.424c19.609-17.135 64.987-90.768 81.148-170.254-7.75 50.074-24.98 153.27-37.565 170.254h73.397c20.901-17.135 63.397-93.423 81.149-170.254-7.75 50.074-24.98 153.27-37.566 170.254h92.495c22.039-16.623 58.903-88.303 81.129-170.254-5.5 46.111-24.942 153.27-37.546 170.254h92.894c16.293-12.868 55.205-71.578 81.129-170.254-7.73 50.074-24.961 153.27-37.566 170.254h93.427s61.633-22.105 51.999-93.41c-13.747-101.67-19.23-158.181-37.737-233.902z"],
+  },
 };
 
 /**
  * icon(name) 返回一个 <svg> 元素（fill=currentColor）。名字不认识就抛错 —— 悄悄画个空白比报错更难查。
+ * 两种取值：字符串（24×24 的单条 path，绝大多数图标）或 { paths, box }
+ * （用户给的图是 1024 画布 / 多条 path 时用这种，别硬把坐标缩成 24 —— 缩错过就是一团乱麻）。
  */
 export function icon(name) {
-  const path = ICONS[name];
-  if (!path) throw new Error("未知图标：" + name);
+  const def = ICONS[name];
+  if (!def) throw new Error("未知图标：" + name);
+  const isObj = typeof def === "object";
+  const paths = isObj ? def.paths : [def];
   const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("viewBox", isObj && def.box ? def.box : "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  const p = document.createElementNS(SVG_NS, "path");
-  p.setAttribute("d", path);
-  p.setAttribute("fill", "currentColor");
-  svg.append(p);
+  for (const d of paths) {
+    const p = document.createElementNS(SVG_NS, "path");
+    p.setAttribute("d", d);
+    p.setAttribute("fill", "currentColor");
+    svg.append(p);
+  }
   return svg;
 }
 

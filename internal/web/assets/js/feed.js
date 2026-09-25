@@ -889,7 +889,8 @@ export function mountFeed(view, options = {}) {
         entry.epsPanel.classList.remove("hidden");
       }, state.items.length + " 集"));
     }
-    const cleanRow = actionRow("down", "清屏播放", () => { toggleClean(); paintCommon(); });
+    // 清屏播放图标 = 用户给的图1（一把刷子，2026-09-25）
+    const cleanRow = actionRow("clean", "清屏播放", () => { toggleClean(); paintCommon(); });
     cleanRow.dataset.role = "sheet-clean";
     common.append(cleanRow);
     const laterRow = actionRow("clock", "稍后再看", () => { toggleWatchLater(entry); paintCommon(); });

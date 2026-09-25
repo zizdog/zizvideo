@@ -37,12 +37,9 @@
             android:name=".LoginActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <!-- 电视桌面（Leanback）也列这个入口：遥控器点开就是同一套界面 -->
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
+            <!-- ⚠️ 这里**不再放** MAIN/LAUNCHER：桌面入口交给下面两个 activity-alias
+                 （用户 2026-09-25 要"换 App 图标"；两个别名各带一个图标，运行时只启用一个，
+                 否则桌面会出现两个图标）。 -->
             <!-- 快捷方式用自家 scheme 进来（zizvideo://listen/feed 等） -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -53,6 +50,37 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- 桌面图标别名（换图标功能）：同一份代码，两个图标，运行时只启用一个。
+             android:enabled 的初值就是"默认图标 = dog"。 -->
+        <activity-alias
+            android:name=".IconDog"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_dog"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_dog"
+            android:targetActivity=".LoginActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconFig2"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_fig2"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_fig2"
+            android:targetActivity=".LoginActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- 原生播放页：ExoPlayer 硬解；退出页面后由 PlaybackService 继续放（后台/锁屏） -->
         <!-- B4：支持画中画（点播放页的小窗按钮 ⇒ 缩成浮窗继续放，可以边刷别的） -->
