@@ -4,4 +4,6 @@
     <color name="ic_launcher_background">#FF0B0D10</color>
     <!-- 图2（可选图标）的底色 -->
     <color name="ic_launcher_fig2_background">#FF111111</color>
+    <!-- 默认图标（狗头）的底色：用户给的 svg.svg 里那块绿 -->
+    <color name="ic_launcher_default_background">#FF36AB60</color>
 </resources>

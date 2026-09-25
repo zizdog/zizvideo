@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 默认图标（用户 2026-09-25 给的 svg.svg）：绿底 + 白色狗头（自适应图标，系统自己套圆形/圆角遮罩）。
+     前景是 PNG（那张图有阴影滤镜/use 引用，硬转 VectorDrawable 容易画错 —— 出图更稳），
+     放 drawable-xxxhdpi，图形按"安全区 72/108"缩好、居中。 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_default_background" />
+    <foreground android:drawable="@drawable/ic_launcher_default_foreground" />
+</adaptive-icon>

@@ -78,7 +78,7 @@ export function mountMe(view, options) {
     settings.append(iconCell);
     const note = iconCell.querySelector(".cell-note");
     const paint = () => {
-      try { note.textContent = window.ZvAndroid.appIcon() === "fig2" ? "图2（音符）" : "dog（默认）"; }
+      try { note.textContent = window.ZvAndroid.appIcon() === "fig2" ? "图2（音符）" : "默认（狗头标）"; }
       catch (err) { note.textContent = "读取失败"; }
     };
     paint();

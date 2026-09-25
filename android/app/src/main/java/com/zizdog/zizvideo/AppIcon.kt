@@ -28,7 +28,7 @@ object AppIcon {
 
     fun label(key: String): String = when (key) {
         FIG2 -> "图2（音符）"
-        else -> "dog（默认）"
+        else -> "默认（狗头标）"
     }
 
     /** 现在用的是哪个图标。 */
