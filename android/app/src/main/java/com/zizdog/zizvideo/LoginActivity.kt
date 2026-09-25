@@ -27,6 +27,9 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var tlsBox: android.widget.CheckBox
     private lateinit var rememberBox: android.widget.CheckBox
 
+    /** 这一次启动是否已经有结论（进网页了 / 该露表单了）—— 给遮罩看门狗用。 */
+    private var settled = false
+
     /** 快捷方式要求直接开播的队列（zizvideo://listen/feed ⇒ "feed"）。 */
     private var listenKind = ""
 
@@ -80,12 +83,43 @@ class LoginActivity : AppCompatActivity() {
         // ⚠️ 顺序很重要：必须等 `login` 的点击监听器和 intent（listenKind/pickUploads）都就绪，
         //    再来决定"怎么进" —— 否则 performClick() 没监听器（等于没点）、或 enterWeb 时 listenKind 还是空的
         //    （实测：把这两句放在上面，就变成"记住了口令也不会自动登录"）。
-        val silent = silentEntryIfPossible()
-        if (!silent && prefs.remember && prefs.password.isNotBlank()) {
-            login.performClick()
+        // 启动路线（用户 2026-09-25："每次打开都明显看到登录信息，应该只显示 logo，登录成功直接进播放"）：
+        //   · 有会话 cookie，或记住了口令 ⇒ **全程盖着只显示 logo 的遮罩**，成功就进播放；
+        //   · 两样都没有（首次使用/没勾记住）⇒ 才收遮罩露表单。
+        // 关键：遮罩只由"决定露表单"（showForm）或"登录失败"（fail）来收 ——
+        // 原来那句 autoEnterIfLoggedIn() 是无条件收遮罩，于是走"用记住的口令自动登录"那一秒里
+        // 表单是露着的，正是用户看到的那一下。
+        val cookie = if (prefs.baseUrl.isBlank()) "" else
+            (CookieManager.getInstance().getCookie(prefs.baseUrl) ?: "")
+        val canSilent = prefs.baseUrl.isNotBlank() &&
+            (cookie.isNotBlank() || (prefs.remember && prefs.password.isNotBlank()))
+        if (canSilent) {
+            splash.visibility = View.VISIBLE
+            armSplashWatchdog()
+            silentEntryIfPossible()
+        } else {
+            showForm("")
         }
-        // 静默通道已经处理过了；这里只保证遮罩不会卡在屏幕上
-        autoEnterIfLoggedIn()
+    }
+
+    /** 遮罩看门狗：万一探活/登录卡住，10 秒后也要把表单露出来（不能把用户锁在 logo 上）。 */
+    private fun armSplashWatchdog() {
+        splash.postDelayed({
+            if (!settled) {
+                android.util.Log.w("zv-login", "splash watchdog fired")
+                fail(getString(R.string.err_login_timeout))
+            }
+        }, 10000)
+    }
+
+    /** 收起遮罩、露出登录表单（只在"必须用户自己输"时才调用）。 */
+    private fun showForm(note: String) {
+        settled = true
+        // 落日志：验收脚本靠它判断"这次启动到底有没有露表单"（用户报的就是不该露的时候露了）
+        android.util.Log.i("zv-login", "form shown（" + (if (note.isEmpty()) "首次/no-cred" else note) + "）")
+        splash.visibility = View.GONE
+        status.visibility = if (note.isEmpty()) View.GONE else View.VISIBLE
+        status.text = note
     }
 
     /**
@@ -98,7 +132,15 @@ class LoginActivity : AppCompatActivity() {
         val base = prefs.baseUrl
         if (base.isBlank()) return false
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
-        if (cookie.isBlank()) return false
+        if (cookie.isBlank()) {
+            // 没有 cookie，但记住了口令 ⇒ 直接用口令登（遮罩保持显示，用户看不到表单）
+            if (prefs.remember && prefs.password.isNotBlank()) {
+                android.util.Log.i("zv-login", "no cookie → auto login with saved password（遮罩保持）")
+                login.performClick()
+                return true
+            }
+            return false
+        }
         splash.visibility = View.VISIBLE
         android.util.Log.i("zv-login", "silent probe base=" + base)
         Thread {
@@ -109,25 +151,18 @@ class LoginActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (me != null && me.ok) enterWeb(base, "")
-                else {
-                    // 会话过期：记过口令就**直接自动登录**（用户要"打开就进"，不是再点一次登录）；
-                    // 没记口令才露表单。
-                    splash.visibility = View.GONE
-                    if (prefs.remember && prefs.password.isNotBlank()) {
-                        android.util.Log.i("zv-login", "session expired → auto login with saved password")
-                        login.performClick()
-                    } else {
-                        android.util.Log.i("zv-login", "form shown（会话过期且没记口令）")
-                    }
+                else if (prefs.remember && prefs.password.isNotBlank()) {
+                    // 会话过期：记过口令就直接自动登录（用户要"打开就进"，不是再点一次登录）——
+                    // 遮罩**不收**，全程只有 logo。
+                    android.util.Log.i("zv-login", "session expired → auto login with saved password")
+                    login.performClick()
+                } else {
+                    android.util.Log.i("zv-login", "form shown（会话过期且没记口令）")
+                    showForm(getString(R.string.err_session_expired))
                 }
             }
         }.start()
         return true
-    }
-
-    private fun autoEnterIfLoggedIn() {
-        // 静默通道已经处理过了（含"过期就露表单"），这里只负责别让遮罩卡住
-        splash.visibility = View.GONE
     }
 
     private fun submit() {
@@ -151,6 +186,8 @@ class LoginActivity : AppCompatActivity() {
         prefs.password = if (rememberBox.isChecked) pass else ""
         server.setText(base)
 
+        runOnUiThread { splash.visibility = View.VISIBLE }
+        armSplashWatchdog()
         setBusy(true, getString(R.string.action_checking))
         Thread {
             val probe = try {
@@ -209,10 +246,13 @@ class LoginActivity : AppCompatActivity() {
 
     private fun fail(message: String) {
         android.util.Log.w("zv-login", "login failed: " + message)
+        // 只有失败/过期才把登录信息露出来（用户要求）
+        runOnUiThread { showForm(message) }
         setBusy(false, message)
     }
 
     private fun enterWeb(base: String, note: String) {
+        settled = true
         setBusy(false, note)
         if (listenKind.isNotBlank()) {
             // 快捷方式"听首页"：直接起原生播放器（队列由 GET /feed/next 拉），不用先进网页

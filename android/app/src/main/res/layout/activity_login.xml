@@ -126,8 +126,7 @@
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:gravity="center"
-        android:background="@color/zv_splash_bg"
-        android:visibility="gone">
+        android:background="@color/zv_splash_bg">
 
         <ImageView
             android:layout_width="96dp"
