@@ -110,8 +110,16 @@ class PlayerActivity : AppCompatActivity() {
             view.isFocusableInTouchMode = true
             view.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
             view.requestFocus()
+            // 底部控件的选中样式：默认那圈 borderless 涟漪在暗背景上几乎看不见（用户反馈"选中样式有问题"）
+            for (id in TvPlayerKeys.OWN_CONTROL_IDS) {
+                try {
+                    findViewById<android.view.View>(id).setBackgroundResource(R.drawable.tv_focus_bg)
+                } catch (e: Exception) {
+                    Log.w("zv-tv", "focus bg: " + e.javaClass.simpleName)
+                }
+            }
             findViewById<android.widget.TextView>(R.id.hint).text =
-                "遥控器：确定=播放/暂停 · ←→ 快退快进 · ↑↓=上下集 · 菜单键=底部控件"
+                "遥控器：确定=播放/暂停 · 长按确定=底部控件 · ←→=快退快进 · ↑↓=上下集"
         }
         // 电视端不问通知权限：弹窗会抢走焦点，而且电视上没有"通知栏控制"的习惯（用户 2026-09-27 同类问题）
         if (!tv && Build.VERSION.SDK_INT >= 33 &&
@@ -559,10 +567,38 @@ class PlayerActivity : AppCompatActivity() {
      * 确定键必须在这里（视图之前）接住：PlayerView 是 clickable 的，会把确定键吃掉去 performClick
      * （只把控件条显示/藏起来），写在 onKeyDown 里永远收不到（实测）。
      */
+    /** 确定键按下时刻（抬手时按按住时长决定：短按=播放/暂停，长按=进底部控件）。 */
+    private var okDownAt = 0L
+
+    private val okKeys = setOf(
+        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+        android.view.KeyEvent.KEYCODE_ENTER,
+        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER,
+        android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        android.view.KeyEvent.KEYCODE_SPACE,
+    )
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         val focusId = currentFocus?.id ?: 0
+        val onOwnControl = focusId in TvPlayerKeys.OWN_CONTROL_IDS
+        if (tv && !onOwnControl && okKeys.contains(event.keyCode)) {
+            when (event.action) {
+                android.view.KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0) okDownAt = android.os.SystemClock.uptimeMillis()
+                    return true // 等抬手再决定，别在按下时就急着切
+                }
+                android.view.KeyEvent.ACTION_UP -> {
+                    val held = android.os.SystemClock.uptimeMillis() - okDownAt
+                    when (TvPlayerKeys.okAction(held, tv, focusId)) {
+                        TvPlayerKeys.Action.TOGGLE -> togglePlayPause()
+                        TvPlayerKeys.Action.FOCUS_CHROME -> focusChrome()
+                        else -> Unit
+                    }
+                    return true
+                }
+            }
+        }
         when (TvPlayerKeys.decide(event.keyCode, event.action, event.repeatCount, tv, focusId)) {
-            TvPlayerKeys.Action.TOGGLE -> { togglePlayPause(); return true }
             TvPlayerKeys.Action.FOCUS_CHROME -> { focusChrome(); return true }
             else -> Unit
         }
