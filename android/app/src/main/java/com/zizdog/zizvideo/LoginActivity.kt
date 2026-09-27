@@ -2,7 +2,9 @@ package com.zizdog.zizvideo
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
@@ -56,6 +58,7 @@ class LoginActivity : AppCompatActivity() {
         tlsBox.isChecked = prefs.useTLS
         rememberBox.isChecked = prefs.remember
         login.setOnClickListener { submit() }
+        wireImeChain()
 
         // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
         // 只在还没放行时显示；放行了就不显示（不占地方、不误导）。
@@ -102,6 +105,59 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 电视端遥控器兜底（用户 2026-09-25 报障："登录界面确认按钮无法获得焦点，输入完信息无法操作登录"）：
+     * 有些电视盒子/输入法把"确认"合成成**回车**塞给 Activity（不走 editor action），
+     * 输入框收到回车只会把焦点顺移走（实测：口令框 → 使用 HTTPS，登录请求根本没发生）。
+     * 所以这里统一成表单语义：地址/用户名 ⇒ 下一个输入框，口令 ⇒ 直接登录。
+     * 只认回车 —— 遥控器的"确定"键在输入框上是"打开键盘"，不能抢。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+        ) {
+            when (currentFocus) {
+                server -> { username.requestFocus(); return true }
+                username -> { password.requestFocus(); return true }
+                password -> { submit(); return true }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * 电视端遥控器（用户 2026-09-25 报障："登录界面确认按钮无法获得焦点，输入完信息无法操作登录"）：
+     * 电视的软键盘是遥控器驱动的 —— 键盘上那颗"下一项/完成"键由 `imeOptions` 决定**有没有**，
+     * 光在 XML 里写 imeOptions 还不够，action 得自己接住：地址/用户名 ⇒ 跳下一个输入框，口令 ⇒ 直接登录。
+     * 这样"输入完"之后键盘上永远有一条能走到登录的路（遥控器不用先按返回收键盘再摸黑找按钮）。
+     */
+    private fun wireImeChain() {
+        server.setOnEditorActionListener { _, actionId, _ -> focusOnIme(actionId, username) }
+        username.setOnEditorActionListener { _, actionId, _ -> focusOnIme(actionId, password) }
+        password.setOnEditorActionListener { _, actionId, _ -> submitOnIme(actionId) }
+    }
+
+    private fun focusOnIme(actionId: Int, next: View): Boolean {
+        // IME_NULL：硬件回车（遥控器/外接键盘）—— 也当成"下一项"，别让回车什么都不做
+        if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+            actionId == EditorInfo.IME_NULL
+        ) {
+            next.requestFocus()
+            return true
+        }
+        return false
+    }
+
+    private fun submitOnIme(actionId: Int): Boolean {
+        if (actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_ACTION_GO ||
+            actionId == EditorInfo.IME_ACTION_SEND || actionId == EditorInfo.IME_NULL
+        ) {
+            submit()
+            return true
+        }
+        return false
+    }
+
     /** 遮罩看门狗：万一探活/登录卡住，10 秒后也要把表单露出来（不能把用户锁在 logo 上）。 */
     private fun armSplashWatchdog() {
         splash.postDelayed({
@@ -110,6 +166,16 @@ class LoginActivity : AppCompatActivity() {
                 fail(getString(R.string.err_login_timeout))
             }
         }, 10000)
+    }
+
+    /** 收起软键盘（电视端是浮层，不收会盖住进度/错误提示）。 */
+    private fun hideIme() {
+        try {
+            val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+            imm?.hideSoftInputFromWindow(currentFocus?.windowToken ?: server.windowToken, 0)
+        } catch (e: Exception) {
+            android.util.Log.w("zv-login", "hideIme: " + e.javaClass.simpleName)
+        }
     }
 
     /** 收起遮罩、露出登录表单（只在"必须用户自己输"时才调用）。 */
@@ -187,6 +253,8 @@ class LoginActivity : AppCompatActivity() {
         server.setText(base)
 
         runOnUiThread { splash.visibility = View.VISIBLE }
+        // 电视上的软键盘是浮在表单上的小窗，不主动收起来就会一直盖着"正在检查…"（用户报障那一屏就是它）
+        hideIme()
         armSplashWatchdog()
         setBusy(true, getString(R.string.action_checking))
         Thread {

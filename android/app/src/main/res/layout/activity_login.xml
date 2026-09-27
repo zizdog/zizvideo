@@ -43,11 +43,18 @@
                 android:layout_height="wrap_content"
                 android:hint="@string/hint_server">
 
+                <!-- 电视遥控器（用户 2026-09-25 报障："登录界面确认按钮无法获得焦点，无法操作登录"）：
+                     焦点链必须**写死**（nextFocusDown/Forward），而且每个输入框都要有 imeOptions ——
+                     电视的软键盘是遥控器驱动的，键盘上那颗"下一项/完成"键就是靠 imeOptions 决定存不存在；
+                     不给 imeOptions，键盘上的确认键就是死的，输入完**没有路**能走到登录按钮。 -->
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/server"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="textUri"
+                    android:imeOptions="actionNext"
+                    android:nextFocusForward="@id/username"
+                    android:nextFocusDown="@id/username"
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -63,6 +70,10 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="text"
+                    android:imeOptions="actionNext"
+                    android:nextFocusForward="@id/password"
+                    android:nextFocusDown="@id/password"
+                    android:nextFocusUp="@id/server"
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -78,6 +89,10 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="textPassword"
+                    android:imeOptions="actionDone"
+                    android:nextFocusForward="@id/login"
+                    android:nextFocusDown="@id/login"
+                    android:nextFocusUp="@id/username"
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -86,18 +101,24 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="18dp"
+                android:nextFocusUp="@id/password"
+                android:nextFocusDown="@id/tls"
                 android:text="@string/action_login" />
 
             <CheckBox
                 android:id="@+id/tls"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:nextFocusUp="@id/login"
+                android:nextFocusDown="@id/remember"
                 android:text="@string/use_tls" />
 
             <CheckBox
                 android:id="@+id/remember"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:nextFocusUp="@id/tls"
+                android:nextFocusDown="@id/battery"
                 android:text="@string/remember_me" />
 
             <com.google.android.material.button.MaterialButton
@@ -107,6 +128,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:visibility="gone"
+                android:nextFocusUp="@id/remember"
                 android:text="@string/allow_background" />
 
             <TextView

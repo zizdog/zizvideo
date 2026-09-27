@@ -122,15 +122,25 @@ function onKeyDown(event) {
   if (!tvMode()) return;
   const target = event.target;
   const tag = target && target.tagName ? target.tagName : "";
-  // 输入框里方向键是移动光标、确定是提交，别抢
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (target && target.isContentEditable)) return;
+  const dirs = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+  const dir = dirs[event.key];
+  // 多行输入里方向键是移光标，别抢
+  if (tag === "TEXTAREA" || (target && target.isContentEditable)) return;
+  // 单行输入框：↑↓ 是"离开这个框"（遥控器没有 Tab，也没法点）。
+  // 用户 2026-09-25 报障："登录界面确认按钮无法获得焦点，输入完信息无法操作登录" ——
+  // 原先把 INPUT 一律放行，于是焦点卡在口令框里出不来，下面的登录按钮永远够不着；
+  // ←→ 仍旧留给光标。
+  if (tag === "INPUT" || tag === "SELECT") {
+    if (dir === "up" || dir === "down") {
+      if (moveFocus(dir)) { event.preventDefault(); event.stopPropagation(); }
+    }
+    return;
+  }
   if (feedHandler && feedHandler.down && feedHandler.down(event)) {
     event.preventDefault();
     event.stopPropagation();
     return;
   }
-  const dirs = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
-  const dir = dirs[event.key];
   if (dir) {
     if (moveFocus(dir)) { event.preventDefault(); event.stopPropagation(); }
     return;
