@@ -33,4 +33,14 @@
             android:targetPackage="com.zizdog.zizvideo"
             android:targetClass="com.zizdog.zizvideo.LoginActivity" />
     </shortcut>
+    <shortcut
+        android:shortcutId="qr_scan"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_qr_scan">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="zizvideo://qrscan"
+            android:targetPackage="com.zizdog.zizvideo"
+            android:targetClass="com.zizdog.zizvideo.LoginActivity" />
+    </shortcut>
 </shortcuts>

@@ -72,7 +72,17 @@ class LoginActivity : AppCompatActivity() {
         // （手机端要扫的话在「我的 → 扫码登录电视」里，那是相机入口）。
         // 放在焦点链末尾：隐藏它不会让上面任何一跳卡住（登录页踩过这个坑）。
         val qr = findViewById<MaterialButton>(R.id.qrlogin)
-        if (WebActivity.isTv(this)) {
+        if (!WebActivity.isTv(this)) {
+            // 手机上这颗按钮 = **直接用相机扫电视上的码**（原生入口，不依赖服务端把网页前端更新到新版）
+            qr.text = getString(R.string.action_qr_scan_phone)
+            qr.setOnClickListener {
+                try {
+                    startActivity(Intent(this, ScanActivity::class.java))
+                } catch (e: Exception) {
+                    showError("打不开扫码页：" + e.javaClass.simpleName)
+                }
+            }
+        } else {
             qr.setOnClickListener {
                 val base = ZvApi.normalizeBase(server.text?.toString() ?: "", tlsBox.isChecked)
                 if (base.isEmpty()) {
@@ -88,8 +98,6 @@ class LoginActivity : AppCompatActivity() {
                         .putExtra(WebActivity.EXTRA_PATH, "/#/qrlogin"),
                 )
             }
-        } else {
-            qr.visibility = View.GONE
         }
 
         // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
@@ -116,6 +124,12 @@ class LoginActivity : AppCompatActivity() {
         // 本机已有会话就直接替电视确认，然后照常进网页；没登录就说清楚要先去手机端登录。
         if (data.startsWith("zizvideo://qr")) {
             claimQrFromLink(data)
+            return
+        }
+        // 快捷方式"扫码登录电视"：直接开相机（原生入口，和服务端前端版本无关）
+        if (data.startsWith("zizvideo://qrscan")) {
+            startActivity(Intent(this, ScanActivity::class.java))
+            finish()
             return
         }
         if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")

@@ -7,6 +7,8 @@
     <string name="hint_password">口令</string>
     <string name="action_login">登录</string>
     <string name="action_qr_login">扫码登录（手机扫一下）</string>
+    <string name="action_qr_scan_phone">扫码登录电视（用相机扫）</string>
+    <string name="shortcut_qr_scan">扫码登录电视</string>
     <string name="action_checking">连接中…</string>
     <string name="action_qr_checking">正在确认扫码登录…</string>
     <string name="err_server_empty">请先填服务器地址</string>

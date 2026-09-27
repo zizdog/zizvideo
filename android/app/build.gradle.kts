@@ -20,8 +20,8 @@ android {
         applicationId = "com.zizdog.zizvideo"
         minSdk = 24
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.3.4"
+        versionCode = 31
+        versionName = "0.3.5"
     }
 
     signingConfigs {

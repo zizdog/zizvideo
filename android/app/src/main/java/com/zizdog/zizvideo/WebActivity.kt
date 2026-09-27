@@ -462,7 +462,9 @@ class WebActivity : AppCompatActivity() {
         web.loadUrl(url)
         // 自动检查更新：进 App 顺手查一次（已是最新/连不上都**不打扰**），有新版本才弹窗。
         // 延迟几秒：别跟首屏抢带宽和注意力。
-        web.postDelayed({ checkUpdate(false) }, 3000)
+        // 电视端不自动弹更新框：3 秒后弹出来会把遥控器焦点抢走（用户 2026-09-27 同类问题）。
+        // 电视上仍有手动入口（我的 → 检查更新）。
+        if (!tv) web.postDelayed({ checkUpdate(false) }, 3000)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {

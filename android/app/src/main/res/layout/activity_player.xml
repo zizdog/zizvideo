@@ -20,6 +20,7 @@
             android:id="@+id/player"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:nextFocusDown="@id/fav"
             app:use_controller="true"
             app:show_buffering="when_playing"
             app:resize_mode="fit"
@@ -68,6 +69,7 @@
 
             <ImageButton
                 android:id="@+id/fav"
+                android:nextFocusUp="@id/player"
                 android:layout_width="56dp"
                 android:layout_height="48dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
@@ -76,6 +78,7 @@
 
             <ImageButton
                 android:id="@+id/like"
+                android:nextFocusUp="@id/player"
                 android:layout_width="56dp"
                 android:layout_height="48dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
@@ -84,6 +87,7 @@
 
             <ImageButton
                 android:id="@+id/later"
+                android:nextFocusUp="@id/player"
                 android:layout_width="56dp"
                 android:layout_height="48dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
@@ -93,6 +97,7 @@
             <!-- B5 倍速：点一下换一档（与网页同一个 user_prefs.playback_rate） -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/speed"
+                android:nextFocusUp="@id/player"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
@@ -103,6 +108,7 @@
             <!-- ④ 离线缓存：点一下下到本机（已缓存时点它=删缓存，带确认） -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/offline"
+                android:nextFocusUp="@id/player"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
@@ -113,6 +119,7 @@
             <!-- B4 画中画：缩成浮窗继续放，可以边刷别的（安卓 8+） -->
             <ImageButton
                 android:id="@+id/pip"
+                android:nextFocusUp="@id/player"
                 android:layout_width="56dp"
                 android:layout_height="48dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
@@ -129,6 +136,7 @@
             android:textSize="14sp" />
 
         <TextView
+            android:id="@+id/hint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingHorizontal="12dp"
@@ -142,6 +150,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_margin="8dp"
+            android:nextFocusUp="@id/fav"
             android:text="停止并退出" />
     </LinearLayout>
 </LinearLayout>

@@ -78,20 +78,39 @@ function show(mount) {
   if (!player) setTimeout(focusFirst, 0);
 }
 
-// 侧面板（用户 2026-09-23 要求）：**内容先留空**，后续再往里放功能。
+// 侧面板（菜单）：原来是一块空占位。用户 2026-09-27 指定把「扫码登录电视」放这儿
+// （手机上这是最顺手的入口：播放页顶栏菜单键就能打开，不用先翻到"我的 → 设置"）。
+function sideRow(label, note, onClick, role) {
+  const row = el("button", { class: "cell", type: "button", dataset: role ? { role } : undefined },
+    el("span", { class: "cell-label", text: label }),
+    note ? el("span", { class: "cell-note", text: note }) : null,
+    el("span", { class: "cell-chevron", text: "›" }));
+  row.addEventListener("click", onClick);
+  return row;
+}
+
 function openSidePanel() {
   if (document.querySelector(".side-panel")) return;
   const panel = el("aside", { class: "side-panel", dataset: { role: "side-panel" } });
   const mask = el("div", { class: "side-mask", dataset: { role: "side-mask" } });
   const close = () => { panel.remove(); mask.remove(); };
   mask.addEventListener("click", close);
+  const body = el("div", { class: "side-panel-body" });
+  if (window.ZvAndroid && typeof window.ZvAndroid.startQrScan === "function") {
+    body.append(sideRow("扫码登录电视", "用相机扫电视上的二维码", () => {
+      close();
+      try { window.ZvAndroid.startQrScan(""); } catch (err) { /* 老版本 App 没这个口 */ }
+    }, "side-qrscan"));
+  }
+  if (!body.childNodes.length) body.append(el("div", { class: "muted", text: "这里先留空，后续再放内容。" }));
   panel.append(
     el("div", { class: "side-panel-head" },
       el("span", { text: "菜单" }),
       el("button", { class: "btn small", type: "button", text: "关闭", onclick: close })),
-    el("div", { class: "side-panel-body", text: "这里先留空，后续再放内容。" }));
+    body);
   document.body.append(mask, panel);
   requestAnimationFrame(() => panel.classList.add("open"));
+  if (focusFirst) setTimeout(focusFirst, 0); // 电视端：面板开了要能落焦
 }
 
 function route() {

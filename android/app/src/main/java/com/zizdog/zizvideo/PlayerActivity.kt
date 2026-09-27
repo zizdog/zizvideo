@@ -95,7 +95,16 @@ class PlayerActivity : AppCompatActivity() {
         ffHint = findViewById(R.id.ffHint)
         speedBtn.setOnClickListener { cycleSpeed() }
         setupGestures()
-        if (Build.VERSION.SDK_INT >= 33 &&
+        if (tv) {
+            // 电视端：控件条常显。media3 默认 5 秒自动隐藏，隐藏期间 PlayerView 会把**第一下方向键**
+            // 吃掉去叫控件条（实测"按了没反应"），常显就没有这个窗口期。
+            view.controllerShowTimeoutMs = 0
+            view.showController()
+            findViewById<android.widget.TextView>(R.id.hint).text =
+                "遥控器：确定=播放/暂停 · ←→ 快退快进 · ↑↓=上下集 · 菜单键=底部控件"
+        }
+        // 电视端不问通知权限：弹窗会抢走焦点，而且电视上没有"通知栏控制"的习惯（用户 2026-09-27 同类问题）
+        if (!tv && Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -524,44 +533,55 @@ class PlayerActivity : AppCompatActivity() {
     private fun gainVolume(gainDb: Double): Float =
         if (gainDb < 0) Math.pow(10.0, gainDb / 20.0).toFloat().coerceIn(0f, 1f) else 1f
 
-    // ---------- 电视端（遥控器，用户 2026-09-25）----------
-    // 电视没有触摸：长按快进/双击点赞都用不了，遥控器只给"上下左右 + 确定 + 返回"。
-    //   确定/播放键 播放暂停 · ←→ 快退快进 10 秒 · ↑↓ 上一集/下一集
-    // 焦点在按钮上时**不抢**：电视上也要能用确定键点到「缓存/倍速/收藏」这些按钮。
+    // ---------- 电视端（遥控器，用户 2026-09-25 / 2026-09-27 同类问题）----------
+    // 电视没有触摸：长按快进/双击点赞都用不了，遥控器只给"上下左右 + 确定 + 返回 + 菜单"。
+    //   确定/播放键 播放暂停 · ←→ 快退快进 10 秒 · ↑↓ 上一集/下一集 · **菜单键** 把焦点送进底部控件
+    // 焦点在按钮上时**不抢**：电视上也要能用确定键点到「收藏/缓存/停止」这些按钮。
     private val tv: Boolean by lazy { WebActivity.isTv(this) }
     private val tvSeekMs = 10_000L
 
-    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (event == null || !tv) return super.onKeyDown(keyCode, event)
+    /**
+     * 确定键必须在这里（视图之前）接住：PlayerView 是 clickable 的，会把确定键吃掉去 performClick
+     * （只把控件条显示/藏起来），写在 onKeyDown 里永远收不到（实测）。
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         val focus = currentFocus
-        if (focus is android.widget.Button || focus is android.widget.ImageButton) {
-            return super.onKeyDown(keyCode, event)
+        val onControl = focus is android.widget.Button || focus is android.widget.ImageButton
+        when (TvPlayerKeys.decide(event.keyCode, event.action, event.repeatCount, tv, onControl)) {
+            TvPlayerKeys.Action.TOGGLE -> { togglePlayPause(); return true }
+            TvPlayerKeys.Action.FOCUS_CHROME -> { focusChrome(); return true }
+            else -> Unit
         }
-        val c = controller
-        when (keyCode) {
-            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-            android.view.KeyEvent.KEYCODE_ENTER,
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            android.view.KeyEvent.KEYCODE_SPACE -> {
-                if (c != null) {
-                    if (c.isPlaying) c.pause() else c.play()
-                    Log.i("zv-tv", "toggle playing=" + c.isPlaying)
-                }
-                view.showController()
-                return true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> return tvSeek(-tvSeekMs)
-            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> return tvSeek(tvSeekMs)
-            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                c?.seekToPreviousMediaItem()
-                view.showController()
-                return true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                c?.seekToNextMediaItem()
-                view.showController()
-                return true
-            }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun togglePlayPause() {
+        val c = controller ?: return
+        if (c.isPlaying) c.pause() else c.play()
+        view.showController()
+        Log.i("zv-tv", "toggle playing=" + c.isPlaying)
+    }
+
+    /** 把焦点送进底部那排控件（遥控器没有触摸，不送进去就永远够不到"停止并退出"）。 */
+    private fun focusChrome() {
+        view.showController()
+        try {
+            findViewById<android.view.View>(R.id.fav).requestFocus()
+        } catch (e: Exception) {
+            Log.w("zv-tv", "focusChrome: " + e.javaClass.simpleName)
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (event == null) return super.onKeyDown(keyCode, event)
+        val focus = currentFocus
+        val onControl = focus is android.widget.Button || focus is android.widget.ImageButton
+        when (TvPlayerKeys.decide(keyCode, android.view.KeyEvent.ACTION_DOWN, 0, tv, onControl)) {
+            TvPlayerKeys.Action.SEEK_BACK -> return tvSeek(-tvSeekMs)
+            TvPlayerKeys.Action.SEEK_FWD -> return tvSeek(tvSeekMs)
+            TvPlayerKeys.Action.PREV -> { controller?.seekToPreviousMediaItem(); view.showController(); return true }
+            TvPlayerKeys.Action.NEXT -> { controller?.seekToNextMediaItem(); view.showController(); return true }
+            else -> Unit
         }
         return super.onKeyDown(keyCode, event)
     }
