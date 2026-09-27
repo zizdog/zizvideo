@@ -32,23 +32,31 @@ object ZvApi2 {
         return ""
     }
 
+    /** 拉队列的结果：失败时带上服务端原话（别把 403"路径不在允许的媒体根里"说成"连不上服务器"）。 */
+    class QueueResult(val list: List<Media>, val error: String)
+
     /** 拉一份列表当播放队列。history 的形状是 {list:[{media:{...}}]}，其余是 {list:[media...]}。 */
-    fun queue(base: String, kind: String, cookie: String, query: String = ""): List<Media> {
+    fun queue(base: String, kind: String, cookie: String, query: String = ""): List<Media> = queueDetailed(base, kind, cookie, query).list
+
+    fun queueDetailed(base: String, kind: String, cookie: String, query: String = ""): QueueResult {
         val path = when (kind) {
             "likes" -> "/api/v1/me/likes"
             "favorites" -> "/api/v1/me/favorites"
             "later" -> "/api/v1/me/watch-later"
             "history" -> "/api/v1/me/progress"
             "search" -> {
-                if (query.isBlank()) return emptyList()
+                if (query.isBlank()) return QueueResult(emptyList(), "")
                 "/api/v1/media?per_page=100&q=" + java.net.URLEncoder.encode(query, "UTF-8")
             }
             "feed" -> "/api/v1/feed/next?limit=20"
-            else -> return emptyList()
+            else -> return QueueResult(emptyList(), "")
         }
         val reply = ZvApi.get(base + path, cookie)
-        if (!reply.ok) return emptyList()
-        val list = reply.data()?.optJSONArray("list") ?: return emptyList()
+        if (!reply.ok) {
+            // 服务端的原话 + 状态码：403 是"路径不在允许的媒体根里"，跟"连不上"完全两回事
+            return QueueResult(emptyList(), reply.errorMessage() + "（HTTP " + reply.status + "）")
+        }
+        val list = reply.data()?.optJSONArray("list") ?: return QueueResult(emptyList(), "")
         val out = ArrayList<Media>(list.length())
         for (i in 0 until list.length()) {
             val raw = list.optJSONObject(i) ?: continue
@@ -72,7 +80,7 @@ object ZvApi2 {
                 )
             )
         }
-        return out
+        return QueueResult(out, "")
     }
 
     /** 进度回写（与网页端同一个接口）：写操作必须带 X-CSRF-Token。 */

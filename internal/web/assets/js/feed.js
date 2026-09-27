@@ -765,7 +765,34 @@ export function mountFeed(view, options = {}) {
     if (entry.broken || entry.destroyed || !entry.layer) return;
     entry.broken = true;
     if (entry.video) { try { entry.video.pause(); } catch (err) { /* ignore */ } }
-    entry.layer.append(centerMessage("这个视频放不了", sub || ("状态：" + (entry.item.status || "unknown"))));
+    if (sub) {
+      entry.layer.append(centerMessage("这个视频放不了", sub));
+      return;
+    }
+    entry.layer.append(centerMessage("这个视频放不了", "状态：" + (entry.item.status || "unknown")));
+    // <video> 的 error 事件拿不到 HTTP 状态码，所以再问服务端一次"为什么"：
+    // 403（路径不在允许的媒体根里）、404（文件没了）这类原文要显示出来 ——
+    // 只说"状态：unknown"等于没说（用户 2026-09-27 报障过"报错要说真原因"这一类）。
+    probeStreamError(entry);
+  }
+
+  function probeStreamError(entry) {
+    if (!entry.item || !entry.layer) return;
+    const url = entry.item.stream_url || ("/api/v1/media/" + encodeURIComponent(entry.item.id) + "/stream");
+    fetch(url, { method: "GET", headers: { Range: "bytes=0-0" }, credentials: "same-origin" })
+      .then(async (res) => {
+        if (res.ok || res.status === 206) return; // 服务端其实没问题：可能是解码问题，保持原样
+        let message = "HTTP " + res.status;
+        try {
+          const body = await res.json();
+          if (body && body.error && body.error.message) message = body.error.message + "（HTTP " + res.status + "）";
+        } catch (err) { /* 非 JSON 就用状态码 */ }
+        if (entry.destroyed || !entry.layer) return;
+        const old = entry.layer.querySelector(".center-msg");
+        if (old) old.remove();
+        entry.layer.append(centerMessage("这个视频放不了", message));
+      })
+      .catch(() => { /* 探测失败就保留原来那句 */ });
   }
 
   // 服务端 direct 会高估（无 HEVC 硬件解码的 Chrome 只出声不出画且不报 error），

@@ -483,11 +483,15 @@ class PlayerActivity : AppCompatActivity() {
         val cookie = CookieManager.getInstance().getCookie(base) ?: ""
         Thread {
             var fetched = true
+            var failReason = ""
             val list = try {
-                ZvApi2.queue(base, kind, cookie, query)
+                val qr = ZvApi2.queueDetailed(base, kind, cookie, query)
+                if (qr.error.isNotBlank()) { fetched = false; failReason = qr.error }
+                qr.list
             } catch (e: Exception) {
                 Log.e("zvplayer", "拉队列失败 kind=$kind base=$base", e)
                 fetched = false
+                failReason = "连不上服务器：" + e.javaClass.simpleName
                 emptyList()
             }
             Log.i("zvplayer", "queue kind=$kind id=$mediaId 条数=" + list.size)
@@ -518,7 +522,8 @@ class PlayerActivity : AppCompatActivity() {
             runOnUiThread {
                 if (items.isEmpty()) {
                     // 如实区分"没内容"和"连不上"：说错原因比不说更糟（原来一律说"没有可播的内容"）
-                    nowPlaying.text = if (fetched) "这条没有可播的内容" else "连不上服务器，拉不到播放列表"
+                    // 失败时把服务端的原话显示出来（403 路径越界 vs 真连不上，是两回事）
+                    nowPlaying.text = if (fetched) "这条没有可播的内容" else ("拉不到播放列表：" + (failReason.ifBlank { "未知原因" }))
                     return@runOnUiThread
                 }
                 refreshState(items.getOrNull(index)?.mediaId ?: "")
