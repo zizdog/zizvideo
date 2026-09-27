@@ -625,7 +625,11 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 /* 顶栏左侧的侧面板（内容先留空，后续开发） */
 .side-panel {
   position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(78vw, 320px);
-  background: var(--panel); border-right: 1px solid var(--line);
+  /* 面板要**不透明**：--panel 是半透明的（卡片用的），拿它当抽屉背景会把下面的视频透出来（实测很难看）；
+     再叠一层同色系渐变，跟抖音那种"实心抽屉"一致。 */
+  background: #171a1f;
+  background-image: linear-gradient(180deg, #1b1f25 0%, #14171b 60%, #101317 100%);
+  border-right: 1px solid var(--line);
   transform: translateX(-100%); transition: transform .18s ease; display: flex; flex-direction: column;
 }
 .side-panel.open { transform: translateX(0); }
@@ -633,7 +637,34 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 14px 10px; border-bottom: 1px solid var(--line);
 }
-.side-panel-body { padding: 14px; overflow: auto; color: var(--muted); font-size: 13px; }
+.side-panel-body { padding: 8px 6px 16px; overflow: auto; color: var(--fg, #eaeaea); font-size: 13px; }
+/* 侧面板照抖音排版（用户 2026-09-27）：一排大图标 + 分区标题 + 三列图标网格。
+   ⚠️ 全用 margin 撑间距，**不用 flex gap** —— 老电视 WebView 没有 flex gap（Chrome 84+），
+   用了间距会全塌（这份样式要在他那台电视上好看）。 */
+.sp-head-title { font-size: 16px; font-weight: 600; }
+.sp-section { margin: 8px 6px 10px; }
+.sp-title { color: var(--muted); font-size: 13px; margin: 10px 6px 8px; }
+.sp-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+.sp-cell {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  background: transparent; border: 0; color: inherit; font: inherit;
+  padding: 10px 2px 8px; margin: 2px; border-radius: 12px; cursor: pointer;
+}
+.sp-cell-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: rgba(255,255,255,.07); margin-bottom: 7px;
+}
+.sp-cell-icon svg { width: 25px; height: 25px; }
+.sp-cell-label { font-size: 12.5px; line-height: 1.2; text-align: center; color: #e8e8e8; }
+.sp-cell:active { background: rgba(255,255,255,.10); }
+.sp-foot { color: #6b7480; font-size: 12px; text-align: center; margin: 18px 6px 4px; }
+/* 电视端落焦要明显（tv.js 给当前焦点加 .tv-focus） */
+.tv .sp-cell.tv-focus { background: rgba(255,255,255,.14); outline: 3px solid var(--accent); outline-offset: -3px; }
+.tv .sp-cell-icon { width: 56px; height: 56px; margin-bottom: 10px; }
+.tv .sp-cell-icon svg { width: 30px; height: 30px; }
+.tv .sp-cell-label { font-size: 15px; }
+.tv .side-panel { width: min(46vw, 480px); }
 .side-mask { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 39; background: rgba(0,0,0,.5); }
 .side-mask.hidden { display: none; }
 

@@ -2,6 +2,7 @@
 
 import { api } from "./js/api.js";
 import { clear, el } from "./js/dom.js";
+import { icon } from "./js/icons.js";
 import { session, loadMe, mountLogin, mountRegister, mountSetup, doLogout } from "./js/auth.js";
 import { mountFeed } from "./js/feed.js";
 import { mountAdmin } from "./js/admin.js";
@@ -15,7 +16,7 @@ import { mountUpload, mountMyUploads } from "./js/upload.js";
 import { mountSearch } from "./js/search.js";
 import { mountQrLogin } from "./js/qrlogin.js";
 import { renderTopBar } from "./js/topbar.js";
-import { installTvKeys, focusFirst } from "./js/tv.js";
+import { installTvKeys, focusFirst, tvMode } from "./js/tv.js";
 
 const viewEl = document.getElementById("view");
 const headerEl = document.getElementById("header");
@@ -78,36 +79,77 @@ function show(mount) {
   if (!player) setTimeout(focusFirst, 0);
 }
 
-// 侧面板（菜单）：原来是一块空占位。用户 2026-09-27 指定把「扫码登录电视」放这儿
-// （手机上这是最顺手的入口：播放页顶栏菜单键就能打开，不用先翻到"我的 → 设置"）。
-function sideRow(label, note, onClick, role) {
-  const row = el("button", { class: "cell", type: "button", dataset: role ? { role } : undefined },
-    el("span", { class: "cell-label", text: label }),
-    note ? el("span", { class: "cell-note", text: note }) : null,
-    el("span", { class: "cell-chevron", text: "›" }));
-  row.addEventListener("click", onClick);
-  return row;
+// 侧面板（菜单）：照抖音的排版重做（用户 2026-09-27："你参考抖音的图标、排版、设置边栏"）。
+// 结构：顶部一排大图标（扫一扫/已缓存/设置）+ 分区标题 + 三列图标网格。
+// ⚠️ 这一块**故意不用 flex gap**：老电视 WebView 没有 flex gap（Chrome 84+），间距会全塌，
+//    所以统一用 margin 撑开 —— 新写的样式别图省事用 gap。
+function sideCell(iconName, label, onClick, role) {
+  const btn = el("button", { class: "sp-cell", type: "button", dataset: role ? { role } : undefined },
+    el("span", { class: "sp-cell-icon" }, icon(iconName)),
+    el("span", { class: "sp-cell-label", text: label }));
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function sideSection(title, cells) {
+  return el("div", { class: "sp-section" },
+    title ? el("div", { class: "sp-title", text: title }) : null,
+    el("div", { class: "sp-grid" }, cells));
 }
 
 function openSidePanel() {
+  // 电视端不出现边栏（用户 2026-09-27：目前这些功能在电视上有底栏/播放页按键就够，
+  // 侧栏里的"扫一扫"在电视上更是没意义 —— 电视没有相机，它只负责显示二维码）。
+  if (tvMode()) return;
   if (document.querySelector(".side-panel")) return;
   const panel = el("aside", { class: "side-panel", dataset: { role: "side-panel" } });
   const mask = el("div", { class: "side-mask", dataset: { role: "side-mask" } });
   const close = () => { panel.remove(); mask.remove(); };
   mask.addEventListener("click", close);
-  const body = el("div", { class: "side-panel-body" });
-  if (window.ZvAndroid && typeof window.ZvAndroid.startQrScan === "function") {
-    body.append(sideRow("扫码登录电视", "用相机扫电视上的二维码", () => {
+  const go = (hash) => { close(); location.hash = hash; };
+  const app = window.ZvAndroid || null;
+  const hasScan = !!(app && typeof app.startQrScan === "function");
+  const hasCache = !!(app && typeof app.listCached === "function");
+  const hasUpdate = !!(app && typeof app.checkUpdate === "function");
+
+  // ① 顶部：最多三个大图标（抖音那排"扫一扫/我的钱包/券包"的位置）
+  const quick = [];
+  if (hasScan) {
+    quick.push(sideCell("scan", "扫一扫", () => {
       close();
-      try { window.ZvAndroid.startQrScan(""); } catch (err) { /* 老版本 App 没这个口 */ }
+      try { app.startQrScan(""); } catch (err) { /* 老版本 App 没这个口 */ }
     }, "side-qrscan"));
   }
-  if (!body.childNodes.length) body.append(el("div", { class: "muted", text: "这里先留空，后续再放内容。" }));
+  if (hasCache) quick.push(sideCell("download", "已缓存", () => go("#/me/cached"), "side-cached"));
+  quick.push(sideCell("gear", "设置", () => go("#/settings"), "side-settings"));
+  if (quick.length < 2) quick.push(sideCell("search", "搜索", () => go("#/search"), "side-search"));
+
+  // ② 常用功能：三列网格（首页/剧场/收藏 已在底栏，但侧栏进来的多，留着更快）
+  const grid = [
+    sideCell("home", "首页", () => go("#/feed")),
+    sideCell("theater", "剧场", () => go("#/series")),
+    sideCell("heart", "收藏", () => go("#/favorites")),
+    sideCell("clock", "观看历史", () => go("#/favorites/history")),
+    sideCell("down", "稍后再看", () => go("#/favorites/later")),
+  ];
+  if (session.user && session.user.role === "admin") grid.push(sideCell("grid", "管理后台", () => go("#/admin")));
+  if (hasUpdate) {
+    grid.push(sideCell("speed", "检查更新", () => {
+      close();
+      try { app.checkUpdate(true); } catch (err) { /* 老版本 App 没这个口 */ }
+    }, "side-update"));
+  }
+  grid.push(sideCell("person", "我的", () => go("#/me")));
+  grid.push(sideCell("back", "退出登录", async () => { close(); await onLogout(); }, "side-logout"));
+
   panel.append(
     el("div", { class: "side-panel-head" },
-      el("span", { text: "菜单" }),
+      el("span", { class: "sp-head-title", text: "菜单" }),
       el("button", { class: "btn small", type: "button", text: "关闭", onclick: close })),
-    body);
+    el("div", { class: "side-panel-body" },
+      sideSection("", quick),
+      sideSection("常用功能", grid),
+      el("div", { class: "sp-foot", text: "zizvideo" + (window.ZvAndroid && window.ZvAndroid.appVersion ? " · App " + window.ZvAndroid.appVersion() : "") })));
   document.body.append(mask, panel);
   requestAnimationFrame(() => panel.classList.add("open"));
   if (focusFirst) setTimeout(focusFirst, 0); // 电视端：面板开了要能落焦

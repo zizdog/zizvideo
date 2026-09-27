@@ -5,18 +5,22 @@
 import { el, clear } from "./dom.js";
 import { session } from "./auth.js";
 import { icon } from "./icons.js";
+import { tvMode } from "./tv.js";
 
 export function renderTopBar(headerEl, options) {
   const opts = options || {};
   clear(headerEl);
   if (!session.user) { headerEl.hidden = true; return; } // 登录/注册/初始化页不要顶栏
   headerEl.hidden = false;
-  // 用户 2026-09-23：左侧"返回"换成**侧面板展开**按钮（面板内容先留空，后续再开发）
+  // 用户 2026-09-23：左侧"返回"换成**侧面板展开**按钮。
+  // 电视端（?tv=1）不放这个按钮：那边整块边栏都隐藏（用户 2026-09-27），按钮留着只会点了没反应。
   const nodes = [];
-  nodes.push(el("button", {
-    class: "top-btn", type: "button", title: "菜单", "aria-label": "菜单",
-    dataset: { role: "top-menu" }, onclick: opts.onMenu,
-  }, icon("menu")));
+  if (!tvMode()) {
+    nodes.push(el("button", {
+      class: "top-btn", type: "button", title: "菜单", "aria-label": "菜单",
+      dataset: { role: "top-menu" }, onclick: opts.onMenu,
+    }, icon("menu")));
+  }
   nodes.push(el("div", { class: "spacer" }));
   nodes.push(el("button", {
     class: "top-btn", type: "button", title: "搜索", "aria-label": "搜索",

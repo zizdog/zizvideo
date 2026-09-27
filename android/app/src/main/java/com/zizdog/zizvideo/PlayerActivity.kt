@@ -100,9 +100,15 @@ class PlayerActivity : AppCompatActivity() {
             // 吃掉去叫控件条（实测"按了没反应"），常显就没有这个窗口期。
             view.controllerShowTimeoutMs = 0
             view.showController()
-            // 焦点放画面上：media3 控件条会把默认焦点抢到 exo_settings 上，这里明确抢回画面
+            // 焦点必须落在**画面本身**上（A0/A4 验收抓到的问题）：
+            // media3 的 PlayerView 构造函数设了 descendantFocusability = FOCUS_AFTER_DESCENDANTS
+            // （javap 反汇编：ldc_w 262144 = 0x40000），而 exo_* 按钮都是它的子节点 ⇒
+            // requestFocus() 与 nextFocusUp=@id/player 都会被转交给子按钮（实测落到 exo_settings/exo_next）。
+            // 电视端把后代挡住：画面自己拿焦点；media3 自带控件条那几个按钮本来也够不到（App 自己的
+            // 底部控件 + 菜单键已经覆盖收藏/缓存/停止，seek/上下集由 onKeyDown 管）。
             view.isFocusable = true
             view.isFocusableInTouchMode = true
+            view.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
             view.requestFocus()
             findViewById<android.widget.TextView>(R.id.hint).text =
                 "遥控器：确定=播放/暂停 · ←→ 快退快进 · ↑↓=上下集 · 菜单键=底部控件"

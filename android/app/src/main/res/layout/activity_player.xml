@@ -20,6 +20,8 @@
             android:id="@+id/player"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
             android:nextFocusDown="@id/fav"
             app:use_controller="true"
             app:show_buffering="when_playing"
