@@ -29,12 +29,17 @@ type DuplicateGroup struct {
 
 // DuplicateGroups groups live, ready media by (size_bytes, duration_ms) and
 // returns only groups with more than one member. limit caps the group count.
+//
+// ⚠️ 排除"文件已不在"的记录（missing_since 非空）：文件被移走/删掉的那条不是"重复"，
+// 它只是一条待清理的缺失记录。用户 2026-09-27 报障就是这条 —— 把 A 库的视频移到 B 库后，
+// A 那条只剩缺失标记却仍算一组，于是去重里冒出这些视频（扫描已经会把移动识别成"迁移"，
+// 这里是第二道保险：即使没识别出来，也不该当成重复）。
 func (db *DB) DuplicateGroups(limit int) ([]DuplicateGroup, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := db.Query(`SELECT size, duration_ms, COUNT(1) AS n FROM media
-		WHERE deleted_at IS NULL AND status = ? AND duration_ms > 0 AND size > 0
+		WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL AND duration_ms > 0 AND size > 0
 		GROUP BY size, duration_ms HAVING n > 1
 		ORDER BY n DESC, size DESC LIMIT ?`, domain.MediaReady, limit)
 	if err != nil {
@@ -71,7 +76,7 @@ func (db *DB) DuplicateGroups(limit int) ([]DuplicateGroup, error) {
 func (db *DB) duplicateMembers(size, durationMS int64) ([]DuplicateMember, error) {
 	rows, err := db.Query(`SELECT id, library_id, path, title, duration_ms, size, status,
 		COALESCE(missing_since,''), created_at FROM media
-		WHERE deleted_at IS NULL AND status = ? AND size = ? AND duration_ms = ?
+		WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL AND size = ? AND duration_ms = ?
 		ORDER BY created_at ASC, id ASC`, domain.MediaReady, size, durationMS)
 	if err != nil {
 		return nil, err

@@ -346,6 +346,71 @@ func TestScanRecognizesRenameAndKeepsIdentity(t *testing.T) {
 	}
 }
 
+// 门禁（用户 2026-09-27 报障）：**文件从 A 库被搬到 B 库**时，记录要跟着走 ——
+// 不能"B 里新建一条 + A 那条留成缺失"（那样去重里就会冒出这堆视频）。
+// 判据：id 不变、库变成 B、路径指到新位置、没有残留的缺失行、扫描任务报 renamed=1。
+func TestScanFollowsFileMovedToAnotherLibrary(t *testing.T) {
+	env := newScanEnv(t)
+	env.write(t, "clip.mp4", "content-moved")
+	env.run(t)
+	before := env.media(t)
+	if len(before) != 1 {
+		t.Fatalf("前置扫描 = %d 条，期望 1", len(before))
+	}
+	oldID := before[0].ID
+
+	// 第二个库：根在允许根内的子目录（同一份文件搬过去）
+	sub := filepath.Join(env.root, "b-library")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	libB := &domain.Library{ID: domain.NewID("lib"), Name: "B", RootPath: sub,
+		Recursive: true, Enabled: true, IgnoreRules: []string{}}
+	if err := env.db.CreateLibrary(libB); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(env.root, "clip.mp4"), filepath.Join(sub, "clip.mp4")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 只扫 B（不重扫 A）—— 现实里用户往往就是只扫了新库
+	task := &domain.ScanTask{ID: domain.NewID("scn"), LibraryID: libB.ID, Kind: "incremental"}
+	if err := env.db.CreateScanTask(task); err != nil {
+		t.Fatal(err)
+	}
+	got, err := env.db.GetLibrary(libB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.scan.Run(context.Background(), task, got)
+	done, err := env.db.GetScanTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Renamed != 1 {
+		t.Fatalf("跨库移动应报 renamed=1，实际 renamed=%d missing=%d suspected=%d",
+			done.Renamed, done.Missing, done.Suspected)
+	}
+
+	after := env.media(t)
+	if len(after) != 1 {
+		t.Fatalf("跨库移动不该新增行（现存 %d 条，去重里就会冒出重复）", len(after))
+	}
+	m := after[0]
+	if m.ID != oldID {
+		t.Fatalf("id 变了（%s → %s）：进度/收藏/剧场成员会跟着丢", oldID, m.ID)
+	}
+	if m.LibraryID != libB.ID {
+		t.Fatalf("记录没迁到新库：library_id=%s 期望 %s", m.LibraryID, libB.ID)
+	}
+	if m.Path != filepath.Join(sub, "clip.mp4") {
+		t.Fatalf("路径没改指新位置：%s", m.Path)
+	}
+	if m.MissingSince != "" {
+		t.Fatalf("迁移后不该带缺失标记：%q", m.MissingSince)
+	}
+}
+
 // 门禁：有歧义就**不猜**。两条缺行与两个新文件的 (size,mtime) 完全相同时一行都不迁，
 // 退回原来的"新增 + 标记缺失"，让用户自己判断。
 func TestScanRenameAmbiguityIsSkipped(t *testing.T) {

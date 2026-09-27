@@ -258,6 +258,12 @@ func ignored(name string, rules []string) bool {
 // scanner skip exactly the same directories (不许第二套判据).
 func IgnoredName(name string, rules []string) bool { return ignored(name, rules) }
 
+// renameKey 是"同一个文件"的近似指纹（size+mtime）：改名/移动识别靠它（两个函数共用同一个命名类型）。
+type renameKey struct {
+	size    int64
+	mtimeNS int64
+}
+
 // migrateRenamed 识别"同一个文件换了名字/换了目录"：磁盘上出现一个数据库里没有的新文件，
 // 而数据库里恰好有一条"这次没在磁盘上看到"的行，两者 **size+mtime 完全一致** ⇒ 判定为改名，
 // 把旧行改指到新路径（保留 id ⇒ 观看进度、收藏、稍后再看、剧场成员全部保留）。
@@ -268,31 +274,27 @@ func IgnoredName(name string, rules []string) bool { return ignored(name, rules)
 // 迁移成功后同步更新 states，processFile 会把它当成"已存在的行"按 size+mtime 跳过重探。
 func (s *Scanner) migrateRenamed(lib *domain.Library, entries []fileEntry,
 	states map[string]storage.MediaState) int {
-	type key struct {
-		size    int64
-		mtimeNS int64
-	}
 	onDisk := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		onDisk[e.Path] = true
 	}
-	newFiles := map[key][]fileEntry{}
+	newFiles := map[renameKey][]fileEntry{}
 	for _, e := range entries {
 		if _, ok := states[e.Path]; ok {
 			continue // 数据库里已有这一行，不是新文件
 		}
-		k := key{e.Size, e.MtimeNS}
+		k := renameKey{e.Size, e.MtimeNS}
 		newFiles[k] = append(newFiles[k], e)
 	}
 	if len(newFiles) == 0 {
 		return 0
 	}
-	missingRows := map[key][]string{}
+	missingRows := map[renameKey][]string{}
 	for path, st := range states {
 		if onDisk[path] {
 			continue
 		}
-		k := key{st.Size, st.MtimeNS}
+		k := renameKey{st.Size, st.MtimeNS}
 		missingRows[k] = append(missingRows[k], path)
 	}
 
@@ -315,7 +317,59 @@ func (s *Scanner) migrateRenamed(lib *domain.Library, entries []fileEntry,
 		s.Log.Info("识别到改名/移动", "library_id", lib.ID, "media_id", st.ID,
 			"from", oldPath, "to", entry.Path)
 	}
+	migrated += s.migrateAcrossLibraries(lib, newFiles, states)
 	return migrated
+}
+
+// migrateAcrossLibraries 处理**跨库移动**（用户 2026-09-27 报障："媒体库 A 里的视频通过文件移动放到 B，
+// 重扫后这些视频出现在去重里"）。第一遍的 missingRows 只取自**本库**，所以文件换库后匹配不上：
+// 结果是 B 里新建一条、A 那条只剩缺失标记但**仍然活着**（status=ready、deleted_at 为空），
+// 去重按 size+duration 一分组，就把它俩当"疑似重复"。
+//
+// 判据（比 missing_since 更硬）：同 (size,mtime) 的记录里，**唯一**一条属于别的库、且它的文件
+// 已经不在磁盘上（os.Stat 失败）⇒ 判定为移动：改指新路径 + 迁到新库，保留 id（进度/收藏/稍后再看/剧场成员都跟着走）。
+// 有歧义（多条候选 / 多个新文件）一律不猜，退回"缺失 + 清理"那条路。
+func (s *Scanner) migrateAcrossLibraries(lib *domain.Library, newFiles map[renameKey][]fileEntry,
+	states map[string]storage.MediaState) int {
+	moved := 0
+	for k, files := range newFiles {
+		if len(files) != 1 {
+			continue // 多个同 size+mtime 的新文件：不猜
+		}
+		entry := files[0]
+		if _, ok := states[entry.Path]; ok {
+			continue // 第一遍已经迁过（或本来就有这一行）
+		}
+		refs, err := s.DB.MediaBySizeMtime(k.size, k.mtimeNS)
+		if err != nil {
+			continue
+		}
+		cand := make([]storage.MediaPathRef, 0, 1)
+		for _, r := range refs {
+			if r.LibraryID == lib.ID {
+				continue // 同库的交给第一遍
+			}
+			if _, statErr := os.Stat(r.Path); statErr == nil {
+				continue // 旧文件还在磁盘上 ⇒ 是复制，不是移动（真重复，留给去重报）
+			}
+			cand = append(cand, r)
+		}
+		if len(cand) != 1 {
+			continue
+		}
+		old := cand[0]
+		title := strings.TrimSuffix(filepath.Base(entry.Path), filepath.Ext(entry.Path))
+		if err := s.DB.RepointMedia(old.ID, lib.ID, entry.Path, title); err != nil {
+			s.Log.Warn("跨库移动迁移失败", "media_id", old.ID, "error", err.Error())
+			continue
+		}
+		delete(states, old.Path)
+		states[entry.Path] = storage.MediaState{ID: old.ID, Size: entry.Size, MtimeNS: entry.MtimeNS, Status: old.Status}
+		moved++
+		s.Log.Info("识别到跨库移动", "media_id", old.ID, "from_library", old.LibraryID,
+			"from", old.Path, "to_library", lib.ID, "to", entry.Path)
+	}
+	return moved
 }
 
 // processFile probes one file (with backoff retries) and upserts its row.

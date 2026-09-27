@@ -160,6 +160,46 @@ func (db *DB) RepointMediaPath(id, newPath, title string) error {
 	return err
 }
 
+// MediaPathRef 是"按 size+mtime 找同一条视频"时用的最小字段集（识别跨库移动用，见 scanner.migrateRenamed）。
+type MediaPathRef struct {
+	ID           string
+	LibraryID    string
+	Path         string
+	Title        string
+	Status       string
+	MissingSince string
+}
+
+// MediaBySizeMtime 跨库列出 (size, mtime) 完全相同的记录。
+// 用途只有一个：文件被**移动**（可能换了库）时，把旧记录改指到新路径，而不是"新建一条 + 留一条缺失"
+// （用户 2026-09-27 报障：A 库的视频移到 B 库后，去重里冒出这些视频）。
+func (db *DB) MediaBySizeMtime(size, mtimeNS int64) ([]MediaPathRef, error) {
+	rows, err := db.Query(`SELECT id, library_id, path, title, status, COALESCE(missing_since,'')
+		FROM media WHERE deleted_at IS NULL AND size = ? AND mtime_ns = ?`, size, mtimeNS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MediaPathRef{}
+	for rows.Next() {
+		var r MediaPathRef
+		if err := rows.Scan(&r.ID, &r.LibraryID, &r.Path, &r.Title, &r.Status, &r.MissingSince); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RepointMedia 把一条记录改指到新路径，并（必要时）换库 —— 识别"文件被移动"时用。
+// 保留 id，所以观看进度、收藏、稍后再看、剧场成员全部跟着走；同时清掉缺失标记。
+func (db *DB) RepointMedia(id, libraryID, newPath, title string) error {
+	_, err := db.Exec(`UPDATE media SET library_id = ?, path = ?, normalized_path = ?, title = ?,
+		missing_since = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+		libraryID, newPath, newPath, title, domain.NowString(), id)
+	return err
+}
+
 // PurgeMissingMedia 软删某个库里所有"文件已不在"的记录（missing_since 非空）。
 // 只删数据库记录，**绝不动磁盘文件**；返回真实删除行数供界面如实显示。
 // 存在的理由：整库改名/移动后缺失比例会超过扫描的自动删除阈值（默认 10%），
