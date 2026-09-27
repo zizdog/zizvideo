@@ -299,6 +299,17 @@ export function mountFeed(view, options = {}) {
       seeking: false, flashTimer: 0, hintTimer: 0, ffTimer: 0, fastForward: false, suppressClick: false,
       resumeDone: false, playRejected: false, broken: false, destroyed: false,
     };
+
+    // 兜底（用户 2026-09-27 报障"确定没反应"）：有的电视 WebView 把"确定"只做成 click（不送 keydown
+    // Enter），而且点到的往往是 body/容器而不是 <video>。这里让**播放区域的点击也当确定**；
+    // 按钮/侧栏/面板上的点击不算（它们有自己的处理）。和 keydown 那条用 togglePlay 里 250ms 去重兜住。
+    if (tvMode()) {
+      layer.addEventListener("click", (event) => {
+        const t = event.target;
+        if (t && t.closest && t.closest("button, a[href], .ov-rail, .set-panel, .sheet-scrim, .modal-overlay, .imm-back, .center-btn, .lib-chip")) return;
+        togglePlay(entry);
+      });
+    }
     state.built.set(index, entry);
 
     entry.fav = el("button", { class: "icon-btn", type: "button", title: "收藏" }, icon("heart"));
@@ -663,7 +674,14 @@ export function mountFeed(view, options = {}) {
     if (entry.ffTimer) { clearTimeout(entry.ffTimer); entry.ffTimer = 0; }
   }
 
+  // 同一个"确定"可能既来 keydown 又来 click（不同 WebView 行为不同）：250ms 内只认第一次，
+  // 否则会"暂停又立刻播"，用户看到的就是"按了没反应"。
+  let lastToggleAt = 0;
+
   function togglePlay(entry) {
+    const now = Date.now();
+    if (now - lastToggleAt < 250) return;
+    lastToggleAt = now;
     if (entry.destroyed || entry.broken || !entry.video) return;
     if (entry.video.paused) {
       hidePlayButton(entry);
@@ -1041,6 +1059,9 @@ export function mountFeed(view, options = {}) {
     try { const sel = window.getSelection(); if (sel) sel.removeAllRanges(); } catch (err) { /* 忽略 */ }
     paintPanel(entry);
     ensureScrim().classList.remove("hidden");
+    // 电视端：面板一开就把焦点落到第一行（用户 2026-09-27："面板打开没反应/只能上下左右"——
+    // 原来是"开了但没落焦"，第一下↓才落焦，看着就像没打开）。
+    if (tvMode()) setTimeout(() => focusFirst(), 0);
     entry.panel.classList.remove("hidden");
     if (entry.paintSheet) entry.paintSheet();
   }
@@ -1814,7 +1835,12 @@ export function mountFeed(view, options = {}) {
   //   ↑↓ 换视频（电视就是"换台"）· ←→ 快退快进 · 确定 播放/暂停
   //   长按确定（或遥控器菜单键）开设置面板 · 面板里 ↑↓ 走焦点、← 收面板
   // 只在 tv 模式下注册；返回 true = 这次按键播放页吃了，通用空间导航不再插手（见 tv.js）。
-  let tvEnterTimer = null;
+  // 确定键：记录**第一次按下**的时刻（重复键不许重置 —— 这是"长按确定没用"的根因：
+  // 电视 WebView 的重复 keydown 里 repeat 恒为 false，老代码每次 keydown 都重置 400ms 计时器，
+  // 遥控器连发就把长按顶掉了，抬手只剩"短按"。见 2026-09-27 的实测日志：
+  //   DPAD_CENTER 长按 → 两次 keydown(repeat=0) + 一次 keyup ⇒ 面板不开。
+  let tvEnterAt = 0;
+  const TV_LONG_MS = 450;
   function tvPanelOpen() {
     const entry = state.built.get(state.active);
     return !!(entry && entry.panel && !entry.panel.classList.contains("hidden"));
@@ -1848,24 +1874,32 @@ export function mountFeed(view, options = {}) {
       case "ArrowUp": goTo(state.active - 1); return true;
       case "ArrowLeft": seekBy(-1); return true;
       case "ArrowRight": seekBy(1); return true;
-      case "Enter":
-        // 短按 = 播放/暂停，长按 = 开面板（手机上就是长按弹面板）：动作等 keyup/超时再定。
-        // 400ms 不是 550ms：`input keyevent --longpress` 只按住 ~500ms，阈值太贴近会"长按当短按"。
-        if (!event.repeat) {
-          if (tvEnterTimer) clearTimeout(tvEnterTimer);
-          tvEnterTimer = setTimeout(() => { tvEnterTimer = null; openPanel(entry); }, 400);
+      case "Enter": {
+        // 短按 = 播放/暂停，长按 = 开"更多"面板（抖音 TV 那套：长按确定出操作面板）。
+        // 判据只看"按下到抬手多久"；重复 keydown 只用来兜底（有些遥控器不发 keyup）。
+        const now = Date.now();
+        if (!tvEnterAt) {
+          tvEnterAt = now;
+        } else if (now - tvEnterAt >= TV_LONG_MS) {
+          tvEnterAt = 0; // 连发键到了时长 ⇒ 直接当长按，不再等抬手
+          openPanel(entry);
         }
         return true;
+      }
       case "ContextMenu": openPanel(entry); return true; // 遥控器"菜单"键（部分机型能到 JS）
       default: return false;
     }
   }
   function onTvKeyUp(event) {
-    if (event.key !== "Enter" || !tvEnterTimer) return false;
-    clearTimeout(tvEnterTimer);
-    tvEnterTimer = null;
+    if (event.key !== "Enter") return false;
+    const held = tvEnterAt ? Date.now() - tvEnterAt : 0;
+    if (!tvEnterAt) return false;
+    tvEnterAt = 0;
     const entry = state.built.get(state.active);
-    if (entry && !entry.destroyed) togglePlay(entry);
+    if (entry && !entry.destroyed) {
+      if (held >= TV_LONG_MS) openPanel(entry); // 长按：开"更多"
+      else togglePlay(entry);                   // 短按：播放/暂停
+    }
     return true;
   }
 
@@ -2030,7 +2064,7 @@ export function mountFeed(view, options = {}) {
     window.removeEventListener("pagehide", onPageHide);
     document.removeEventListener("visibilitychange", onVisibility);
     if (tvMode()) {
-      if (tvEnterTimer) clearTimeout(tvEnterTimer);
+      tvEnterAt = 0;
       setFeedKeys(null);
       try { delete window.__zvTvMenu; } catch (err) { window.__zvTvMenu = null; }
     }

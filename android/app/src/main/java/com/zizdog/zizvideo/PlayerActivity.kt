@@ -616,8 +616,14 @@ class PlayerActivity : AppCompatActivity() {
         if (tv && !onOwnControl && okKeys.contains(event.keyCode)) {
             when (event.action) {
                 android.view.KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount == 0) okDownAt = android.os.SystemClock.uptimeMillis()
-                    return true // 等抬手再决定，别在按下时就急着切
+                    if (event.repeatCount == 0) {
+                        okDownAt = android.os.SystemClock.uptimeMillis()
+                    } else if (android.os.SystemClock.uptimeMillis() - okDownAt >= TvPlayerKeys.LONG_PRESS_MS) {
+                        // 遥控器连发（有的盒子抬手时长不好保证）：到时长就直接当长按，不再等抬手
+                        okDownAt = 0L
+                        focusChrome()
+                    }
+                    return true
                 }
                 android.view.KeyEvent.ACTION_UP -> {
                     val held = android.os.SystemClock.uptimeMillis() - okDownAt
