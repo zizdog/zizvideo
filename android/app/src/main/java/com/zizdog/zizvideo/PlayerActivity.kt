@@ -100,6 +100,10 @@ class PlayerActivity : AppCompatActivity() {
             // 吃掉去叫控件条（实测"按了没反应"），常显就没有这个窗口期。
             view.controllerShowTimeoutMs = 0
             view.showController()
+            // 焦点放画面上：media3 控件条会把默认焦点抢到 exo_settings 上，这里明确抢回画面
+            view.isFocusable = true
+            view.isFocusableInTouchMode = true
+            view.requestFocus()
             findViewById<android.widget.TextView>(R.id.hint).text =
                 "遥控器：确定=播放/暂停 · ←→ 快退快进 · ↑↓=上下集 · 菜单键=底部控件"
         }
@@ -545,9 +549,8 @@ class PlayerActivity : AppCompatActivity() {
      * （只把控件条显示/藏起来），写在 onKeyDown 里永远收不到（实测）。
      */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        val focus = currentFocus
-        val onControl = focus is android.widget.Button || focus is android.widget.ImageButton
-        when (TvPlayerKeys.decide(event.keyCode, event.action, event.repeatCount, tv, onControl)) {
+        val focusId = currentFocus?.id ?: 0
+        when (TvPlayerKeys.decide(event.keyCode, event.action, event.repeatCount, tv, focusId)) {
             TvPlayerKeys.Action.TOGGLE -> { togglePlayPause(); return true }
             TvPlayerKeys.Action.FOCUS_CHROME -> { focusChrome(); return true }
             else -> Unit
@@ -574,9 +577,8 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         if (event == null) return super.onKeyDown(keyCode, event)
-        val focus = currentFocus
-        val onControl = focus is android.widget.Button || focus is android.widget.ImageButton
-        when (TvPlayerKeys.decide(keyCode, android.view.KeyEvent.ACTION_DOWN, 0, tv, onControl)) {
+        val focusId = currentFocus?.id ?: 0
+        when (TvPlayerKeys.decide(keyCode, android.view.KeyEvent.ACTION_DOWN, 0, tv, focusId)) {
             TvPlayerKeys.Action.SEEK_BACK -> return tvSeek(-tvSeekMs)
             TvPlayerKeys.Action.SEEK_FWD -> return tvSeek(tvSeekMs)
             TvPlayerKeys.Action.PREV -> { controller?.seekToPreviousMediaItem(); view.showController(); return true }

@@ -1,11 +1,14 @@
 // DOM 助手：只用 createElement / textContent，API 文本一律不进 innerHTML（坑 1）
 
 export function add(parent, children) {
-  const list = Array.isArray(children) ? children.flat(Infinity) : [children];
+  const list = Array.isArray(children) ? children : [children];
   for (const child of list) {
     if (child === null || child === undefined || child === false || child === true) continue;
-    if (child instanceof Node) parent.append(child);
-    else parent.append(document.createTextNode(String(child)));
+    // 嵌套数组递归展开：原来用 children.flat(Infinity)，那是 Chrome 69+ 才有的 API。
+    // 这个函数是每个元素都要走的路径，老电视 WebView 上没有它 = 整页白屏（用户 2026-09-27 报障那条）。
+    if (Array.isArray(child)) { add(parent, child); continue; }
+    if (child instanceof Node) parent.appendChild(child);
+    else parent.appendChild(document.createTextNode(String(child)));
   }
   return parent;
 }

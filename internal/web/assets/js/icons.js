@@ -81,7 +81,16 @@ export function icon(name) {
   return svg;
 }
 
-/** setIcon(node, name) 换图标（用于声音开/关这种同一个按钮换样子）。 */
+/**
+ * setIcon(node, name) 换图标（用于声音开/关这种同一个按钮换样子）。
+ *
+ * ⚠️ 这里**不许**用 `node.replaceChildren(...)`：那是 Chrome 86+ 才有的 API，
+ * 而电视/盒子上的 WebView 常年不更新（小米电视 HyperOS 实测就没有）——
+ * 一调就抛 "node.replaceChildren is not a function"，**整页跟着崩**：
+ * 用户看到的是"加载失败"+ 遥控器怎么按都没焦点（2026-09-27 真机报障）。
+ * 用最朴素的 removeChild/appendChild，任何 WebView 都能跑（`append` 是 Chrome 54+，也别图省事）。
+ */
 export function setIcon(node, name) {
-  node.replaceChildren(icon(name));
+  while (node.firstChild) node.removeChild(node.firstChild);
+  node.appendChild(icon(name));
 }

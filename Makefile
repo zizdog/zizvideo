@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.4.0-mvp
+VERSION   ?= 0.4.1-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 DIST      ?= dist
 APPDIR    ?= $(DIST)/apps/zizvideo
@@ -19,7 +19,7 @@ RELEASE_LDFLAGS := -s -w $(LDFLAGS)
 # 国内网络下 proxy.golang.org 常不可达
 export GOPROXY ?= https://goproxy.cn,direct
 
-.PHONY: help check check-run test test-serial vet fmt build run fixtures release index publish verify version
+.PHONY: help check check-run test test-serial vet fmt build run fixtures release index publish publish-app verify version
 
 help: ## 列出目标
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -51,6 +51,8 @@ check-run: ## 真正跑一遍门禁（不做指纹跳过）
 	@[ -d node_modules/acorn ] || { echo "!! 缺 node_modules/acorn —— 先 npm install（白屏级错误只有它能抓）"; exit 1; }
 	@node tools/check-js-syntax.mjs internal/web/assets
 	@node tools/check-js-undeclared.mjs internal/web/assets
+	@echo "==> 前端兼容（老电视 WebView 上没有的 DOM/JS API 会让整页崩；acorn 只查语法抓不到）"
+	@node tools/check-js-compat.mjs internal/web/assets
 	@$(MAKE) --no-print-directory vet
 	@$(MAKE) --no-print-directory test
 	@echo "检查通过 ✅"
@@ -113,6 +115,9 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 
 index: ## 只按现有版本目录重算索引（产物没重编时用）
 	@python3 tools/make-app-index.py $(VERDIR) $(VERSION)
+
+publish-app: ## 只发安卓客户端（APK + android.json），不动服务端（改的只有安卓代码时用）
+	@bash tools/publish-mirror.sh --app-only
 
 publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini 面板接口）
 	@bash tools/publish-mirror.sh

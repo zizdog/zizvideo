@@ -13,8 +13,9 @@ import org.junit.Test
  */
 class TvPlayerKeysTest {
 
-    private fun decide(code: Int, repeat: Int = 0, isTv: Boolean = true, onControl: Boolean = false) =
-        TvPlayerKeys.decide(code, KeyEvent.ACTION_DOWN, repeat, isTv, onControl)
+    // focusId 用 R.id.*：白名单判据本身就是"按 id"，所以测试也必须按 id 传
+    private fun decide(code: Int, repeat: Int = 0, isTv: Boolean = true, focusId: Int = R.id.player) =
+        TvPlayerKeys.decide(code, KeyEvent.ACTION_DOWN, repeat, isTv, focusId)
 
     @Test
     fun okTogglesPlayback() {
@@ -38,10 +39,18 @@ class TvPlayerKeysTest {
         assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_MENU))
     }
 
+    /** 只有"我们自己那排控件"才不抢；media3 控件条（exo_*）与画面本身都要抢。
+        这条是验收抓回来的：原来按 Button/ImageButton 判断，被 media3 的 exo_settings 骗过去了。 */
     @Test
-    fun neverStealsFromButtons() {
-        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_CENTER, onControl = true))
-        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_MENU, onControl = true))
+    fun neverStealsFromOwnControlsOnly() {
+        for (id in TvPlayerKeys.OWN_CONTROL_IDS) {
+            assertEquals("我们的控件 $id 上不该抢确定键", TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_CENTER, focusId = id))
+            assertEquals("我们的控件 $id 上不该抢菜单键", TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_MENU, focusId = id))
+        }
+        // 画面（player）与"未知 id"（media3 的 exo_* 按钮）都要接管
+        assertEquals(TvPlayerKeys.Action.TOGGLE, decide(KeyEvent.KEYCODE_DPAD_CENTER, focusId = R.id.player))
+        assertEquals(TvPlayerKeys.Action.TOGGLE, decide(KeyEvent.KEYCODE_DPAD_CENTER, focusId = 0))
+        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_MENU, focusId = 0))
     }
 
     @Test
@@ -54,7 +63,7 @@ class TvPlayerKeysTest {
     fun keyUpIsIgnored() {
         assertEquals(
             TvPlayerKeys.Action.NONE,
-            TvPlayerKeys.decide(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_UP, 0, true, false),
+            TvPlayerKeys.decide(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_UP, 0, true, R.id.player),
         )
     }
 }

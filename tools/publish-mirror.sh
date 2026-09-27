@@ -10,6 +10,9 @@
 #    make publish                      # 上传 + 复验（默认）
 #    bash tools/publish-mirror.sh --verify-only   # 只复验线上与本地是否一致
 #    bash tools/publish-mirror.sh --self-test      # 只探"能不能写镜像"（上传探针即删）
+#    bash tools/publish-mirror.sh --app-only
+#                                      # 只发安卓客户端（APK + android.json），不动服务端版本目录与 manifest：
+#                                      # 改的只有安卓代码时用它 —— 服务端字节没变就不该再发一次服务端
 #    bash tools/publish-mirror.sh --allow-existing-version
 #                                      # 允许覆盖镜像上已存在的同版本（默认拒绝：同版本换字节
 #                                      # 会让"已装 0.1.2 的用户"和"新装 0.1.2 的用户"不是同一份产物）
@@ -32,12 +35,14 @@ VERIFY_ONLY=0
 KEEP_VERSIONS="${ZV_KEEP_VERSIONS:-3}"
 ALLOW_EXISTING=0
 SELF_TEST=0
+APP_ONLY=0
 DEEP="${VERIFY_DEEP:-0}"
 PRUNE="${PRUNE:-1}"
 for arg in "$@"; do
   case "$arg" in
     --verify-only) VERIFY_ONLY=1 ;;
     --allow-existing-version) ALLOW_EXISTING=1 ;;
+    --app-only) APP_ONLY=1 ;;
     --self-test) SELF_TEST=1 ;;
     --deep) DEEP=1 ;;
     --no-prune) PRUNE=0 ;;
@@ -219,7 +224,7 @@ prune_old_apks() {
 import json, os, re, sys
 cur, app = os.environ["KEEP"], os.environ["APP_DIR"].rstrip("/")
 keep_n = max(1, int(os.environ.get("KEEP_N") or "3"))
-pat = re.compile(r"^zizvideo-android-([0-9]+\.[0-9]+\.[0-9]+)\.apk$")
+pat = re.compile(r"^zizvideo-android-([0-9]+)\.([0-9]+)\.([0-9]+)\.apk$")
 try:
     data = json.load(sys.stdin)
 except Exception:
@@ -344,6 +349,67 @@ api() { # api <method> <path> [curl args...]
   local method="$1" path="$2"; shift 2
   curl -fsSk -b "$JAR" -c "$JAR" -X "$method" -H "X-CSRF-Token: $(csrf)" "$@" "$MINI_URL$path"
 }
+
+# --app-only：只发安卓客户端。改的只有安卓代码时用它 —— 服务端字节没变就不该再发一次服务端
+# （同版本换字节是明令禁止的，重发服务端只会撞上"已存在"的保护）。
+# 要求：先 `bash android/tools/build.sh assembleRelease` + `make release`（后者刷新 dist 里的 APK 与 android.json）。
+if [ "$APP_ONLY" = "1" ]; then
+  shopt -s nullglob
+  apks=("$APPDIR"/android/*.apk)
+  shopt -u nullglob
+  [ "${#apks[@]}" -gt 0 ] || die "缺 $APPDIR/android/*.apk —— 先 bash android/tools/build.sh assembleRelease && make release"
+  [ -f "$APPDIR/android.json" ] || die "缺 $APPDIR/android.json —— 先跑 make release（它按 APK 重算更新清单）"
+  adir="$APP_DIR/android"
+  abody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$adir")"
+  if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$abody" >/dev/null 2>&1; then
+    ok "已创建 android/（App 更新源目录）"
+  elif api GET /api/v1/files -G --data-urlencode "path=$adir" 2>/dev/null | grep -q '"entries"'; then
+    ok "android/ 已存在"
+  else
+    die "创建更新源目录失败：$adir（面板接口不建目录）"
+  fi
+  info "只发安卓客户端（服务端 ${VERSION} 一个字节都不动）"
+  for f in "${apks[@]}" "$APPDIR/android.json"; do
+    name="$(basename "$f")"
+    size="$(wc -c < "$f" | tr -d ' ')"
+    resp="$(mktemp)"
+    if ! api_ro POST /api/v1/files/upload -F "dir=$adir" -F "on_conflict=overwrite" \
+        -F "files=@$f;filename=$name" >"$resp" 2>&1; then
+      rm -f "$resp"; die "上传 $name 失败"
+    fi
+    got="$(RESP="$resp" NAME="$name" python3 -c 'import json,os
+try:
+    d = json.load(open(os.environ["RESP"]))
+except Exception:
+    print(""); raise SystemExit
+print(",".join(str(f.get("size")) for f in (d.get("data") or {}).get("uploaded") or [] if f.get("name") == os.environ["NAME"]))')"
+    rm -f "$resp"
+    [ "$got" = "$size" ] || die "$name 落盘大小 $got ≠ 本地 $size"
+    ok "$name（$size B）"
+  done
+  ANDROID_APK="$(basename "$(ls -1 "${apks[@]}" | tail -1)")"
+  if [ "$PRUNE" = "1" ]; then prune_old_apks; else info "（--no-prune：不清理旧 APK）"; fi
+  # 线上核对：manifest 不动，只核对 android.json 指向的 APK 是否与本地逐字节一致
+  MIRROR_BASE="$MIRROR_BASE" APPDIR="$APPDIR" python3 -c '
+import hashlib, json, os, ssl, urllib.request
+base = os.environ["MIRROR_BASE"].rstrip("/") + "/apps/zizvideo"
+appdir = os.environ["APPDIR"]
+ctx = ssl._create_unverified_context()
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=60, context=ctx) as r:
+        return r.read()
+meta = json.loads(fetch(base + "/android.json").decode())
+apk = meta["file"]
+local = os.path.join(appdir, "android", os.path.basename(apk))
+want = hashlib.sha256(open(local, "rb").read()).hexdigest()
+got = hashlib.sha256(fetch(base + "/" + apk)).hexdigest()
+if want != got:
+    raise SystemExit("!! 线上 APK sha256 %s… != 本地 %s…" % (got[:16], want[:16]))
+print("  ✓ 线上 APK 与本地逐字节一致：%s（%s…）" % (os.path.basename(apk), got[:16]))
+' || die "线上核对失败"
+  ok "安卓客户端已发布（服务端未动）"
+  exit 0
+fi
 
 # --self-test：只验证"能不能写镜像"（上传一个几字节的探针再删掉），不碰任何线上产物。
 # 换机器/换凭据后先跑这个，别拿真版本试。

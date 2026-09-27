@@ -83,6 +83,9 @@ class WebActivity : AppCompatActivity() {
 
     /** 首屏 URL（网页说"未登录"时用它重载一次自愈：见 handlePlayRoute 的 #/login 分支）。 */
     private var startUrl: String = ""
+
+    /** 网页 JS 错误只弹前 3 条（去重），避免刷屏。 */
+    private val webErrorsShown = mutableSetOf<String>()
     private var loginRetried = false
 
     /** 更新源地址（默认镜像站；自测可覆盖）与"这个进程里已经提示过一次更新"的标记。 */
@@ -566,6 +569,25 @@ class WebActivity : AppCompatActivity() {
             }
         }
         view.webChromeClient = object : WebChromeClient() {
+            /**
+             * 网页 JS 报错**要能看见**（用户 2026-09-27 报障："加载失败 node.replaceChildren is not a function"，
+             * 而那台电视的 WebView 是 Chrome 86 以下，缺这个 API ⇒ 整页崩，我们却只能靠用户描述去猜）。
+             * 做法：ERROR 级 console 消息 → logcat（zv-web）+ 一条去重后的原生 Toast（最多 3 条，别刷屏）。
+             */
+            override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+                if (msg.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                    val text = msg.message().take(160)
+                    android.util.Log.e("zv-web", text + " @" + msg.sourceId() + ":" + msg.lineNumber())
+                    if (webErrorsShown.add(text) && webErrorsShown.size <= 3) {
+                        android.widget.Toast.makeText(
+                            this@WebActivity, "网页错误：" + text,
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                return true
+            }
+
             override fun onShowFileChooser(
                 v: WebView,
                 callback: ValueCallback<Array<Uri>>,

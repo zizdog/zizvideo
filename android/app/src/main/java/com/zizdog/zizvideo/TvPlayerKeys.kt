@@ -17,9 +17,21 @@ object TvPlayerKeys {
 
     enum class Action { NONE, TOGGLE, FOCUS_CHROME, PREV, NEXT, SEEK_BACK, SEEK_FWD }
 
-    fun decide(keyCode: Int, action: Int, repeat: Int, isTv: Boolean, focusIsControl: Boolean): Action {
+    /**
+     * "我们自己那排控件"的 id（收藏/喜欢/稍后/倍速/缓存/画中画/停止）——只有焦点落在这些上才不抢按键。
+     *
+     * ⚠️ 坑（2026-09-27 真机验收抓出来的）：一开始按"是不是 Button/ImageButton"判断，结果电视上
+     * **默认焦点就是 media3 控件条的 `exo_settings`（ImageButton）**，于是确定键与菜单键被一起判成
+     * "不抢" ⇒ 按确定弹出的是 media3 设置弹窗、片子不停（A1/A2 两条验收都不通过）。
+     * 所以这里必须**按 id 白名单**判断，media3 那些 `exo_*` 一律不算"我们的控件"。
+     */
+    val OWN_CONTROL_IDS: Set<Int> = setOf(
+        R.id.fav, R.id.like, R.id.later, R.id.speed, R.id.offline, R.id.pip, R.id.stop,
+    )
+
+    fun decide(keyCode: Int, action: Int, repeat: Int, isTv: Boolean, focusId: Int): Action {
         if (!isTv || action != KeyEvent.ACTION_DOWN) return Action.NONE
-        if (focusIsControl) return Action.NONE // 焦点在按钮上：交给系统点击
+        if (focusId in OWN_CONTROL_IDS) return Action.NONE // 焦点在我们自己的按钮上：交给系统点击
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,

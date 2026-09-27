@@ -108,20 +108,20 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
   overflow: hidden; overscroll-behavior: contain; touch-action: none;
 }
 /* 位移用 transform 动画，禁止 scroll-snap 硬跳（item 5） */
-.track { position: absolute; inset: 0; transition: transform .28s ease-out; will-change: transform; }
+.track { position: absolute; top: 0; right: 0; bottom: 0; left: 0; transition: transform .28s ease-out; will-change: transform; }
 .card {
   position: absolute; left: 0; width: 100%; height: 100%; background: #000;
   display: flex; align-items: center; justify-content: center;
 }
 .card.info {
-  inset: 0; height: auto; z-index: 3; color: var(--muted); font-size: 14px;
+  top: 0; right: 0; bottom: 0; left: 0; height: auto; z-index: 3; color: var(--muted); font-size: 14px;
 }
 .feed-chip {
   position: absolute; z-index: 8; top: calc(12px + var(--sat)); left: 50%; transform: translateX(-50%);
   padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,.62); color: #fff; font-size: 12px;
 }
-.layer { position: absolute; inset: 0; }
-.stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.layer { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+.stage { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; }
 .video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .overlay {
   /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
@@ -285,7 +285,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .sheet-form .set-row:first-child { border-top: 0; }
 .sheet-form .set-note { padding: 0 16px 10px; }
 /* 面板外的遮罩：吞掉点击（点外面只关面板，不触发播放/暂停） */
-.sheet-scrim { position: absolute; inset: 0; z-index: 11; background: rgba(0,0,0,.35); }
+.sheet-scrim { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 11; background: rgba(0,0,0,.35); }
 .set-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .set-row input { width: 16px; height: 16px; }
 .set-row input:disabled + span { opacity: .45; }
@@ -293,7 +293,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .set-note { font-size: 12px; color: var(--muted); }
 .times { display: flex; justify-content: space-between; color: rgba(255,255,255,.75); font-size: 12px; }
 .center-msg {
-  position: absolute; inset: 0; z-index: 5; padding: 24px; text-align: center;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 5; padding: 24px; text-align: center;
   display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.62);
 }
 .center-inner { max-width: 80%; }
@@ -375,7 +375,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .video-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .video-cover .no-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
 /* 卡片就地播放（管理端"去重"）：视频就占封面框，不放大；播放时藏掉角标/进度条让画面干净 */
-.video-cover video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.video-cover video { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .video-cover.playing .video-badge, .video-cover.playing .video-progress { display: none; }
 .video-open.inline-play { cursor: pointer; }
 .video-cover .inline-stop { position: absolute; z-index: 3; top: 6px; right: 6px; }
@@ -396,7 +396,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 
 /* ---------- 目录选择器 ---------- */
 .picker-overlay {
-  position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,.55); padding: 4vw;
 }
 .picker {
@@ -482,7 +482,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   border: 1px solid var(--accent); color: var(--accent);
 }
 .video-cover .inline-note {
-  position: absolute; inset: auto 0 0 0; padding: 6px 8px; font-size: 12px;
+  position: absolute; top: auto; right: 0; bottom: 0; left: 0; padding: 6px 8px; font-size: 12px;
   background: rgba(0,0,0,.72); color: #fff;
 }
 
@@ -527,7 +527,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .guide-step { display: flex; gap: 8px; align-items: baseline; }
 .guide-key { min-width: 64px; color: var(--accent); font-size: 12px; white-space: nowrap; }
 
-.sp-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.sp-stage { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; }
 .sp-top {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3; display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; color: #fff; background: linear-gradient(to bottom, rgba(0,0,0,.72), rgba(0,0,0,0));
@@ -577,7 +577,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .fav-meta { min-width: 0; }
 .fav-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.modal-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.6); padding: 4vw; }
+.modal-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.6); padding: 4vw; }
 .modal {
   width: min(96vw, 420px); max-height: 86vh; overflow: auto; padding: 16px;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -634,7 +634,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
   padding: 14px 14px 10px; border-bottom: 1px solid var(--line);
 }
 .side-panel-body { padding: 14px; overflow: auto; color: var(--muted); font-size: 13px; }
-.side-mask { position: fixed; inset: 0; z-index: 39; background: rgba(0,0,0,.5); }
+.side-mask { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 39; background: rgba(0,0,0,.5); }
 .side-mask.hidden { display: none; }
 
 /* 提示（toast）：用户 2026-09-23 要求更大、居中 —— 原来贴在底栏很难被注意到 */
