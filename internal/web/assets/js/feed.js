@@ -7,7 +7,7 @@ import { mountNav } from "./nav.js";
 import { session } from "./auth.js";
 import { choiceDialog } from "./confirm.js";
 import { createFeedSettingsForm, normalizeFeedSettings, seekSecondsOf, loopEffective } from "./play-settings.js";
-import { setFeedKeys, tvMode, focusFirst } from "./tv.js";
+import { setFeedKeys, tvMode, focusFirst, focusSelector, moveFocusIn } from "./tv.js";
 
 const WHEEL_STEP = 40;
 const TOUCH_STEP = 50;
@@ -161,9 +161,11 @@ export function mountFeed(view, options = {}) {
   view.append(feed, toast);
   // 电视端常驻按键提示（用户 2026-09-27 问"怎么才能操作其它地方？"）：
   // 抖音 TV / B站 TV 都把遥控器能做什么**写在屏幕上**，不能指望用户猜。
-  if (tvMode()) {
-    view.append(el("div", { class: "tv-keyhint", text: "↑↓ 换视频 · ←→ 快退快进 · 确定 播放/暂停 · 长按确定 更多" }));
-  }
+  // 两态各一行（画面态 / 控件态），由 tvPaintHint() 切换 —— 屏幕上直接写清"这层现在能干什么"。
+  const tvHintMain = el("div", { class: "tv-keyhint-main" });
+  const tvHintSub = el("div", { class: "tv-keyhint-sub" });
+  const tvHint = el("div", { class: "tv-keyhint" }, tvHintMain, tvHintSub);
+  if (tvMode()) view.append(tvHint);
   // 底栏挂载点（条目 10）：只加容器与入口，不改播放/进度逻辑
   view.append(mountNav(playlist ? (playlist.navKey || "series") : "feed"));
   // 播放页整屏（用户 2026-09-24）:顶栏改成浮在视频上，否则顶上那 52px 是页面底色（像一条背景横条）
@@ -233,6 +235,22 @@ export function mountFeed(view, options = {}) {
     refreshGain(index); // 音量均一化：这条要是还没量过，量完把音量落下去
     maybeLoadMore(index);
     warmUpcoming(); // 预加载后面几条：等切过去再拉就来不及
+    // 电视端：换视频后焦点要跟着搬到新画面上（否则焦点还留在被移出视口的旧 layer 上，
+    // 遥控器的 ↑↓ 会突然"不响应"——实测过）。画面态才搬，控件态的焦点别抢。
+    tvPaintLayers();
+    if (tvSurface) tvFocusSurface();
+  }
+
+  /** 电视端：只有**当前这条**画面能当焦点落点 / 默认落点（data-tv-default 给 tv.js 的 focusFirst 用）。 */
+  function tvPaintLayers() {
+    if (!tvMode()) return;
+    for (const [index, entry] of state.built) {
+      if (!entry.layer) continue;
+      const on = index === state.active;
+      entry.layer.tabIndex = on ? 0 : -1;
+      if (on) entry.layer.setAttribute("data-tv-default", "1");
+      else entry.layer.removeAttribute("data-tv-default");
+    }
   }
 
   /**
@@ -286,7 +304,16 @@ export function mountFeed(view, options = {}) {
     const shell = state.shells[index];
     if (!item || !shell) return null;
     // 每次物化都重建整个 layer，销毁时整块移除，避免重复叠加（坑 8）
+    // 电视端：**画面自己就是一个可聚焦节点**（抖音 TV 那套"画面态"）。不这样的话方向键永远被
+    // 播放语义吃掉，界面里的按钮（含底栏）一个都到不了（用户 2026-09-27 报障）。
+    // 只有当前这条 `tabindex=0`（见 tvPaintLayers），其余在翻页轨道里、屏幕外。
     const layer = el("div", { class: "layer" });
+    if (tvMode()) {
+      layer.tabIndex = index === state.active ? 0 : -1;
+      // 当前这条要马上带上"主画面"标记：tv.js 的 visible()／focusFirst() 靠它判断
+      // "哪些东西是这条视频里的"（面板刚 append 上来时也要立刻能落焦）。
+      if (index === state.active) layer.setAttribute("data-tv-default", "1");
+    }
     const stage = el("div", { class: "stage" });
     layer.append(stage);
     shell.append(layer);
@@ -1087,6 +1114,7 @@ export function mountFeed(view, options = {}) {
   }
 
   function closePanels() {
+    const hadOpen = anyPanelOpen();
     for (const entry of state.built.values()) {
       if (entry.panel) entry.panel.classList.add("hidden");
       if (entry.epsPanel) entry.epsPanel.classList.add("hidden");
@@ -1094,6 +1122,9 @@ export function mountFeed(view, options = {}) {
     if (sheetScrim) sheetScrim.classList.add("hidden");
     if (picker) picker.classList.add("hidden");
     holdCurrent(false); // 面板收起 ⇒ 恢复用户设置的连播/循环行为
+    // 电视端：面板是 `.hidden` 藏起来的（节点还在文档里），tv.js 的"焦点节点被删才补焦点"兜不住 ——
+    // 收面板后焦点会掉到 body（遥控器立刻没反应）。这里显式把焦点还回画面（见 focusFirst 的说明）。
+    if (hadOpen && tvMode()) setTimeout(() => focusFirst(), 0);
   }
 
   // 面板开着时：当前这条一直循环，绝不自动下一个（用户 2026-09-24 的改进 3）。
@@ -1831,76 +1862,101 @@ export function mountFeed(view, options = {}) {
     if (entry) openPanel(entry);
   }
 
-  // 电视端（遥控器）：按键语义与键盘不同（用户 2026-09-25）。
-  //   ↑↓ 换视频（电视就是"换台"）· ←→ 快退快进 · 确定 播放/暂停
-  //   长按确定（或遥控器菜单键）开设置面板 · 面板里 ↑↓ 走焦点、← 收面板
-  // 只在 tv 模式下注册；返回 true = 这次按键播放页吃了，通用空间导航不再插手（见 tv.js）。
-  // 确定键：记录**第一次按下**的时刻（重复键不许重置 —— 这是"长按确定没用"的根因：
-  // 电视 WebView 的重复 keydown 里 repeat 恒为 false，老代码每次 keydown 都重置 400ms 计时器，
-  // 遥控器连发就把长按顶掉了，抬手只剩"短按"。见 2026-09-27 的实测日志：
-  //   DPAD_CENTER 长按 → 两次 keydown(repeat=0) + 一次 keyup ⇒ 面板不开。
-  let tvEnterAt = 0;
-  const TV_LONG_MS = 450;
-  function tvPanelOpen() {
+  // 电视端（遥控器）：**两态模型**（用户 2026-09-27 明确："照抖音 TV 那套抄：界面结构和操作逻辑"）。
+  //
+  //   画面态（焦点在视频画面上，默认）：遥控器先伺候"看片"这个主动作
+  //     ↑↓ = 上一个/下一个视频（抖音：上下换视频）· 确定 = 播放/暂停（抖音：OK 播放暂停）
+  //     → = 呼出**功能轮盘**（右侧点赞/收藏/声音/全屏 —— 抖音：左右呼出功能轮盘）
+  //     ← = 呼出**底栏导航**（首页/剧场/收藏/我的）
+  //     ↑ 到头 = 顶栏（搜索）· ↓ 到尾 = 底栏（电视上"列表到头就进栏"的通用习惯）
+  //   控件态（焦点在界面按钮上）：方向键**全部**交给 tv.js 空间导航 —— 整个界面的按钮都走得到，
+  //     包括底栏（用户报障："只能操作上下左右，够不到底栏"就是卡在这一步）；确定交给浏览器点。
+  //     底栏里 ↑ = 回画面（最常用的一步，别让人再绕一圈）。
+  //
+  // 长按**不再是入口**（用户 2026-09-27："长按为什么…遥控器设置按钮就已经可以了"）：
+  // 设置面板只由遥控器「设置/菜单」键打开（原生 WebActivity 的 __zvTvMenu 口子，页面里也认 ContextMenu）。
+  const TV_CHROME = ".header, .bottom-nav, .ov-rail, .ov-corner, .center-btn, .imm-back," +
+    " .set-panel, .sheet-scrim, .modal-overlay, .picker-overlay, .lib-chip";
+  // 画面态判定不绑死"某个具体 layer"：换视频会重建 layer、旧节点被移出视口，
+  // 那一瞬间 activeElement 还指着旧节点 —— 必须仍旧当画面态，否则遥控器会突然没反应。
+  // 焦点在界面控件上才叫控件态；焦点丢了（body）也算画面态。
+  let tvSurface = tvMode();
+  function tvInChrome() {
+    const a = document.activeElement;
+    if (!a || a === document.body) return false;
+    return !!(a.closest && a.closest(TV_CHROME));
+  }
+  function tvSurfaceEntry() {
     const entry = state.built.get(state.active);
+    return entry && !entry.destroyed ? entry : null;
+  }
+  function tvPanelOpen() {
+    const entry = tvSurfaceEntry();
     return !!(entry && entry.panel && !entry.panel.classList.contains("hidden"));
   }
-  function onTvKeyDown(event) {
-    const entry = state.built.get(state.active);
-    if (!entry || entry.destroyed) return false;
+  function tvFocusSurface() {
+    tvSurface = true;
+    document.body.classList.add("tv-surface");
+    const entry = tvSurfaceEntry();
+    if (entry && entry.layer) {
+      try { entry.layer.focus({ preventScroll: true }); } catch (err) { /* 老 WebView 不认参数 */ }
+    }
+    tvPaintHint();
+    return true;
+  }
+  function tvPaintHint() {
+    if (!tvMode()) return;
+    tvHintMain.textContent = tvSurface
+      ? "↑↓ 换视频 · → 功能键 · ← 底栏 · 确定 播放/暂停"
+      : "←→↑↓ 选按钮 · 确定 按下 · 底栏 ↑ 回画面";
+    tvHintSub.textContent = tvSurface ? "遥控器「设置」键 = 菜单/选集/倍速" : "";
+  }
+  function tvGoChrome(selector) {
+    if (!focusSelector(selector)) return false;
+    tvSurface = false;
+    document.body.classList.remove("tv-surface");
+    tvPaintHint();
+    return true;
+  }  function onTvKeyDown(event) {
+    const entry = tvSurfaceEntry();
+    if (!entry) return false;
     if (tvPanelOpen()) {
       // 面板开着：↑↓ 交给通用焦点导航（行与行之间走），← 收面板
       if (event.key === "ArrowLeft") { closePanels(); return true; }
       return false;
     }
-    const active = document.activeElement;
-    if (active && active.closest && active.closest(".ov-rail")) {
-      // 焦点在侧栏上：←→ 退出侧栏回画面，↑↓ 交给通用导航在侧栏里走
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        if (active.blur) active.blur();
-        return true;
+    // 焦点已经落在界面控件上（顶栏/轮盘/底栏/面板…）：方向键一律交给空间导航，
+    // 确定交给浏览器点 —— 这一条就是"整个界面的按钮都够得到"的根。
+    if (tvInChrome()) {
+      const active = document.activeElement;
+      if (active && active.closest && active.closest(".bottom-nav")) {
+        if (event.key === "ArrowUp") { tvFocusSurface(); return true; } // 底栏 ↑ = 回画面
+        // 底栏是横排：←→ 只在条目之间走，走到头就停住（不限制会跳到屏幕另一头 —— 实测"按了乱跑"）
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          moveFocusIn(event.key === "ArrowLeft" ? "left" : "right", ".bottom-nav");
+          return true;
+        }
       }
-      return false;
-    }
-    // 焦点已经落在真正的控件上（顶栏按钮 / 来自X·全部库 chips / 侧栏 / 选集…）时，**确定键不许抢**：
-    // 原来播放页把任何确定键都当"播放/暂停"，实测顶栏「搜索」拿得到焦点却永远按不动（用户 2026-09-25 同类报障）。
-    // 方向键仍旧保留播放页语义（↑↓ 换视频、←→ 快进），这是电视上看片的主动作。
-    if (event.key === "Enter" && active && active !== document.body && active.closest &&
-        active.closest("button, a[href], [tabindex]:not([tabindex='-1'])")) {
       return false;
     }
     switch (event.key) {
-      case "ArrowDown": goTo(state.active + 1); return true;
-      case "ArrowUp": goTo(state.active - 1); return true;
-      case "ArrowLeft": seekBy(-1); return true;
-      case "ArrowRight": seekBy(1); return true;
-      case "Enter": {
-        // 短按 = 播放/暂停，长按 = 开"更多"面板（抖音 TV 那套：长按确定出操作面板）。
-        // 判据只看"按下到抬手多久"；重复 keydown 只用来兜底（有些遥控器不发 keyup）。
-        const now = Date.now();
-        if (!tvEnterAt) {
-          tvEnterAt = now;
-        } else if (now - tvEnterAt >= TV_LONG_MS) {
-          tvEnterAt = 0; // 连发键到了时长 ⇒ 直接当长按，不再等抬手
-          openPanel(entry);
-        }
+      case "ArrowDown":
+        if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
+        return tvGoChrome(".bottom-nav .nav-item");
+      case "ArrowUp":
+        if (state.active > 0) { goTo(state.active - 1); return true; }
+        return tvGoChrome(".header .top-btn");
+      case "ArrowLeft":
+        closePanels();
+        return tvGoChrome(".bottom-nav .nav-item");
+      case "ArrowRight":
+        return tvGoChrome(".ov-rail button");
+      case "Enter":
+        togglePlay(entry); // 抖音：确定 = 播放/暂停（长按那套已删）
         return true;
-      }
       case "ContextMenu": openPanel(entry); return true; // 遥控器"菜单"键（部分机型能到 JS）
       default: return false;
     }
-  }
-  function onTvKeyUp(event) {
-    if (event.key !== "Enter") return false;
-    const held = tvEnterAt ? Date.now() - tvEnterAt : 0;
-    if (!tvEnterAt) return false;
-    tvEnterAt = 0;
-    const entry = state.built.get(state.active);
-    if (entry && !entry.destroyed) {
-      if (held >= TV_LONG_MS) openPanel(entry); // 长按：开"更多"
-      else togglePlay(entry);                   // 短按：播放/暂停
-    }
-    return true;
   }
 
   function onKeyDown(event) {
@@ -1945,8 +2001,20 @@ export function mountFeed(view, options = {}) {
   window.addEventListener("pagehide", onPageHide);
   document.addEventListener("visibilitychange", onVisibility);
   // 电视端：把遥控器按键接过来（tv.js 的通用空间导航在它之后跑）
+  function onTvFocusIn() {
+    const next = !tvInChrome();
+    if (next === tvSurface) return;
+    tvSurface = next;
+    document.body.classList.toggle("tv-surface", tvSurface);
+    tvPaintHint();
+  }
   if (tvMode()) {
-    setFeedKeys({ down: onTvKeyDown, up: onTvKeyUp });
+    setFeedKeys({ down: onTvKeyDown });
+    // 焦点一进界面控件就切"控件态"（两态视觉 + 按键提示跟着换）——用户 2026-09-27 报
+    // "只能操作上下左右"：原来方向键全被播放语义吃掉，界面里的按钮一个都走不到。
+    document.addEventListener("focusin", onTvFocusIn, true);
+    document.body.classList.add("tv-surface");
+    tvPaintHint();
     // 遥控器"菜单"键：实测 WebView 不一定把它交给网页 ⇒ 原生按键口子直接调这个（见 WebActivity.onKeyDown）
     window.__zvTvMenu = () => {
       const entry = state.built.get(state.active);
@@ -1954,7 +2022,6 @@ export function mountFeed(view, options = {}) {
       openPanel(entry);
       return true;
     };
-    setTimeout(() => showToast("遥控器：↑↓ 换视频，← → 快退快进，确定 播放/暂停，长按确定 设置"), 900);
   }
 
   if (playlist) {
@@ -2064,8 +2131,9 @@ export function mountFeed(view, options = {}) {
     window.removeEventListener("pagehide", onPageHide);
     document.removeEventListener("visibilitychange", onVisibility);
     if (tvMode()) {
-      tvEnterAt = 0;
       setFeedKeys(null);
+      document.removeEventListener("focusin", onTvFocusIn, true);
+      document.body.classList.remove("tv-surface");
       try { delete window.__zvTvMenu; } catch (err) { window.__zvTvMenu = null; }
     }
     flushProgress(state.active, false);

@@ -4,8 +4,10 @@
 // （卡片、面板行），浏览器自带的焦点导航（Tab 序 / 方向键滚屏）够不着它们 —— 实测方向键只会滚页面。
 // 所以这里做两件事：
 //   ① 空间导航：方向键 → 找"当前焦点那个方向、几何上最近"的可聚焦元素（不是 Tab 顺序，电视上斜着跳很难用）；
-//   ② 播放页让位：播放页有自己的语义（↑↓ 换视频、←→ 快退快进、确定 播放/暂停、长按确定 开面板），
-//      它注册进来的处理器先跑，返回 true 就表示"这次按键我吃了"，不再走通用导航。
+//   ② 播放页让位：播放页有自己的语义（画面态：↑↓ 换视频/换集、确定 播放/暂停、← 呼出底栏、→ 呼出功能轮盘；
+//      焦点进了界面按钮就是普通焦点导航）。它注册进来的处理器先跑，返回 true 表示"这次按键我吃了"。
+//      ⚠️ 长按**不再是任何入口**（用户 2026-09-27："长按为什么要设置？！"）—— 设置面板由遥控器
+//      「设置/菜单」键打开（原生 WebActivity 的 __zvTvMenu 口子）。
 //
 // 只在 tv 模式生效（原生带 ?tv=1 进来）；网页端与手机 App 一行都不变。
 
@@ -37,7 +39,18 @@ function visible(el) {
   const det = el.closest("details");
   if (det && !det.open) return false;
   const rect = el.getBoundingClientRect();
-  return rect.width > 1 && rect.height > 1;
+  if (!(rect.width > 1 && rect.height > 1)) return false;
+  // 翻页轨道（.track）里**只有当前这条视频**看得见（用户 2026-09-27："方向键够不到底栏"／"按了没反应"）：
+  // 没轮到的视频在屏幕外，但它的按钮 getBoundingClientRect 照样有尺寸（外壳是 top:i*100% 摆的），
+  // 不加这一条，遥控器就会把焦点送到**屏幕外那条视频**的按钮上。
+  // 判据用"当前画面"的标记（tv.js 的 focusFirst 也认它），不用几何裁剪 —— 几何裁剪会把
+  // 正在滑入的面板行一起裁掉（实测：面板开了、面板里的行全被判成"看不见"，焦点落不进去）。
+  const track = el.closest(".track");
+  if (track) {
+    const layer = el.closest(".layer");
+    if (!layer || layer.getAttribute("data-tv-default") !== "1") return false;
+  }
+  return true;
 }
 
 /**
@@ -85,9 +98,16 @@ function focusEl(el) {
 /**
  * 空间导航：从当前焦点往某个方向找最近的元素。
  * 打分 = 主轴距离 + 2.5 × 垂直偏移 —— 电视上"正下方第二行"要赢过"斜右侧贴着的那个"。
+ * scope：可选，把候选限制在某个容器里（底栏这种横排：←→ 只在条目间走，走到头就停住；
+ * 不限制的话"从最左边再往左"会跳到屏幕另一头去，遥控器上就是"按了乱跑"）。
  */
-export function moveFocus(dir) {
-  const list = focusables();
+function moveFocus(dir, scope) {
+  let list = focusables();
+  if (scope) {
+    const root = document.querySelector(scope);
+    const inside = root ? list.filter((el) => root.contains(el)) : [];
+    if (inside.length) list = inside;
+  }
   if (!list.length) return false;
   const cur = list.indexOf(document.activeElement) >= 0 ? document.activeElement : null;
   if (!cur) {
@@ -118,6 +138,11 @@ export function moveFocus(dir) {
   }
   if (!best) return false;
   return focusEl(best);
+}
+
+/** 在某个容器里做空间导航（底栏那种横排用）：导出给播放页用，见 moveFocus 的 scope 说明。 */
+export function moveFocusIn(dir, scope) {
+  return moveFocus(dir, scope);
 }
 
 /** 确定键：原生按钮/链接交给浏览器自己点（免得点两次），其它（div 行）这里代点。 */
@@ -178,13 +203,32 @@ function onKeyUp(event) {
   }
 }
 
-/** 页面重绘后把焦点拉回第一个可聚焦元素（否则遥控器"按了没反应"）。 */
+/** 页面重绘后把焦点拉回"主区"（否则遥控器"按了没反应"）。
+ *  主区 = 带 data-tv-default="1" 的元素（播放页是视频画面）—— 用户 2026-09-27 要求
+ *  "方向键要能操作整个界面，包括底栏"，所以界面里的按钮是一等公民，但**默认落点仍是画面**：
+ *  遥控器一进来就能 ↑↓ 换视频，而不是先跳到一个说不清的按钮上。 */
 export function focusFirst() {
   if (!tvMode()) return false;
   const list = focusables();
+  // 有浮层（设置面板/选集/弹窗）时**不许**把焦点送回画面：那会让"面板开了、遥控器却按不到面板"。
+  // 浮层开着时 focusables() 本来就只返回浮层里的元素，data-tv-default 那条画面不在其中。
+  const home = overlayRoots().length ? null : list.find((el) => el.getAttribute("data-tv-default") === "1");
+  if (home) return focusEl(home);
   // 默认焦点别落在危险操作上：收藏页 DOM 里第一个可聚焦元素是「清除记录」，一按确定就弹删除框
   const safe = list.find((el) => !el.classList.contains("danger") && el.getAttribute("data-danger") !== "1");
   return focusEl(safe || list[0]);
+}
+
+/** 把焦点送到选择器命中的第一个"看得见"的元素（电视端"呼出"某块界面：轮盘 / 底栏 / 顶栏）。 */
+export function focusSelector(selector) {
+  if (!tvMode()) return false;
+  const roots = overlayRoots();
+  for (const root of (roots.length ? roots : [document])) {
+    for (const el of root.querySelectorAll(selector)) {
+      if (visible(el)) return focusEl(el);
+    }
+  }
+  return false;
 }
 
 export function installTvKeys() {

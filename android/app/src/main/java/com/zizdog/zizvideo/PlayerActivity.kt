@@ -598,10 +598,11 @@ class PlayerActivity : AppCompatActivity() {
     /**
      * 确定键必须在这里（视图之前）接住：PlayerView 是 clickable 的，会把确定键吃掉去 performClick
      * （只把控件条显示/藏起来），写在 onKeyDown 里永远收不到（实测）。
+     *
+     * ⚠️ **长按不再有任何特殊含义**（用户 2026-09-27："长按为什么要设置？！…遥控器设置按钮就已经可以了"）：
+     * 确定键按下就是播放/暂停（连发/按住不重复触发）。要进底部控件有两条明路：遥控器「菜单/设置」键，
+     * 或者 ↑↓（见 TvPlayerKeys.decide）。
      */
-    /** 确定键按下时刻（抬手时按按住时长决定：短按=播放/暂停，长按=进底部控件）。 */
-    private var okDownAt = 0L
-
     private val okKeys = setOf(
         android.view.KeyEvent.KEYCODE_DPAD_CENTER,
         android.view.KeyEvent.KEYCODE_ENTER,
@@ -614,27 +615,9 @@ class PlayerActivity : AppCompatActivity() {
         val focusId = currentFocus?.id ?: 0
         val onOwnControl = focusId in TvPlayerKeys.OWN_CONTROL_IDS
         if (tv && !onOwnControl && okKeys.contains(event.keyCode)) {
-            when (event.action) {
-                android.view.KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount == 0) {
-                        okDownAt = android.os.SystemClock.uptimeMillis()
-                    } else if (android.os.SystemClock.uptimeMillis() - okDownAt >= TvPlayerKeys.LONG_PRESS_MS) {
-                        // 遥控器连发（有的盒子抬手时长不好保证）：到时长就直接当长按，不再等抬手
-                        okDownAt = 0L
-                        focusChrome()
-                    }
-                    return true
-                }
-                android.view.KeyEvent.ACTION_UP -> {
-                    val held = android.os.SystemClock.uptimeMillis() - okDownAt
-                    when (TvPlayerKeys.okAction(held, tv, focusId)) {
-                        TvPlayerKeys.Action.TOGGLE -> togglePlayPause()
-                        TvPlayerKeys.Action.FOCUS_CHROME -> focusChrome()
-                        else -> Unit
-                    }
-                    return true
-                }
-            }
+            // 按下（非连发）就切播放/暂停；抬手一并吃掉，别让 PlayerView 再 performClick 一次
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) togglePlayPause()
+            return true
         }
         when (TvPlayerKeys.decide(event.keyCode, event.action, event.repeatCount, tv, focusId)) {
             TvPlayerKeys.Action.FOCUS_CHROME -> { focusChrome(); return true }

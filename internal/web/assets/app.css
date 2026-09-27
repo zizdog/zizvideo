@@ -315,12 +315,21 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .hint.low { top: 46px; }
 /* B5 长按快进的提示：金色，压在「已续播」提示下面一行，别叠在一起 */
 .hint.fast { top: 80px; background: rgba(255,196,0,.92); color: #16181d; font-weight: 600; }
-/* 电视端常驻按键提示（底部一条，压在底栏上方；只读文本、不可聚焦） */
+/* 电视端常驻按键提示（底部一条，压在底栏上方；只读文本、不可聚焦）
+   两行：主行 = "这层现在能干什么"（画面态/控件态文案不同），副行 = 设置键的用途（更淡）。 */
 .tv-keyhint {
   position: absolute; left: 0; right: 0; bottom: 66px; text-align: center;
   color: rgba(255,255,255,.62); font-size: 14px; pointer-events: none;
   text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 12px;
 }
+.tv-keyhint-sub { color: rgba(255,255,255,.42); font-size: 12px; margin-top: 2px; }
+/* 电视端两态（抖音 TV 那套）：画面态把界面控件压暗 —— "看得见、但现在按不到"，
+   焦点进了界面（控件态）就恢复常亮。遥控器此刻在哪一层，一眼能看出来。 */
+html.tv body.tv-surface .ov-rail,
+html.tv body.tv-surface .ov-corner,
+html.tv body.tv-surface .overlay,
+html.tv body.tv-surface .bottom-nav,
+html.tv body.tv-surface .header { opacity: .62; }
 
 .toast {
   position: absolute; z-index: 20; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -676,12 +685,7 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .side-mask.hidden { display: none; }
 
 /* 提示（toast）：用户 2026-09-23 要求更大、居中 —— 原来贴在底栏很难被注意到 */
-/* 电视端常驻按键提示（底部一条，压在底栏上方；只读文本、不可聚焦） */
-.tv-keyhint {
-  position: absolute; left: 0; right: 0; bottom: 66px; text-align: center;
-  color: rgba(255,255,255,.62); font-size: 14px; pointer-events: none;
-  text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 12px;
-}
+/* 电视端按键提示的样式在上面（.tv-keyhint 那一段），这里不重复一份（重复过，坑） */
 
 .toast {
   left: 50%; transform: translateX(-50%); bottom: auto; top: 50%;
@@ -777,6 +781,9 @@ html.tv .tv-focus {
   color: #ffffff;
   box-shadow: none;
 }
+/* 画面态：焦点框落在整块视频画面上（抖音那套"画面就是主焦点面"）。
+   ⚠️ 这里必须把实心填充去掉 —— 填充会把整幅画面染成蓝的（画面自己不需要"选中底色"）。 */
+html.tv .layer.tv-focus { background-color: transparent; outline-color: rgba(62,166,255,.85); }
 
 /* 扫码登录：二维码必须是"白底黑块"且四周留白，反色/贴边都会扫不动 */
 .qr-panel { text-align: center; }

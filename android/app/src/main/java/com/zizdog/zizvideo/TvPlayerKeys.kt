@@ -29,17 +29,16 @@ object TvPlayerKeys {
         R.id.prev, R.id.next, R.id.fav, R.id.like, R.id.later, R.id.speed, R.id.offline, R.id.pip, R.id.stop,
     )
 
-    /** 按住多久算"长按"（遥控器上 450ms 左右最舒服；短于它=播放/暂停）。 */
-    const val LONG_PRESS_MS = 450L
-
     /**
-     * 确定键抬手时该怎么走（用户 2026-09-27："上下会切视频、左右跳 10 秒，就导致无法点击底栏"）：
-     *   短按 = 播放/暂停（原来就这样，保留）；**长按 = 进底部控件**（和网页电视端"长按确定=面板"一个手势，
-     *   也和抖音 TV 一致）。menu 键仍然可以进控件，两条路都留。
+     * 确定键怎么走：**按下即播放/暂停**（用户 2026-09-27 明确："长按为什么要设置？！…
+     * 遥控器设置按钮就已经可以了"）。
+     *
+     * 历史：0.4.3~0.4.6 那几版把"长按确定"当进控制条的入口，用户否了 —— 遥控器有「菜单/设置」键，
+     * ↑↓ 也能进控制条（见 decide），不需要一个屏幕上写不出来、还跟遥控器连发键打架的长按手势。
      */
-    fun okAction(heldMs: Long, isTv: Boolean, focusId: Int): Action {
+    fun okAction(isTv: Boolean, focusId: Int): Action {
         if (!isTv || focusId in OWN_CONTROL_IDS) return Action.NONE
-        return if (heldMs >= LONG_PRESS_MS) Action.FOCUS_CHROME else Action.TOGGLE
+        return Action.TOGGLE
     }
 
     fun decide(keyCode: Int, action: Int, repeat: Int, isTv: Boolean, focusId: Int): Action {

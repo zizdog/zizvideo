@@ -75,17 +75,18 @@ class TvPlayerKeysTest {
         assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_DOWN, isTv = false))
     }
 
-    /** 用户 2026-09-27："上下会切视频、左右跳 10 秒，就导致无法点击底栏" —— 长按确定要能进底部控件。 */
+    /** 长按**不再是入口**（用户 2026-09-27："长按为什么要设置？！…遥控器设置按钮就已经可以了"）：
+        确定键按下就是播放/暂停，按住也还是播放/暂停；要进控制条有「菜单/设置」键与 ↑↓ 两条明路。 */
     @Test
-    fun shortPressTogglesLongPressOpensChrome() {
-        assertEquals(TvPlayerKeys.Action.TOGGLE, TvPlayerKeys.okAction(0, true, R.id.player))
-        assertEquals(TvPlayerKeys.Action.TOGGLE, TvPlayerKeys.okAction(440, true, R.id.player))
-        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, TvPlayerKeys.okAction(450, true, R.id.player))
-        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, TvPlayerKeys.okAction(1200, true, R.id.player))
+    fun okPressAlwaysTogglesNoLongPressEntry() {
+        assertEquals(TvPlayerKeys.Action.TOGGLE, TvPlayerKeys.okAction(true, R.id.player))
         // 焦点已经在我们自己的控件上：别抢（不然点不动"停止并退出"）
-        assertEquals(TvPlayerKeys.Action.NONE, TvPlayerKeys.okAction(10, true, R.id.stop))
+        assertEquals(TvPlayerKeys.Action.NONE, TvPlayerKeys.okAction(true, R.id.stop))
         // 手机端一行都不变
-        assertEquals(TvPlayerKeys.Action.NONE, TvPlayerKeys.okAction(10, false, R.id.player))
+        assertEquals(TvPlayerKeys.Action.NONE, TvPlayerKeys.okAction(false, R.id.player))
+        // 进控制条的两条明路仍在
+        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_MENU))
+        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_DPAD_UP))
     }
 
     @Test
