@@ -55,6 +55,9 @@ type Server struct {
 	// 零值可用，不用改构造函数。
 	coverMu    sync.Mutex
 	coverLocks map[string]*sync.Mutex
+
+	// loud 是音量均一化的后台测量队列（第一次播某个视频时量一次响度）。见 loudness.go。
+	loud *loudnessQueue
 }
 
 // lockCover 返回该 media 的封面生成解锁函数（每个 id 一把锁）。
@@ -88,6 +91,7 @@ func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Mana
 		s.Log.Info("用户上传收件箱", "dir", s.inboxRoot())
 	}
 	s.Transcodes = transcode.NewQueue(cfg, db, roots, r, log)
+	s.loud = newLoudnessQueue(s) // 音量均一化：后台量响度（第一次播时触发）
 	// 范围判据只在这里构造（scopeAll 是唯一构造点）：转码队列拿到的永远是"能查到的这条"。
 	s.Transcodes.LoadMedia = func(id string) (*domain.Media, error) {
 		return db.GetMediaIn(scopeAll(), id)
@@ -100,6 +104,15 @@ func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Mana
 	s.Auto = autoscan.New(db, t, log)
 	s.RefreshCapabilities(context.Background())
 	return s
+}
+
+// StartLoudnessWorker 起音量均一化的后台测量协程（单协程串行，别跟转码抢 CPU）。
+// ctx 取消（进程退出）即收工；没开这个开关或没有 ffmpeg 时它只是空转等队列。
+func (s *Server) StartLoudnessWorker(ctx context.Context) {
+	if s.loud == nil {
+		return
+	}
+	go s.loud.run(ctx)
 }
 
 // StartAutoScan 启动后先扫一轮（覆盖停机期间的变动），再按设置定时/事件触发。

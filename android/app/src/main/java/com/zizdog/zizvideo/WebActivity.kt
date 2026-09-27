@@ -256,48 +256,36 @@ class WebActivity : AppCompatActivity() {
             val service = PlaybackService.instance ?: return
             val p = parsePayload(payload) ?: return
             // positionMs 一起带上：预热位置跟着网页进度走，交接时不用从头缓冲（用户 2026-09-25）
-            service.prepareItems(p.ids, p.titles, p.index, p.positionMs)
+            service.prepareItems(p.ids, p.titles, p.index, p.positionMs, p.volumes)
         }
 
         @android.webkit.JavascriptInterface
         fun handOff(payload: String) {
             val service = PlaybackService.instance ?: return
-            val ids = ArrayList<String>()
-            val titles = ArrayList<String>()
-            var index = 0
-            var positionMs = 0L
-            try {
-                val obj = org.json.JSONObject(payload)
-                val arr = obj.optJSONArray("ids") ?: return
-                val tarr = obj.optJSONArray("titles")
-                for (i in 0 until arr.length()) {
-                    ids.add(arr.optString(i))
-                    titles.add(tarr?.optString(i) ?: "")
-                }
-                index = obj.optInt("index")
-                positionMs = obj.optLong("positionMs")
-            } catch (e: Exception) {
-                return
-            }
-            if (ids.isEmpty()) return
-            handedOffId = ids[index.coerceIn(0, ids.size - 1)]
-            runOnUiThread { service.playItems(ids, titles, index, positionMs) }
+            val p = parsePayload(payload) ?: return
+            handedOffId = p.ids[p.index.coerceIn(0, p.ids.size - 1)]
+            runOnUiThread { service.playItems(p.ids, p.titles, p.index, p.positionMs, p.volumes) }
         }
     }
 
-    private class Payload(val ids: List<String>, val titles: List<String>, val index: Int, val positionMs: Long)
+    private class Payload(val ids: List<String>, val titles: List<String>,
+                          val volumes: List<Float>, val index: Int, val positionMs: Long)
 
     private fun parsePayload(payload: String): Payload? = try {
         val obj = org.json.JSONObject(payload)
         val arr = obj.optJSONArray("ids") ?: return null
         val tarr = obj.optJSONArray("titles")
+        val varr = obj.optJSONArray("volumes")
         val ids = ArrayList<String>()
         val titles = ArrayList<String>()
+        val volumes = ArrayList<Float>()
         for (i in 0 until arr.length()) {
             ids.add(arr.optString(i))
             titles.add(tarr?.optString(i) ?: "")
+            volumes.add(varr?.optDouble(i, 1.0)?.toFloat()?.coerceIn(0f, 1f) ?: 1f)
         }
-        if (ids.isEmpty()) null else Payload(ids, titles, obj.optInt("index"), obj.optLong("positionMs"))
+        if (ids.isEmpty()) null
+        else Payload(ids, titles, volumes, obj.optInt("index"), obj.optLong("positionMs"))
     } catch (e: Exception) {
         null
     }
@@ -322,7 +310,7 @@ class WebActivity : AppCompatActivity() {
           }
           function payload() {
             var vs = [].slice.call(document.querySelectorAll('video'));
-            var ids = [], titles = [], index = -1, positionMs = 0;
+            var ids = [], titles = [], volumes = [], index = -1, positionMs = 0;
             for (var i = 0; i < vs.length; i++) {
               var id = idOf(vs[i]);
               if (!id) continue;
@@ -332,8 +320,12 @@ class WebActivity : AppCompatActivity() {
               }
               ids.push(id);
               titles.push(titleOf(vs[i]));
+              // 音量均一化（用户 2026-09-26）：网页已经按服务端给的 gain_db 设过 volume，
+              // 交接时把它一起交给原生 ⇒ 后台播的也是同一个音量。
+              volumes.push(vs[i].volume);
             }
-            return index < 0 ? null : { ids: ids, titles: titles, index: index, positionMs: positionMs };
+            return index < 0 ? null
+              : { ids: ids, titles: titles, volumes: volumes, index: index, positionMs: positionMs };
           }
           // 一开播就预热原生播放器：退后台时不用现拉流，不会"卡一下"
           document.addEventListener('play', function () {
@@ -647,24 +639,24 @@ class WebActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 回来时把播放从原生收回网页：同一条、同一位置，网页那边界面/按钮/进度都对得上
+        // 回来时把播放从原生收回网页：跳到"原生当前在播的那一条 + 那个位置"，网页界面/进度都对得上。
         val service = PlaybackService.instance ?: return
         val cur = service.current() ?: return
         val (mediaId, positionMs) = cur
         service.stopPlayback()
-        // 原生可能已经连播到下一集：那这个位置属于**另一条**，拿它去 seek 当前这条就会"整集乱跳"
-        // （用户 2026-09-23 报障）。所以只在同一条上续播；不同条就保持网页原样，并如实说一句。
-        if (mediaId != handedOffId) {
-            android.widget.Toast.makeText(this, "后台已播到别的剧集，已收回播放", android.widget.Toast.LENGTH_SHORT).show()
-            return
+        // ⚠️ 后台会自动连播到下一集（用户 2026-09-26 报障：后台听到 F 了，回前台却又回到最早的 A）。
+        // 所以这里**按原生的当前条目**交给网页去跳：网页按 media id 找到那一条（可能是邻居），
+        // 换过去 + seek 到原生位置再接着播；找不到（不在当前列表里）才退回"保持原样"并如实说一句。
+        // 以前是"不同条就什么都不做"，等于把播放位置和用户听到的内容丢回旧的一条。
+        val js = "(function(){var f=window.zvResumeNative;return f?f(" +
+            org.json.JSONObject.quote(mediaId) + "," + positionMs + "):false;})()"
+        web.evaluateJavascript(js) { result ->
+            android.util.Log.i("zv-handoff", "resume native id=$mediaId pos=$positionMs claimed=$result")
+            if (result != "true") {
+                android.widget.Toast.makeText(this, "后台播的那条不在当前列表里，已保持原样",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
-        // 按"刚交出去的那条"恢复（不是按原生当前条：它可能已经连播到下一条了），位置超长就钳到本条时长里
-        val js = "(function(){var want=window.__zvHandedOff||'';var vs=document.querySelectorAll('video');" +
-            "var v=null;for(var i=0;i<vs.length;i++){var src=vs[i].getAttribute('src')||'';" +
-            "if(want&&src.indexOf('/media/'+want+'/stream')>=0){v=vs[i];break;}}" +
-            "if(!v)return;try{var d=v.duration||0;var t=" + (positionMs / 1000.0) + ";" +
-            "if(d>0&&t>d-1)t=0;v.currentTime=t;}catch(e){}try{v.play();}catch(e){}})();"
-        web.evaluateJavascript(js, null)
     }
 
     override fun onPause() {

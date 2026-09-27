@@ -485,6 +485,11 @@ class PlayerActivity : AppCompatActivity() {
                             // 封面：系统媒体通知/锁屏上的大图（与后台服务那套一致）
                             .setArtworkUri(android.net.Uri.parse(
                                 base.trimEnd('/') + "/api/v1/media/" + android.net.Uri.encode(m.id) + "/cover"))
+                            // 音量均一化：这一条的增益（dB，≤0 只衰减）随 metadata 带着走，
+                            // 由 PlaybackService 的换条回调落到 player.volume 上（用户 2026-09-26）
+                            .setExtras(android.os.Bundle().apply {
+                                putFloat(PlaybackService.EXTRA_VOLUME, gainVolume(m.gainDb))
+                            })
                             .build(),
                     )
                     .build()
@@ -514,6 +519,10 @@ class PlayerActivity : AppCompatActivity() {
         controller = null
         super.onDestroy()
     }
+
+    /** 服务端给的 gain_db（≤0）→ 播放音量（0..1）；音量均一化用（用户 2026-09-26）。 */
+    private fun gainVolume(gainDb: Double): Float =
+        if (gainDb < 0) Math.pow(10.0, gainDb / 20.0).toFloat().coerceIn(0f, 1f) else 1f
 
     // ---------- 电视端（遥控器，用户 2026-09-25）----------
     // 电视没有触摸：长按快进/双击点赞都用不了，遥控器只给"上下左右 + 确定 + 返回"。

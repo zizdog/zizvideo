@@ -128,6 +128,8 @@ type Media struct {
 	// 与 status/error_class 分开：转码失败时 status 仍是 ready（原文件还能播），界面据此如实说明。
 	TranscodeState string `json:"transcode_state,omitempty"`
 	TranscodeNote  string `json:"transcode_note,omitempty"`
+	// LoudnessLUFS 是整体响度（LUFS，负数）；0 = 还没量过。见 migrations/0022。
+	LoudnessLUFS float64 `json:"-"`
 }
 
 // 转码状态取值。

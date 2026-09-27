@@ -19,21 +19,24 @@ import (
 
 // mediaItem is the single shape returned by /media, /media/{id} and /feed/next.
 type mediaItem struct {
-	ID            string        `json:"id"`
-	LibraryID     string        `json:"library_id"`
-	Title         string        `json:"title"`
-	Path          string        `json:"path,omitempty"`
-	Size          int64         `json:"size"`
-	DurationMS    int64         `json:"duration_ms"`
-	Width         int           `json:"width"`
-	Height        int           `json:"height"`
-	Codecs        domain.Codecs `json:"codecs"`
-	Container     string        `json:"container"`
-	FPS           float64       `json:"fps"`
-	Bitrate       int64         `json:"bitrate"`
-	Status        string        `json:"status"`
-	ErrorClass    string        `json:"error_class,omitempty"`
-	CoverURL      string        `json:"cover_url"`
+	ID         string        `json:"id"`
+	LibraryID  string        `json:"library_id"`
+	Title      string        `json:"title"`
+	Path       string        `json:"path,omitempty"`
+	Size       int64         `json:"size"`
+	DurationMS int64         `json:"duration_ms"`
+	Width      int           `json:"width"`
+	Height     int           `json:"height"`
+	Codecs     domain.Codecs `json:"codecs"`
+	Container  string        `json:"container"`
+	FPS        float64       `json:"fps"`
+	Bitrate    int64         `json:"bitrate"`
+	Status     string        `json:"status"`
+	ErrorClass string        `json:"error_class,omitempty"`
+	CoverURL   string        `json:"cover_url"`
+	// GainDB 是音量均一化的增益（dB，≤0 只衰减；0 = 不调）：网页按它设 video.volume、
+	// 原生按它设 ExoPlayer 音量（用户 2026-09-26）。
+	GainDB        float64       `json:"gain_db"`
 	StreamURL     string        `json:"stream_url"`
 	Compatibility compatibility `json:"compatibility"`
 	Progress      progressBrief `json:"progress"`
@@ -86,9 +89,10 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 			CoverURL:  "/api/v1/media/" + m.ID + "/cover",
 			StreamURL: "/api/v1/media/" + m.ID + "/stream",
 			Favorite:  favs[m.ID], CreatedAt: m.CreatedAt,
-			WatchLater: later[m.ID],
-			Missing:    m.MissingSince != "",
+			WatchLater:     later[m.ID],
+			Missing:        m.MissingSince != "",
 			TranscodeState: m.TranscodeState, TranscodeNote: m.TranscodeNote,
+			GainDB: ffmpeg.GainDBFor(m.LoudnessLUFS),
 		}
 		if withPath {
 			item.Path = m.Path
@@ -180,6 +184,9 @@ func (s *Server) HandleStream(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// 音量均一化：第一次播这条时排一次后台响度测量（不影响这次播放，量完下次生效）。
+	// 放在白名单校验之后：别给放不了的文件白跑 ffmpeg。
+	s.noteLoudness(m)
 	f, err := os.Open(m.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

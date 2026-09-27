@@ -26,6 +26,11 @@ import androidx.media3.session.MediaSessionService
 class PlaybackService : MediaSessionService() {
 
     companion object {
+        /** MediaMetadata.extras 里带这一条的播放音量（0..1，音量均一化的结果）。 */
+        const val EXTRA_VOLUME = "gain_volume"
+        /** 兼容：早先只带 dB 增益时的键（现在统一成 EXTRA_VOLUME）。 */
+        const val EXTRA_GAIN_DB = "gain_db"
+
         /**
          * 单进程内的服务实例：WebActivity 的"退后台交接"直接用它。
          * **不要覆盖 onBind**：MediaSessionService 靠 onBind 把 MediaController 连接给播放页，
@@ -141,6 +146,7 @@ class PlaybackService : MediaSessionService() {
             }
 
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                applyGain(item) // 每条的音量可能不同（均一化）
                 report()
             }
 
@@ -189,7 +195,8 @@ class PlaybackService : MediaSessionService() {
      * 只把预热位置往前挪（一次 seek，不用重建队列）—— 退后台交接时就不用从很旧的位置重新缓冲，
      * 这才是"退到桌面卡一下 / 声音回退一两秒"的根子。
      */
-    fun prepareItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long = 0L) {
+    fun prepareItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long = 0L,
+                     volumes: List<Float> = emptyList()) {
         if (ids.isEmpty()) return
         val key = ids.joinToString(",") + "#" + index
         base = Prefs(this).baseUrl
@@ -208,7 +215,7 @@ class PlaybackService : MediaSessionService() {
         }
         preparedKey = key
         warmPositionMs = positionMs
-        val items = buildItems(ids, titles)
+        val items = buildItems(ids, titles, volumes)
         val start = index.coerceIn(0, items.size - 1)
         handler.post {
             player.setMediaItems(items, start, positionMs.coerceAtLeast(0L))
@@ -217,7 +224,33 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun buildItems(ids: List<String>, titles: List<String>) = ids.mapIndexed { i, id ->
+    /**
+     * 音量均一化（用户 2026-09-26）：把这一条的增益（dB ≤ 0）落到 ExoPlayer 的音量上。
+     * 增益来自服务端量的响度（目标 -16 LUFS，只衰减不放大），放在 MediaMetadata.extras 里带过来。
+     */
+    /** 服务端给的 gain_db（≤0）→ 播放音量（0..1）。 */
+    private fun gainVolume(gainDb: Double): Float =
+        if (gainDb < 0) Math.pow(10.0, gainDb / 20.0).toFloat().coerceIn(0f, 1f) else 1f
+
+    private fun applyGain(item: MediaItem?) {
+        val ex = item?.mediaMetadata?.extras
+        // 优先用"网页交接时给的 volume"（网页已经按 gain_db 设过它的 video.volume，是同一份判据）；
+        // 没有就退回 gain_db 现算。都没有 = 1（不调）。
+        val v = when {
+            ex != null && ex.containsKey(EXTRA_VOLUME) -> ex.getFloat(EXTRA_VOLUME, 1f)
+            ex != null && ex.containsKey(EXTRA_GAIN_DB) -> {
+                val g = ex.getDouble(EXTRA_GAIN_DB, 0.0)
+                if (g < 0) Math.pow(10.0, g / 20.0).toFloat() else 1f
+            }
+            else -> 1f
+        }.coerceIn(0f, 1f)
+        player.volume = v
+        // 落日志：模拟器没有声音输出，"音量到底设没设"只能靠这条看（用户 2026-09-26）
+        android.util.Log.i("zv-gain", "volume=" + v + " item=" + (item?.mediaId ?: "-"))
+    }
+
+    private fun buildItems(ids: List<String>, titles: List<String>,
+                           volumes: List<Float> = emptyList()) = ids.mapIndexed { i, id ->
         // ④ 有离线缓存就放本地文件：断网/服务器不在也能接着看（后台连播同样走这里）
         val local = OfflineStore.localUri(this, id)
         MediaItem.Builder()
@@ -231,18 +264,22 @@ class PlaybackService : MediaSessionService() {
                     // DataSourceBitmapLoader（见 onCreate）。
                     .setArtworkUri(android.net.Uri.parse(
                         "$base/api/v1/media/" + android.net.Uri.encode(id) + "/cover"))
+                    .setExtras(android.os.Bundle().apply {
+                        putFloat(EXTRA_VOLUME, volumes.getOrNull(i) ?: 1f)
+                    })
                     .build(),
             )
             .build()
     }
 
     /** 按给定 id 列表播（stream 地址由 base 拼），从 index 条的 positionMs 开始。 */
-    fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long) {
+    fun playItems(ids: List<String>, titles: List<String>, index: Int, positionMs: Long,
+                  volumes: List<Float> = emptyList()) {
         if (ids.isEmpty()) return
         base = Prefs(this).baseUrl // 同上：换服务器后 stream 地址也要跟着走
         val key = ids.joinToString(",") + "#" + index.coerceIn(0, ids.size - 1)
         val warm = key == preparedKey
-        val items = buildItems(ids, titles)
+        val items = buildItems(ids, titles, volumes)
         val start = index.coerceIn(0, items.size - 1)
         // 交接日志：定位"退到桌面卡一下 / 声音回退一两秒"必须看得见两边的时间点
         android.util.Log.i("zv-handoff", "playItems warm=$warm index=$start pos=$positionMs key=" +
@@ -257,6 +294,7 @@ class PlaybackService : MediaSessionService() {
             }
             preparedKey = key
             warmPositionMs = positionMs
+            applyGain(player.currentMediaItem)
             player.play()
             // 起来之后回报一次真实位置：和交接前的网页位置一比，就知道有没有回退/空档
             handler.postDelayed({
@@ -285,6 +323,9 @@ class PlaybackService : MediaSessionService() {
                             .setTitle(m.title)
                             .setArtworkUri(android.net.Uri.parse(
                                 "$base/api/v1/media/" + android.net.Uri.encode(m.id) + "/cover"))
+                            .setExtras(android.os.Bundle().apply {
+                                putFloat(EXTRA_VOLUME, gainVolume(m.gainDb))
+                            })
                             .build(),
                     )
                     .build()
@@ -293,6 +334,7 @@ class PlaybackService : MediaSessionService() {
             handler.post {
                 player.setMediaItems(items, index, if (positionMs > 0) positionMs else 0L)
                 player.prepare()
+                applyGain(player.currentMediaItem)
                 player.play()
             }
         }.start()

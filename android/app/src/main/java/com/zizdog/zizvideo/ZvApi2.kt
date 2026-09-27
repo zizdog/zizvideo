@@ -68,6 +68,7 @@ object ZvApi2 {
                     streamUrl = if (stream.startsWith("http")) stream else base + stream,
                     durationMs = item.optLong("duration_ms"),
                     resumeMs = if (position > 0 && !completed) position else 0L,
+                    gainDb = item.optDouble("gain_db", 0.0),
                 )
             )
         }
@@ -138,5 +139,7 @@ object ZvApi2 {
         val streamUrl: String,
         val durationMs: Long,
         val resumeMs: Long,
+        /** 音量均一化的增益（dB，≤0 只衰减；0 = 不调）。用户 2026-09-26。 */
+        val gainDb: Double,
     )
 }

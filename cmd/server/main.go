@@ -97,6 +97,7 @@ func run() error {
 	defer stop()
 	// 启动即扫一轮；之后由设置里的定时器/文件事件驱动。
 	srv.StartAutoScan(ctx)
+	srv.StartLoudnessWorker(ctx) // 音量均一化：后台量响度（第一次播某个视频时排队）
 	defer srv.StopAutoScan()
 
 	httpSrv := &http.Server{

@@ -109,6 +109,10 @@ export function createMediaVideo(item, opts = {}) {
   video.loop = opts.loop === true;
   // 预览帧：不自动播放时不能只是一块黑（用户 2026-09-24）——用服务端抽好的封面当 poster
   if (item.cover_url) video.poster = item.cover_url;
+  // 音量均一化（用户 2026-09-26）：服务端量过响度的会给一个**只衰减**的增益（dB ≤ 0），
+  // 直接落在 volume（0..1）上；没量过或不需要调就是 1。每次建元素都按这一条自己的值设。
+  const gainDB = Number(item.gain_db) || 0;
+  if (gainDB < 0) video.volume = Math.max(0, Math.min(1, Math.pow(10, gainDB / 20)));
   video.src = item.stream_url || ("/api/v1/media/" + encodeURIComponent(item.id) + "/stream");
   return video;
 }
@@ -213,6 +217,7 @@ export function mountFeed(view, options = {}) {
       if (autoplay) tryPlay(entry);
       else showPlayButton(entry);
     }
+    refreshGain(index); // 音量均一化：这条要是还没量过，量完把音量落下去
     maybeLoadMore(index);
     warmUpcoming(); // 预加载后面几条：等切过去再拉就来不及
   }
@@ -505,6 +510,29 @@ export function mountFeed(view, options = {}) {
   // 用户得点两下（先静音、再开声）才有声音（用户 2026-09-25 报障）。
   function effectiveSoundOn() {
     return state.soundOn && !state.soundBlocked;
+  }
+
+  /**
+   * 音量均一化补一次：列表是**打开页面时**取的，那时这条可能还没量过响度（gain_db=0），
+   * 而服务端是"第一次播它"时才开始在后台量（量完才写库）⇒ 本次会话里这条拿不到增益。
+   * 所以开播后过几秒回查一次这一条：量到了就把音量落下去（用户 2026-09-26："不同视频音量不同"）。
+   * 只查一次、只查没量过的那些，避免每条都多打一个请求。
+   */
+  function refreshGain(index) {
+    const item = state.items[index];
+    if (!item || Number(item.gain_db) < 0 || item.__gainChecked) return;
+    item.__gainChecked = true;
+    setTimeout(() => {
+      api.media(String(item.id)).then((m) => {
+        const gain = m && Number(m.gain_db);
+        if (!(gain < 0)) return;
+        item.gain_db = gain;
+        const entry = state.built.get(index);
+        if (entry && entry.video) {
+          entry.video.volume = Math.max(0, Math.min(1, Math.pow(10, gain / 20)));
+        }
+      }).catch(() => { /* 查不到就算了，下次打开页面还有机会 */ });
+    }, 6000);
   }
 
   /** 把"实际该不该有声"落到**所有**已建条目上，并同步图标/提示（只此一处改 audio 状态）。 */
@@ -1820,6 +1848,35 @@ export function mountFeed(view, options = {}) {
     loadMore();
   }
 
+  /**
+   * 原生把播放收回网页时调它（见 WebActivity.onResume）：
+   *   · 后台自动播到了**别的**剧集 ⇒ 网页跟着跳到那一条（用户 2026-09-26 报障：
+   *     后台听到 F 了，回前台却又回到最早的 A）；
+   *   · 还是同一条 ⇒ 就地 seek 回去接着播。
+   * 返回 true = 认领成功；false = 这一条不在网页当前列表里（原生据此如实提示，不假装成功）。
+   */
+  window.zvResumeNative = (mediaId, positionMs) => {
+    const id = String(mediaId || "");
+    if (!id) return false;
+    const index = state.items.findIndex((it) => String(it.id) === id);
+    if (index < 0) return false;
+    if (index !== state.active) goTo(index);
+    const entry = state.built.get(index) || ensureEntry(index);
+    if (!entry || !entry.video) return index === state.active;
+    const seek = () => {
+      try {
+        const d = entry.video.duration || 0;
+        let t = (Number(positionMs) || 0) / 1000;
+        if (d > 0 && t > d - 1) t = 0; // 后台可能已经播到结尾：从头开始比"卡在最后一秒"合理
+        entry.video.currentTime = t;
+      } catch (err) { /* 还没 metadata，等 loadedmetadata 再设 */ }
+    };
+    if (entry.video.readyState >= 1) seek();
+    else entry.video.addEventListener("loadedmetadata", seek, { once: true });
+    if (entry.video.paused) tryPlay(entry);
+    return true;
+  };
+
   // App 的系统返回手势进来先问这里：全屏中就只退出全屏（符合播放器习惯），否则交给路由。
   // App 进/出小窗（原生画中画）时通知这里，好让按钮状态和真实情况一致
   const onPipMode = (on) => {
@@ -1868,6 +1925,7 @@ export function mountFeed(view, options = {}) {
       try { delete window.zvPipMode; } catch (err) { window.zvPipMode = null; }
     }
     try { delete window.__zvSoundNudge; } catch (err) { window.__zvSoundNudge = null; }
+    try { delete window.zvResumeNative; } catch (err) { window.zvResumeNative = null; }
     releaseFullscreen(); // 返回/换页时把系统横屏与 document 全屏一并交还
     document.body.classList.remove("playing");
     document.body.classList.remove("rot-play");

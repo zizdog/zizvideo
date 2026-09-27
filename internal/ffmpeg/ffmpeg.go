@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -319,4 +320,69 @@ type probeJSON struct {
 		Duration   string `json:"duration"`
 		BitRate    string `json:"bit_rate"`
 	} `json:"format"`
+}
+
+// LoudnessTargetLUFS 是音量均一化的目标响度（流媒体普遍用 -16 LUFS 左右）。
+const LoudnessTargetLUFS = -16.0
+
+// lufsRe 抓 ebur128 摘要里的整体响度那一行（`I:  -23.4 LUFS`）。
+var lufsRe = regexp.MustCompile(`I:\s*(-?\d+(?:\.\d+)?)\s*LUFS`)
+
+// MeasureLoudness 用 ffmpeg 的 ebur128 滤镜量**整体响度**（LUFS），做音量均一化用
+// （用户 2026-09-26："不同视频音量不同，应做均一化"）。
+//
+// 只读音频（-vn）、只取一段样本（默认 30 秒、从 1/3 处开始）：整片量一遍要解码整条音轨，
+// 对一集几十分钟的剧完全不划算；样本足够代表这一集的响度（同一集内响度基本一致）。
+func MeasureLoudness(ctx context.Context, r Runner, ffmpegBin, path string, durationMS int64,
+	timeout time.Duration) (float64, error) {
+	at := 0.0
+	if durationMS > 90_000 { // 太短的片子就从头量
+		at = float64(durationMS) / 3000.0
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_, stderr, err := r.Run(cctx, ffmpegBin,
+		"-hide_banner", "-nostdin",
+		"-ss", strconv.FormatFloat(at, 'f', 3, 64), "-t", "30",
+		"-i", path,
+		"-vn", "-af", "ebur128=peak=none", "-f", "null", "-")
+	if err != nil {
+		return 0, classify(cctx, err, stderr, ffmpegBin)
+	}
+	return ParseLoudness(stderr)
+}
+
+// ParseLoudness 从 ffmpeg 的 stderr 里取最后一条整体响度（导出给测试用）。
+func ParseLoudness(stderr []byte) (float64, error) {
+	all := lufsRe.FindAllSubmatch(stderr, -1)
+	if len(all) == 0 {
+		return 0, errors.New("ffmpeg 输出里没有 LUFS 摘要")
+	}
+	raw := string(all[len(all)-1][1])
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, err
+	}
+	if v >= 0 {
+		return 0, errors.New("LUFS 不可能是正数：" + raw)
+	}
+	return v, nil
+}
+
+// GainDBFor 由响度算出该给的增益（dB）：目标 -16 LUFS，**只衰减不放大**，
+// 上限 24dB 的衰减。为什么只衰减：网页端 HTMLMediaElement.volume 上限是 1.0，
+// 放大要么得上 Web Audio 的 GainNode、要么在原生侧超 1.0 可能削波 —— 第一版先不动这条链路。
+// lufs >= 0 表示"还没量过"，返回 0（什么都不做）。
+func GainDBFor(lufs float64) float64 {
+	if lufs >= 0 {
+		return 0
+	}
+	gain := LoudnessTargetLUFS - lufs
+	if gain > 0 {
+		gain = 0
+	}
+	if gain < -24 {
+		gain = -24
+	}
+	return gain
 }

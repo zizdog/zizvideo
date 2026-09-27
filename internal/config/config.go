@@ -37,16 +37,20 @@ type Config struct {
 	// （又慢又占双份空间）。媒体库在外置盘（如 /Volumes/ZPMirror/video）时，
 	// 把收件箱也放到同一个卷上（如 /Volumes/ZPMirror/zv-inbox）就能一直是 rename。
 	// ⚠️ 不能放在任何"媒体允许根"里面：否则待审文件会被扫描器当成正式内容入库。
-	UploadInboxDir string `json:"upload_inbox_dir"`
-	TrustedProxies     []string `json:"trusted_proxies"`
-	SessionTTLHours    int      `json:"session_ttl_hours"`
-	LockoutThreshold   int      `json:"lockout_threshold"`
-	LockoutWindowMin   int      `json:"lockout_window_minutes"`
-	SecureCookie       bool     `json:"secure_cookie"`
+	UploadInboxDir   string   `json:"upload_inbox_dir"`
+	TrustedProxies   []string `json:"trusted_proxies"`
+	SessionTTLHours  int      `json:"session_ttl_hours"`
+	LockoutThreshold int      `json:"lockout_threshold"`
+	LockoutWindowMin int      `json:"lockout_window_minutes"`
+	SecureCookie     bool     `json:"secure_cookie"`
 	// UploadMaxFileMB 是单个上传文件的上限（MB）；超过就人话拒绝，不截断。
 	UploadMaxFileMB int `json:"upload_max_file_mb"`
 	// AllowRegister 默认关：关闭时唯一公开注册入口 POST /auth/register 直接拒绝。
 	AllowRegister bool `json:"allow_register"`
+	// LoudnessNormalize 音量均一化（默认开）：第一次播某个视频时在后台量一次整体响度（LUFS），
+	// 之后按它把偏响的那些衰减到 -16 LUFS（只衰减不放大）。关掉 = 不量也不调
+	// （用户 2026-09-26："不同视频音量不同，应做均一化"）。
+	LoudnessNormalize bool `json:"loudness_normalize"`
 }
 
 // Default returns the built-in defaults; the only allow root is $HOME/Movies
@@ -74,6 +78,7 @@ func Default() *Config {
 		LockoutWindowMin:   15,
 		UploadMaxFileMB:    8192,
 		AllowRegister:      false,
+		LoudnessNormalize:  true,
 	}
 }
 
@@ -127,6 +132,7 @@ func applyEnv(c *Config) {
 	setStr(&c.UploadInboxDir, "ZV_UPLOAD_INBOX_DIR")
 	setInt(&c.ScanWorkers, "ZV_SCAN_WORKERS")
 	setInt(&c.ProbeTimeoutSec, "ZV_PROBE_TIMEOUT_SECONDS")
+	setBool(&c.LoudnessNormalize, "ZV_LOUDNESS_NORMALIZE")
 	setInt(&c.LockoutThreshold, "ZV_LOCKOUT_THRESHOLD")
 	setInt(&c.SessionTTLHours, "ZV_SESSION_TTL_HOURS")
 	setInt(&c.UploadMaxFileMB, "ZV_UPLOAD_MAX_FILE_MB")

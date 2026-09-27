@@ -123,6 +123,11 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		st.Played += len(rows)
 		next = formatFeedCursor(st.CursorHash, last.ID, st.Seed)
 	}
+	// 音量均一化：首页这批是"马上要看"的，提前排队量响度 ⇒ 轮到时多半已经量好（用户 2026-09-26）。
+	// 队列满了会自动丢（见 loudnessQueue.enqueue），不会拖慢首页响应。
+	for i := range rows {
+		s.noteLoudness(&rows[i])
+	}
 	if err := s.DB.SaveFeedState(st); err != nil {
 		s.fail(w, r, err)
 		return

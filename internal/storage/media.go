@@ -16,20 +16,20 @@ const batchSize = 500
 const mediaCols = `id, library_id, path, title, size, mtime_ns, container,
 	video_codec, audio_codec, width, height, duration_ms, bitrate, fps,
 	status, error_class, error_message, COALESCE(missing_since,''), created_at, updated_at,
-	transcode_state, transcode_note`
+	transcode_state, transcode_note, loudness_lufs`
 
 // mediaColsQ is mediaCols qualified for JOINs (created_at 会被别的表撞名).
 const mediaColsQ = `m.id, m.library_id, m.path, m.title, m.size, m.mtime_ns, m.container,
 	m.video_codec, m.audio_codec, m.width, m.height, m.duration_ms, m.bitrate, m.fps,
 	m.status, m.error_class, m.error_message, COALESCE(m.missing_since,''), m.created_at, m.updated_at,
-	m.transcode_state, m.transcode_note`
+	m.transcode_state, m.transcode_note, m.loudness_lufs`
 
 func scanMedia(s interface{ Scan(...any) error }) (*domain.Media, error) {
 	var m domain.Media
 	if err := s.Scan(&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
 		&m.Codecs.Video, &m.Codecs.Audio, &m.Width, &m.Height, &m.DurationMS, &m.Bitrate, &m.FPS,
 		&m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince, &m.CreatedAt, &m.UpdatedAt,
-		&m.TranscodeState, &m.TranscodeNote); err != nil {
+		&m.TranscodeState, &m.TranscodeNote, &m.LoudnessLUFS); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -444,3 +444,15 @@ func truncate(s string, n int) string {
 }
 
 var _ = fmt.Sprintf
+
+// UpdateMediaLoudness 记下一次响度测量结果（0 = 还没量过；量失败也写 0，不要写垃圾值）。
+// 单独一个方法而不是塞进 UpdateMediaProbe：量响度是"第一次播时才做"的后台步骤，
+// 与探测/入库是两条时间线，混在一起会让扫描多背一个 ffmpeg 开销。
+func (db *DB) UpdateMediaLoudness(id string, lufs float64) error {
+	if lufs > 0 {
+		lufs = 0 // LUFS 一定是负数；正数说明解析错了，宁可不调音量
+	}
+	_, err := db.Exec(`UPDATE media SET loudness_lufs = ?, updated_at = ? WHERE id = ?`,
+		lufs, domain.NowString(), id)
+	return err
+}
