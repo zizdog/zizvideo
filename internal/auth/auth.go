@@ -139,11 +139,11 @@ func (m *Manager) Login(ip, username, password string) (*domain.User, string, er
 		// Burn comparable work so a missing account is not faster to probe.
 		_, _ = pbkdf2.Key(sha256.New, password, []byte("zizvideo-dummy-salt"), Iterations, 32)
 		m.Limiter.Fail(key)
-		return nil, "", domain.ErrUnauthorized
+		return nil, "", domain.ErrBadCredentials
 	}
 	if u.Status != domain.StatusActive {
 		m.Limiter.Fail(key)
-		return nil, "", domain.ErrUnauthorized
+		return nil, "", domain.ErrBadCredentials
 	}
 	if st, err := m.DB.GetLoginState(username); err == nil && st.LockedUntil != "" {
 		if until := domain.ParseTime(st.LockedUntil); until.After(time.Now()) {
@@ -159,7 +159,7 @@ func (m *Manager) Login(ip, username, password string) (*domain.User, string, er
 			return nil, "", &domain.Error{Code: "AUTH_LOCKED",
 				Message: "失败次数过多，账号已临时锁定", Status: 429}
 		}
-		return nil, "", domain.ErrUnauthorized
+		return nil, "", domain.ErrBadCredentials
 	}
 
 	token, err := NewToken()

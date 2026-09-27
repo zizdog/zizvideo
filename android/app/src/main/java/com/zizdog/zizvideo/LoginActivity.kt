@@ -26,11 +26,18 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var login: MaterialButton
     private lateinit var status: TextView
     private lateinit var splash: View
+    private lateinit var loginScroll: android.widget.ScrollView
     private lateinit var tlsBox: android.widget.CheckBox
     private lateinit var rememberBox: android.widget.CheckBox
 
     /** 这一次启动是否已经有结论（进网页了 / 该露表单了）—— 给遮罩看门狗用。 */
     private var settled = false
+
+    /** 一次只跑一个登录请求（电视键盘的"确认"键可能同时送 editor action 和回车）。 */
+    private var submitting = false
+
+    /** 这一轮登录到底发给了谁（失败提示里带上，用户一眼看得出地址/用户名是不是打错了）。 */
+    private var lastTarget = ""
 
     /** 快捷方式要求直接开播的队列（zizvideo://listen/feed ⇒ "feed"）。 */
     private var listenKind = ""
@@ -50,6 +57,7 @@ class LoginActivity : AppCompatActivity() {
         login = findViewById(R.id.login)
         status = findViewById(R.id.status)
         splash = findViewById(R.id.splash)
+        loginScroll = findViewById(R.id.loginScroll)
 
         tlsBox = findViewById(R.id.tls)
         rememberBox = findViewById(R.id.remember)
@@ -96,12 +104,40 @@ class LoginActivity : AppCompatActivity() {
             (CookieManager.getInstance().getCookie(prefs.baseUrl) ?: "")
         val canSilent = prefs.baseUrl.isNotBlank() &&
             (cookie.isNotBlank() || (prefs.remember && prefs.password.isNotBlank()))
-        if (canSilent) {
+        // 网页侧把我们退回来了（它自己的会话校验没过）：**必须当场把原因说清**，
+        // 而且**不许再自动登录** —— 否则就是"闪一下又回到登录页"的死循环（用户 2026-09-27 报障）。
+        val bounce = intent?.getStringExtra(WebActivity.EXTRA_NOTE).orEmpty()
+        if (bounce.isNotBlank()) {
+            android.util.Log.w("zv-login", "web bounced: " + bounce)
+            showForm(bounce)
+            showError(bounce)
+        } else if (canSilent) {
             splash.visibility = View.VISIBLE
             armSplashWatchdog()
             silentEntryIfPossible()
         } else {
             showForm("")
+        }
+    }
+
+    /**
+     * 失败原因必须"看得见"（用户 2026-09-27 报障："闪一下又回到登录页，即没成功，也没提示为什么失败"）。
+     * 光写页面底部那行小字不够 —— 电视上它正好被浮动软键盘盖住，等于没说。所以三管齐下：
+     * 状态行 + 气泡（Toast，浮在最上层，不受键盘/滚动影响）+ 日志。
+     */
+    private fun showError(message: String) {
+        if (message.isBlank()) return
+        status.visibility = View.VISIBLE
+        status.text = message
+        try {
+            android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            android.util.Log.w("zv-login", "toast failed: " + e.javaClass.simpleName)
+        }
+        try {
+            loginScroll.post { loginScroll.smoothScrollTo(0, status.bottom) }
+        } catch (e: Exception) {
+            /* 忽略：滚动只是锦上添花 */
         }
     }
 
@@ -225,6 +261,7 @@ class LoginActivity : AppCompatActivity() {
                 } else {
                     android.util.Log.i("zv-login", "form shown（会话过期且没记口令）")
                     showForm(getString(R.string.err_session_expired))
+                    showError(getString(R.string.err_session_expired))
                 }
             }
         }.start()
@@ -232,16 +269,19 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun submit() {
+        // 一次只跑一个：电视键盘的"确认"键既会送 editor action，有的盒子还会再补一个回车
+        // （dispatchKeyEvent 那条兜底），两次登录请求叠着发会互相打架。
+        if (submitting) return
         val base = ZvApi.normalizeBase(server.text?.toString() ?: "", tlsBox.isChecked)
         if (base.isEmpty()) {
-            status.text = getString(R.string.err_server_empty)
+            showError(getString(R.string.err_server_empty))
             return
         }
         val user = username.text?.toString()?.trim() ?: ""
         var pass = password.text?.toString() ?: ""
         if (pass.isEmpty() && rememberBox.isChecked) pass = prefs.password // 自动登录时用记住的口令
         if (user.isEmpty() || pass.isEmpty()) {
-            status.text = getString(R.string.err_credentials_empty)
+            showError(getString(R.string.err_credentials_empty))
             return
         }
         // 记住地址/用户名/TLS；口令只在勾选时落盘（界面上写明是明文）
@@ -251,11 +291,15 @@ class LoginActivity : AppCompatActivity() {
         prefs.remember = rememberBox.isChecked
         prefs.password = if (rememberBox.isChecked) pass else ""
         server.setText(base)
+        // 失败提示里带上"发给了谁"：电视键盘打错的地址/多打的空格，一眼就能看出来
+        // （用户 2026-09-27：浏览器同样账号能登，App 不行 —— 得让提示自己说清是发给谁）
+        lastTarget = user + "@" + base
 
         runOnUiThread { splash.visibility = View.VISIBLE }
         // 电视上的软键盘是浮在表单上的小窗，不主动收起来就会一直盖着"正在检查…"（用户报障那一屏就是它）
         hideIme()
         armSplashWatchdog()
+        submitting = true
         setBusy(true, getString(R.string.action_checking))
         Thread {
             val probe = try {
@@ -282,10 +326,32 @@ class LoginActivity : AppCompatActivity() {
                 return@Thread
             }
             if (!reply.ok) {
-                fail(reply.errorMessage())
+                // 401 在老版本服务端上回的是"未登录或会话已过期"（那句话是给网页会话过期用的），
+                // 用户根本看不出是自己口令打错了 —— 登录这一步统一翻译成人话（用户 2026-09-27 报障）。
+                val raw = reply.errorMessage()
+                val msg = if (reply.status == 401 && !raw.contains("口令") && !raw.contains("密码")) {
+                    getString(R.string.err_bad_credentials)
+                } else {
+                    raw
+                }
+                fail(msg)
                 return@Thread
             }
             pushCookies(base, reply.cookies)
+            // "登录请求成功"不等于"网页也登录上了"：cookie 带 Secure 而地址是 http 时，
+            // WebView 会**拒收**这个 cookie（原生这边发的是裸 Cookie 头，所以看着一切正常），
+            // 然后网页发现没会话就退到 #/login，用户看到的就是"闪一下又回到登录页、还没提示"。
+            // 这里提前把这种情况挑明（用户 2026-09-27 报障）。
+            val webCookie = CookieManager.getInstance().getCookie(base) ?: ""
+            android.util.Log.i(
+                "zv-login",
+                "login ok version=$version cookies=" + reply.cookies.size +
+                    " webviewHasSession=" + webCookie.contains("zv_session="),
+            )
+            if (!webCookie.contains("zv_session=")) {
+                fail(getString(R.string.err_cookie_rejected))
+                return@Thread
+            }
             val name = reply.data()?.optString("display_name")?.ifBlank { user } ?: user
             runOnUiThread { enterWeb(base, "已连接 zizvideo $version · $name") }
         }.start()
@@ -313,14 +379,20 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun fail(message: String) {
-        android.util.Log.w("zv-login", "login failed: " + message)
+        submitting = false
+        // 提示里带上本次的目标（地址+用户名）与 HTTP 码：出问题时用户能直接看出来错在哪
+        val detail = if (lastTarget.isBlank()) message else "$message（$lastTarget）"
+        android.util.Log.w("zv-login", "login failed: " + message + " target=" + lastTarget)
         // 只有失败/过期才把登录信息露出来（用户要求）
-        runOnUiThread { showForm(message) }
-        setBusy(false, message)
+        runOnUiThread { showForm(detail) }
+        setBusy(false, detail)
+        // 关键：失败原因要**弹出来**（电视上底部那行小字会被软键盘盖住，用户 2026-09-27 报障）
+        runOnUiThread { showError(detail) }
     }
 
     private fun enterWeb(base: String, note: String) {
         settled = true
+        submitting = false
         setBusy(false, note)
         if (listenKind.isNotBlank()) {
             // 快捷方式"听首页"：直接起原生播放器（队列由 GET /feed/next 拉），不用先进网页

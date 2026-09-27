@@ -91,5 +91,8 @@ export function choiceDialog(options) {
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(null); });
     document.addEventListener("keydown", onKey);
     document.body.append(overlay);
+    // 打开就落焦：电视端没有鼠标，不落焦的话遥控器的"确定"会先被底下那层面板吃掉
+    const firstBtn = actions.querySelector("button");
+    if (firstBtn) firstBtn.focus();
   });
 }

@@ -309,7 +309,12 @@ func New(code, msg string, status int) *Error {
 // Predeclared errors reused across handlers and services.
 var (
 	ErrUnauthorized = New("AUTH_UNAUTHORIZED", "未登录或会话已过期", 401)
-	ErrForbidden    = New("FORBIDDEN_ROLE", "没有权限执行该操作", 403)
+	// 登录本身失败（账号不存在 / 口令不对 / 账号停用）—— 单列一条码，别复用 ErrUnauthorized：
+	// 复用会让 App 弹出"未登录或会话已过期"，用户根本看不出是自己口令打错了
+	// （2026-09-27 用户报障："闪一下回到登录页，没成功也没说为什么"）。
+	// 三种原因共用一句话是有意的：不要泄露"这个用户名存不存在"。
+	ErrBadCredentials = New("AUTH_BAD_CREDENTIALS", "用户名或口令不正确", 401)
+	ErrForbidden      = New("FORBIDDEN_ROLE", "没有权限执行该操作", 403)
 	ErrCSRF         = New("FORBIDDEN_CSRF", "CSRF 校验失败，请刷新页面", 403)
 	ErrBadRequest   = New("VALIDATION_BAD_REQUEST", "请求格式不正确", 400)
 	ErrNotFound     = New("VALIDATION_NOT_FOUND", "对象不存在", 404)

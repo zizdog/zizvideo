@@ -233,8 +233,10 @@ export function mountUploadsTab(root) {
   }
 
   async function rowFor(item) {
+    // 待审封面（点开预览）**必须可聚焦**：电视端遥控器落不到没有 tabindex 的图片上
+    // （用户 2026-09-25 同类问题：页面上"看着能点"的东西遥控器一个都够不到）
     const cover = el("img", {
-      class: "upload-cover", alt: "",
+      class: "upload-cover", alt: "", tabindex: "0", role: "button",
       src: "/api/v1/uploads/" + encodeURIComponent(item.id) + "/cover",
       onclick: () => preview(item),
     });

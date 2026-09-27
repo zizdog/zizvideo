@@ -53,6 +53,9 @@ object ZvApi {
             connectTimeout = 8000
             readTimeout = 8000
             instanceFollowRedirects = true
+            // 带上 UA：有的反代会拦没有 UA 的请求（浏览器能过、App 过不去的那类），
+            // 服务端日志里也能一眼认出是 App（用户 2026-09-27："浏览器能登，TV 端不行"）。
+            setRequestProperty("User-Agent", "zizvideo-android")
             if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
             if (csrf.isNotBlank()) setRequestProperty("X-CSRF-Token", csrf)
             if (body != null) {

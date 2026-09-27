@@ -94,6 +94,14 @@ export function mountLogin(view, onSuccess) {
   });
   view.append(form);
   username.focus();
+  // 首屏那次"连不上服务器"要说出来：不然用户只看到"又回到登录页"，以为登录白输了
+  // （用户 2026-09-27 报障；app.js boot 里两次尝试都失败才会置这个标记）。
+  try {
+    if (sessionStorage.getItem("zv_boot_failed") === "1") {
+      sessionStorage.removeItem("zv_boot_failed");
+      setBanner(note, "连不上服务器（网络或服务端抖动），请重试");
+    }
+  } catch (err) { /* 隐私模式忽略 */ }
   // 「注册」入口只在管理员开着注册时出现（判据 = 公开的 setup/status.allow_register）。
   const registerEntry = el("div", { class: "muted small-note", hidden: true, dataset: { role: "register-entry" } });
   form.append(registerEntry);

@@ -9,7 +9,9 @@
 //
 // 只在 tv 模式生效（原生带 ?tv=1 进来）；网页端与手机 App 一行都不变。
 
-const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
+// `summary` 要收：后台「新建媒体库 / 新建分组」是 <details><summary>，不收就永远打不开；
+// `[tabindex="-1"]` 要排掉：那是"只给脚本聚焦"的钩子，遥控器停在它上面等于没有焦点。
+const FOCUSABLE = "a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex='-1'])";
 
 let feedHandler = null;
 let installed = false;
@@ -30,15 +32,25 @@ export function setFeedKeys(handler) {
 function visible(el) {
   if (!el || el.disabled || el.hidden) return false;
   if (el.closest(".hidden, [hidden]")) return false;
+  // 折叠的 <details>：里面的控件在 Chromium 里**仍有尺寸**（实测 rect 非零），浏览器却不肯把焦点给它 ——
+  // 不排掉的话遥控器会"选中"一个看不见的东西，然后按确定没反应。
+  const det = el.closest("details");
+  if (det && !det.open) return false;
   const rect = el.getBoundingClientRect();
   return rect.width > 1 && rect.height > 1;
 }
 
 /**
- * 有浮层（设置面板/选集/选择器/侧栏）时，焦点只在浮层里走。
+ * 有浮层（设置面板/选集/选择器/侧栏/弹窗）时，焦点只在浮层里走。
  * 不然 scrim 后面的视频卡片照样"看得见"（有尺寸），焦点会跑到面板底下去。
+ *
+ * 弹窗（.modal-overlay，z-index 60）**优先**：它永远压在最上层，如果只把它并进下面的面板里，
+ * 焦点会被"锁"在弹窗背后那层面板里 —— 实测（2026-09-27 电视端）播放页「删除这个视频」弹出的
+ * 选择框就是这么进不去的（3 个按钮遥控器一个都够不到）。
  */
 function overlayRoots() {
+  const modal = document.querySelectorAll(".modal-overlay");
+  if (modal.length) return Array.from(modal);
   const sel = ".set-panel:not(.hidden), .sheet-scrim:not(.hidden), .side-panel, .picker-overlay";
   return Array.from(document.querySelectorAll(sel));
 }
@@ -126,11 +138,19 @@ function onKeyDown(event) {
   const dir = dirs[event.key];
   // 多行输入里方向键是移光标，别抢
   if (tag === "TEXTAREA" || (target && target.isContentEditable)) return;
+  // 下拉框：↑↓ 留给它自己（换选项；实测这台 WebView 里 ↑↓ 会被我们抢走，导致遥控器**改不了任何 select**），
+  // ←→ 才用来离开这个框。确定键也别抢 —— 交给浏览器开选择器。
+  if (tag === "SELECT") {
+    if (dir === "left" || dir === "right") {
+      if (moveFocus(dir)) { event.preventDefault(); event.stopPropagation(); }
+    }
+    return;
+  }
   // 单行输入框：↑↓ 是"离开这个框"（遥控器没有 Tab，也没法点）。
   // 用户 2026-09-25 报障："登录界面确认按钮无法获得焦点，输入完信息无法操作登录" ——
   // 原先把 INPUT 一律放行，于是焦点卡在口令框里出不来，下面的登录按钮永远够不着；
-  // ←→ 仍旧留给光标。
-  if (tag === "INPUT" || tag === "SELECT") {
+  // ←→ 仍旧留给光标（range 调值、文本移光标）。
+  if (tag === "INPUT") {
     if (dir === "up" || dir === "down") {
       if (moveFocus(dir)) { event.preventDefault(); event.stopPropagation(); }
     }
@@ -161,7 +181,10 @@ function onKeyUp(event) {
 /** 页面重绘后把焦点拉回第一个可聚焦元素（否则遥控器"按了没反应"）。 */
 export function focusFirst() {
   if (!tvMode()) return false;
-  return focusEl(focusables()[0]);
+  const list = focusables();
+  // 默认焦点别落在危险操作上：收藏页 DOM 里第一个可聚焦元素是「清除记录」，一按确定就弹删除框
+  const safe = list.find((el) => !el.classList.contains("danger") && el.getAttribute("data-danger") !== "1");
+  return focusEl(safe || list[0]);
 }
 
 export function installTvKeys() {
@@ -172,4 +195,15 @@ export function installTvKeys() {
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("keyup", onKeyUp, true);
   document.addEventListener("focusin", (event) => paintFocus(event.target), true);
+  // 列表刷新/轮询重建 DOM 时，正在聚焦的那个节点被删掉 ⇒ 浏览器把焦点丢给 body ⇒ 遥控器"按了没反应"。
+  // 只在"**刚才那个节点已经不在文档里**"时才补焦点（主动 blur 的元素还在，就别抢 —— 播放页侧栏退出靠它）。
+  document.addEventListener("focusout", (event) => {
+    const prev = event.target;
+    setTimeout(() => {
+      const now = document.activeElement;
+      if (now && now !== document.body) return;
+      if (prev && prev.isConnected) return;
+      focusFirst();
+    }, 0);
+  }, true);
 }

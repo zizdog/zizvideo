@@ -54,7 +54,15 @@ function isPlayable(item) {
 }
 
 function readSoundPref() {
-  try { return localStorage.getItem(SOUND_KEY) === "on"; } catch (err) { return false; }
+  // 没存过 = **默认开声**（用户 2026-09-27："默认视频应该是打开声音的，我测试时默认静音"）。
+  // 只有用户自己按过喇叭（存了 "off"）才静音。浏览器不许"有声自动播放"时，
+  // 下面的 tryPlay() 会退回静音自动播 + 提示去哪里开声，这条路不变。
+  try {
+    const saved = localStorage.getItem(SOUND_KEY);
+    return saved === null ? true : saved === "on";
+  } catch (err) {
+    return true;
+  }
 }
 
 function writeSoundPref(on) {
@@ -904,6 +912,8 @@ export function mountFeed(view, options = {}) {
         actionRow("heart", "收藏", () => { entry.fav.click(); }),
         actionRow("volume", "声音", () => { entry.sound.click(); }),
         actionRow("expand", "全屏", () => { entry.fullscreen.click(); }),
+        // 搜索：顶栏那颗按钮遥控器够不到（播放页方向键全被"换集/快进"占用），这里补一个入口
+        actionRow("search", "搜索", () => { location.hash = "#/search"; }),
       );
     }
 
@@ -939,7 +949,8 @@ export function mountFeed(view, options = {}) {
 
     // 第 3 组：剧场入口（图3 的「合集 · 这是一个小短剧 更新至 N 集 >」）
     if (playlist && playlist.seriesId) {
-      const row = el("div", { class: "sheet-row sheet-series", dataset: { role: "sheet-series" } },
+      // tabindex=0：跟 actionRow 一样，电视端遥控器得能落焦（div 默认不可聚焦 ⇒ 点了没反应）
+      const row = el("div", { class: "sheet-row sheet-series", tabindex: "0", dataset: { role: "sheet-series" } },
         icon("theater"),
         el("span", { class: "sheet-label", text: "剧场 · " + (playlist.title || "") }),
         el("span", { class: "sheet-right muted", text: "共 " + (playlist.episodeCount || state.items.length) + " 集" }),
@@ -1752,6 +1763,13 @@ export function mountFeed(view, options = {}) {
         if (active.blur) active.blur();
         return true;
       }
+      return false;
+    }
+    // 焦点已经落在真正的控件上（顶栏按钮 / 来自X·全部库 chips / 侧栏 / 选集…）时，**确定键不许抢**：
+    // 原来播放页把任何确定键都当"播放/暂停"，实测顶栏「搜索」拿得到焦点却永远按不动（用户 2026-09-25 同类报障）。
+    // 方向键仍旧保留播放页语义（↑↓ 换视频、←→ 快进），这是电视上看片的主动作。
+    if (event.key === "Enter" && active && active !== document.body && active.closest &&
+        active.closest("button, a[href], [tabindex]:not([tabindex='-1'])")) {
       return false;
     }
     switch (event.key) {

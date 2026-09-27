@@ -56,6 +56,9 @@ class WebActivity : AppCompatActivity() {
         /** 覆盖更新源（自测/模拟器用：`--es update_base http://10.0.2.2:17802/apps/zizvideo`）。 */
         const val EXTRA_UPDATE_BASE = "update_base"
 
+        /** 把用户交回原生登录页时带上"为什么"（用户 2026-09-27："闪一下又回来，还不说原因"）。 */
+        const val EXTRA_NOTE = "login_note"
+
         /**
          * 是不是电视/盒子（用户 2026-09-25）：Android TV 的 UI 模式，或系统带 leanback 特性。
          * 判据用它而不是 Build.MODEL 猜：盒子/电视/投影都算，手机平板都不算。
@@ -77,6 +80,10 @@ class WebActivity : AppCompatActivity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var launchingNative = false
     private var handlingLogin = false
+
+    /** 首屏 URL（网页说"未登录"时用它重载一次自愈：见 handlePlayRoute 的 #/login 分支）。 */
+    private var startUrl: String = ""
+    private var loginRetried = false
 
     /** 更新源地址（默认镜像站；自测可覆盖）与"这个进程里已经提示过一次更新"的标记。 */
     private var updateBase: String = Updater.DEFAULT_BASE
@@ -422,6 +429,7 @@ class WebActivity : AppCompatActivity() {
         val flag = if (tv) "?zv=app&tv=1" else "?zv=app"
         val flagged = if (path.contains("#")) path.replaceFirst("#", flag + "#") else path + flag
         val url = base + flagged
+        startUrl = url
         android.util.Log.i("zv-nav", "loadUrl=$url tv=$tv")
         // 电视端：按键事件要落到 WebView 上（遥控器没有触摸，没人帮它 requestFocus）
         if (tv) {
@@ -587,9 +595,35 @@ class WebActivity : AppCompatActivity() {
         // 会话失效时网页会退到 #/login：把用户交回原生登录页（那里会重新登录并把新 cookie 灌进来），
         // 否则他在网页里重登、原生播放器还拿着旧 cookie 一直 401。
         if (hash == "/login") {
+            // ⚠️ 真机上的本质问题（用户 2026-09-27：TV 上死活登不上，浏览器同样账号能登）：
+            // 原生登录**已经成功**（服务端有成功记录、cookie 也在 WebView 里），但网页起来后第一次
+            // /auth/me 没成（WebView 刚起第一个请求、网络刚醒、偶发超时）⇒ 前端把用户当"没登录" ⇒
+            // 路由到 #/login ⇒ 老代码**直接静默退回原生登录页**，用户看到的就是"闪一下又回到登录页"。
+            // 所以这里先自己救一次：cookie 在就重载一次首屏 URL（真没登录时它还会再退回来，走下面那支）。
+            val sessionInWebView = (CookieManager.getInstance().getCookie(base) ?: "").contains("zv_session=")
+            if (sessionInWebView && !loginRetried) {
+                loginRetried = true
+                android.util.Log.w("zv-login", "web 说未登录但 cookie 在 → 重载一次自愈")
+                web.postDelayed({
+                    try {
+                        web.loadUrl(startUrl.ifBlank { base + "/?zv=app&tv=1" })
+                    } catch (e: Exception) {
+                        android.util.Log.w("zv-login", "retry load failed: " + e.javaClass.simpleName)
+                    }
+                }, 500)
+                return true
+            }
             if (!handlingLogin) {
                 handlingLogin = true
-                startActivity(Intent(this, LoginActivity::class.java))
+                // 重试过还退回来（或 cookie 真不在）：带"为什么"交回原生登录页，不再静默
+                android.util.Log.w(
+                    "zv-login",
+                    "web session missing → 交回原生登录页（cookie=" + sessionInWebView + " retried=" + loginRetried + "）",
+                )
+                startActivity(
+                    Intent(this, LoginActivity::class.java)
+                        .putExtra(EXTRA_NOTE, getString(R.string.err_web_bounced)),
+                )
                 finish()
             }
             return true

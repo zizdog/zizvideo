@@ -19,4 +19,10 @@
     <!-- 只有"登录过期/失败"时才露表单，这两句是给那种情况用的 -->
     <string name="err_session_expired">登录已过期，请重新登录</string>
     <string name="err_login_timeout">连不上服务器或超时，请检查地址后重试</string>
+    <!-- 用户 2026-09-27 报障："闪一下又回到登录页，没成功也没说为什么"——
+         这两句就是那种"必须说清原因"的情况：① 会话 cookie 没进 WebView；② 网页侧校验没过被退回来 -->
+    <string name="err_cookie_rejected">网页侧没拿到登录会话（http 地址遇到只给 https 的 cookie）</string>
+    <string name="err_web_bounced">网页侧校验没通过，已退回登录页</string>
+    <!-- 老服务端（≤0.3.8）登录失败说的是"未登录或会话已过期"，用户看不出是自己口令打错了 -->
+    <string name="err_bad_credentials">用户名或口令不正确（也可能是失败次数过多被临时锁定）</string>
 </resources>

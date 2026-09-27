@@ -220,7 +220,23 @@ async function boot() {
     needsSetup = false;
   }
   if (needsSetup) { go("#/setup"); return; }
-  try { await loadMe(); } catch (err) { session.user = null; }
+  // ⚠️ 只有"服务器明确说没登录（401）"才算未登录。loadMe() 内部已经把 401 收敛成 user=null，
+  // 能抛到这里的都是**网络/服务端偶发错误** —— 老代码一律当"没登录"，于是原生刚登录成功、
+  // 网页第一个请求没成的用户会被踢回登录页（用户 2026-09-27 真机症状："闪一下又回到登录页"）。
+  // 现在：偶发错误重试一次；两次都不成才算没登录，并把"连不上"告诉登录页，别静默。
+  let bootFailed = false;
+  try {
+    await loadMe();
+  } catch (err) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    try {
+      await loadMe();
+    } catch (err2) {
+      session.user = null;
+      bootFailed = true;
+    }
+  }
+  if (bootFailed) { try { sessionStorage.setItem("zv_boot_failed", "1"); } catch (err) { /* 忽略 */ } }
   if (!location.hash) history.replaceState(null, "", session.user ? "#/feed" : "#/login");
   route();
 }
