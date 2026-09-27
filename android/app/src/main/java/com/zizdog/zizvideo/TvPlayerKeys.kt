@@ -15,7 +15,7 @@ import android.view.KeyEvent
  */
 object TvPlayerKeys {
 
-    enum class Action { NONE, TOGGLE, FOCUS_CHROME, PREV, NEXT, SEEK_BACK, SEEK_FWD }
+    enum class Action { NONE, TOGGLE, FOCUS_CHROME, SEEK_BACK, SEEK_FWD }
 
     /**
      * "我们自己那排控件"的 id（收藏/喜欢/稍后/倍速/缓存/画中画/停止）——只有焦点落在这些上才不抢按键。
@@ -26,7 +26,7 @@ object TvPlayerKeys {
      * 所以这里必须**按 id 白名单**判断，media3 那些 `exo_*` 一律不算"我们的控件"。
      */
     val OWN_CONTROL_IDS: Set<Int> = setOf(
-        R.id.fav, R.id.like, R.id.later, R.id.speed, R.id.offline, R.id.pip, R.id.stop,
+        R.id.prev, R.id.next, R.id.fav, R.id.like, R.id.later, R.id.speed, R.id.offline, R.id.pip, R.id.stop,
     )
 
     /** 按住多久算"长按"（遥控器上 450ms 左右最舒服；短于它=播放/暂停）。 */
@@ -52,11 +52,13 @@ object TvPlayerKeys {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_SPACE,
             -> if (repeat > 0) Action.NONE else Action.TOGGLE // 按住不反复切
-            KeyEvent.KEYCODE_MENU -> Action.FOCUS_CHROME // 底部那排控件遥控器够不到，菜单键把焦点送进去
+            KeyEvent.KEYCODE_MENU -> Action.FOCUS_CHROME
             KeyEvent.KEYCODE_DPAD_LEFT -> Action.SEEK_BACK
             KeyEvent.KEYCODE_DPAD_RIGHT -> Action.SEEK_FWD
-            KeyEvent.KEYCODE_DPAD_UP -> Action.PREV
-            KeyEvent.KEYCODE_DPAD_DOWN -> Action.NEXT
+            // 两态模型（用户 2026-09-27："四个方向键都给了播放，怎么操作其它地方？"）：
+            // 看片态下 ↑/↓ = **进控制条**（一次方向键就够，且两个方向都进，不会"按了没反应"）；
+            // 换集搬到控制条里的「上一集/下一集」按钮。控制条里方向键全部用于移动焦点。
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> Action.FOCUS_CHROME
             else -> Action.NONE
         }
     }

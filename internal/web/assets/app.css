@@ -315,6 +315,13 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .hint.low { top: 46px; }
 /* B5 长按快进的提示：金色，压在「已续播」提示下面一行，别叠在一起 */
 .hint.fast { top: 80px; background: rgba(255,196,0,.92); color: #16181d; font-weight: 600; }
+/* 电视端常驻按键提示（底部一条，压在底栏上方；只读文本、不可聚焦） */
+.tv-keyhint {
+  position: absolute; left: 0; right: 0; bottom: 66px; text-align: center;
+  color: rgba(255,255,255,.62); font-size: 14px; pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 12px;
+}
+
 .toast {
   position: absolute; z-index: 20; left: 50%; bottom: 20px; transform: translateX(-50%);
   max-width: 82%; padding: 7px 14px; border-radius: 999px; text-align: center;
@@ -669,6 +676,13 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .side-mask.hidden { display: none; }
 
 /* 提示（toast）：用户 2026-09-23 要求更大、居中 —— 原来贴在底栏很难被注意到 */
+/* 电视端常驻按键提示（底部一条，压在底栏上方；只读文本、不可聚焦） */
+.tv-keyhint {
+  position: absolute; left: 0; right: 0; bottom: 66px; text-align: center;
+  color: rgba(255,255,255,.62); font-size: 14px; pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 12px;
+}
+
 .toast {
   left: 50%; transform: translateX(-50%); bottom: auto; top: 50%;
   font-size: 17px; padding: 12px 20px; border-radius: 14px; max-width: 76vw; text-align: center;

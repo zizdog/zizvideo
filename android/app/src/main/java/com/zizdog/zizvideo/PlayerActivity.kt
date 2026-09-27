@@ -110,14 +110,29 @@ class PlayerActivity : AppCompatActivity() {
             view.isFocusableInTouchMode = true
             view.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
             view.requestFocus()
-            // 底部控件的选中样式：默认那圈 borderless 涟漪在暗背景上几乎看不见（用户反馈"选中样式有问题"）
+            // 底部控件：① 换"看得见的选中样式" ② 两态视觉 —— 看片态整条变暗（提示"现在不在这层"），
+            // 焦点进来就点亮；提示条也跟着换文案（屏幕上看得到"这层能干什么"）。
+            val chrome = findViewById<android.view.View>(R.id.chrome)
+            val hintView = findViewById<android.widget.TextView>(R.id.hint)
+            fun paintTvState(inChrome: Boolean) {
+                chrome.alpha = if (inChrome) 1f else 0.62f
+                hintView.text = if (inChrome) {
+                    "←→ 选按钮 · ↑ 回画面 · 确定 按下 · 返回 收起"
+                } else {
+                    "↑↓=操作条 · ←→=快退快进 10 秒 · 确定=播放/暂停"
+                }
+            }
+            view.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) paintTvState(false) }
             for (id in TvPlayerKeys.OWN_CONTROL_IDS) {
                 try {
-                    findViewById<android.view.View>(id).setBackgroundResource(R.drawable.tv_focus_bg)
+                    val v = findViewById<android.view.View>(id)
+                    v.setBackgroundResource(R.drawable.tv_focus_bg)
+                    v.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) paintTvState(true) }
                 } catch (e: Exception) {
                     Log.w("zv-tv", "focus bg: " + e.javaClass.simpleName)
                 }
             }
+            paintTvState(false)
             findViewById<android.widget.TextView>(R.id.hint).text =
                 "遥控器：确定=播放/暂停 · 长按确定=底部控件 · ←→=快退快进 · ↑↓=上下集"
         }
@@ -126,6 +141,18 @@ class PlayerActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // 底栏的「上一集/下一集」（换集从方向键搬到按钮里 —— 两态模型）
+        val prevBtn = findViewById<MaterialButton>(R.id.prev)
+        val nextBtn = findViewById<MaterialButton>(R.id.next)
+        prevBtn.setOnClickListener {
+            controller?.seekToPreviousMediaItem()
+            view.showController()
+        }
+        nextBtn.setOnClickListener {
+            controller?.seekToNextMediaItem()
+            view.showController()
         }
 
         val kind = intent.getStringExtra(EXTRA_KIND) ?: ""
@@ -616,7 +643,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun focusChrome() {
         view.showController()
         try {
-            findViewById<android.view.View>(R.id.fav).requestFocus()
+            findViewById<android.view.View>(R.id.prev).requestFocus()
         } catch (e: Exception) {
             Log.w("zv-tv", "focusChrome: " + e.javaClass.simpleName)
         }
@@ -628,8 +655,7 @@ class PlayerActivity : AppCompatActivity() {
         when (TvPlayerKeys.decide(keyCode, android.view.KeyEvent.ACTION_DOWN, 0, tv, focusId)) {
             TvPlayerKeys.Action.SEEK_BACK -> return tvSeek(-tvSeekMs)
             TvPlayerKeys.Action.SEEK_FWD -> return tvSeek(tvSeekMs)
-            TvPlayerKeys.Action.PREV -> { controller?.seekToPreviousMediaItem(); view.showController(); return true }
-            TvPlayerKeys.Action.NEXT -> { controller?.seekToNextMediaItem(); view.showController(); return true }
+            TvPlayerKeys.Action.FOCUS_CHROME -> { focusChrome(); return true }
             else -> Unit
         }
         return super.onKeyDown(keyCode, event)

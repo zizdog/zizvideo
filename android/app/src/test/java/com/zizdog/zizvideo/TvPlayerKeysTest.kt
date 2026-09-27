@@ -30,8 +30,24 @@ class TvPlayerKeysTest {
     fun arrowsKeepTheirPlayerMeaning() {
         assertEquals(TvPlayerKeys.Action.SEEK_BACK, decide(KeyEvent.KEYCODE_DPAD_LEFT))
         assertEquals(TvPlayerKeys.Action.SEEK_FWD, decide(KeyEvent.KEYCODE_DPAD_RIGHT))
-        assertEquals(TvPlayerKeys.Action.PREV, decide(KeyEvent.KEYCODE_DPAD_UP))
-        assertEquals(TvPlayerKeys.Action.NEXT, decide(KeyEvent.KEYCODE_DPAD_DOWN))
+    }
+
+    /** 两态模型（用户 2026-09-27："四个方向键都给了播放，怎么操作其它地方？"）：
+        看片态下 ↑/↓ = **进控制条**（一次方向键就到，两个方向都行），换集搬到控制条的按钮里。 */
+    @Test
+    fun upDownEnterTheControls() {
+        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_DPAD_UP))
+        assertEquals(TvPlayerKeys.Action.FOCUS_CHROME, decide(KeyEvent.KEYCODE_DPAD_DOWN))
+        // 已经在控制条里：方向键留给系统做焦点导航（不抢）
+        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_DOWN, focusId = R.id.prev))
+        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_RIGHT, focusId = R.id.fav))
+    }
+
+    /** 换集按钮必须在"我们自己的控件"白名单里（否则确定键会被 App 抢走，按钮点不动）。 */
+    @Test
+    fun episodeButtonsAreOwnControls() {
+        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_CENTER, focusId = R.id.prev))
+        assertEquals(TvPlayerKeys.Action.NONE, decide(KeyEvent.KEYCODE_DPAD_CENTER, focusId = R.id.next))
     }
 
     @Test

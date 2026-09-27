@@ -159,6 +159,11 @@ export function mountFeed(view, options = {}) {
     feed.append(track, chip);
   }
   view.append(feed, toast);
+  // 电视端常驻按键提示（用户 2026-09-27 问"怎么才能操作其它地方？"）：
+  // 抖音 TV / B站 TV 都把遥控器能做什么**写在屏幕上**，不能指望用户猜。
+  if (tvMode()) {
+    view.append(el("div", { class: "tv-keyhint", text: "↑↓ 换视频 · ←→ 快退快进 · 确定 播放/暂停 · 长按确定 更多" }));
+  }
   // 底栏挂载点（条目 10）：只加容器与入口，不改播放/进度逻辑
   view.append(mountNav(playlist ? (playlist.navKey || "series") : "feed"));
   // 播放页整屏（用户 2026-09-24）:顶栏改成浮在视频上，否则顶上那 52px 是页面底色（像一条背景横条）
