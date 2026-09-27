@@ -4,6 +4,7 @@
 // 老调用方都不传 input，行为完全不变。
 
 import { el } from "./dom.js";
+import { tvMode } from "./tv.js";
 
 export function confirmDialog(options) {
   const opts = options || {};
@@ -49,7 +50,12 @@ export function confirmDialog(options) {
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(false); });
     document.addEventListener("keydown", onKey);
     document.body.append(overlay);
-    if (field) field.focus(); else ok.focus();
+    // 打开就落焦：电视端没有鼠标，不落焦的话遥控器的"确定"会先被底下那层面板吃掉。
+    // ⚠️ 电视端+危险确认（删除一类）默认落到**「取消」**上：遥控器上"多按一下确定"就是真删，
+    //    危险按钮不该是默认落点（同 focusFirst 里"别落在 .danger 上"那条，见 docs/坑清单 44）。
+    if (field) field.focus();
+    else if (tvMode() && opts.danger !== false) cancel.focus();
+    else ok.focus();
   });
 }
 
