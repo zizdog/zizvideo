@@ -12,9 +12,21 @@ class ZvApiTest {
     fun addsSchemeAndKeepsPort() {
         assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("192.168.1.9:7766"))
         assertEquals("http://zv.local:7766", ZvApi.normalizeBase("http://zv.local:7766"))
-        // 裸主机名默认 http：zizvideo 自己默认就是 127.0.0.1:7766 明文，局域网也是明文；
-        // 要 https 就得自己写全（顶栏会把归一化后的地址回填给用户看，不猜）。
-        assertEquals("http://zv.example.com", ZvApi.normalizeBase("zv.example.com"))
+        // 裸主机名默认 http（zizvideo 自己默认就是明文、局域网也是明文）。
+        assertEquals("http://zv.example.com:7766", ZvApi.normalizeBase("zv.example.com"))
+    }
+
+    /** 端口规则（用户 2026-09-27 明确："端口默认 7766，可以不用输，也可以改，比如反代访问"）。 */
+    @Test
+    fun defaultsPortTo7766ButKeepsExplicitOnes() {
+        assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("192.168.1.9"))
+        assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("http://192.168.1.9"))
+        // 自己写了就按写的走（反代常见 80/8443）
+        assertEquals("http://192.168.1.9:80", ZvApi.normalizeBase("192.168.1.9:80"))
+        assertEquals("http://zv.example.com:8443", ZvApi.normalizeBase("zv.example.com:8443"))
+        // 勾了「使用 HTTPS」才改成 https（勾选状态由界面传进来）
+        assertEquals("https://zv.example.com:8443", ZvApi.normalizeBase("zv.example.com:8443", forceTLS = true))
+        // https 是反代场景：不补端口（默认 443）
         assertEquals("https://zv.example.com", ZvApi.normalizeBase("https://zv.example.com"))
     }
 
@@ -22,7 +34,7 @@ class ZvApiTest {
     fun dropsHashAndPath() {
         assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("http://192.168.1.9:7766/#/feed"))
         assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("192.168.1.9:7766/app/#/favorites"))
-        assertEquals("http://192.168.1.9", ZvApi.normalizeBase("  192.168.1.9/  "))
+        assertEquals("http://192.168.1.9:7766", ZvApi.normalizeBase("  192.168.1.9/  "))
     }
 
     @Test

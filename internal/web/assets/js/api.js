@@ -3,11 +3,22 @@
 const CSRF_COOKIE = "zv_csrf";
 
 export class ApiError extends Error {
-  constructor(message, code, status) {
+  constructor(message, code, status, path) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    // 打的是哪个接口：出问题时页面上要能写清"GET /api/v1/feed/next → 401"，
+    // 否则用户只能看到一句"加载失败"（用户 2026-09-27 报障："报错没看清"）。
+    this.path = path || "";
+  }
+
+  /** 给用户看的一句话：接口 + 状态码 + 服务端原文。 */
+  detail() {
+    const where = this.path ? this.path : "";
+    const code = this.status ? "HTTP " + this.status : (this.code || "");
+    const head = [where, code].filter(Boolean).join(" → ");
+    return head ? head + "：" + this.message : this.message;
   }
 }
 
@@ -55,7 +66,7 @@ async function envelope(method, path, body, keepalive) {
   try {
     response = await fetch(path, buildInit(method, body, keepalive));
   } catch (err) {
-    throw new ApiError("网络错误，请重试", "NETWORK", 0);
+    throw new ApiError("网络错误，请重试", "NETWORK", 0, method + " " + path);
   }
   const text = await response.text();
   let payload = null;
@@ -65,7 +76,7 @@ async function envelope(method, path, body, keepalive) {
   const error = payload && payload.error;
   if (!response.ok || error) {
     const message = error && error.message ? String(error.message) : "请求失败（HTTP " + response.status + "）";
-    throw new ApiError(message, (error && error.code) || "HTTP_" + response.status, response.status);
+    throw new ApiError(message, (error && error.code) || "HTTP_" + response.status, response.status, method + " " + path);
   }
   const data = payload && Object.prototype.hasOwnProperty.call(payload, "data") ? payload.data : payload;
   const meta = (payload && payload.meta) || {};
@@ -97,6 +108,11 @@ export const api = {
   register: (body) => request("POST", "/api/v1/auth/register", body),
   logout: () => request("POST", "/api/v1/auth/logout", {}),
   me: () => request("GET", "/api/v1/auth/me"),
+  // 扫码登录（电视出码 → 手机扫）：start/poll 匿名，claim 由手机端带着自己的会话调。
+  qrStart: () => request("POST", "/api/v1/auth/qr/start", {}),
+  qrPoll: (id, secret) =>
+    request("GET", "/api/v1/auth/qr/poll?id=" + encodeURIComponent(id) + "&s=" + encodeURIComponent(secret)),
+  qrClaim: (id, secret, base) => request("POST", "/api/v1/auth/qr/claim", { id, secret, base }),
 
   users: () => request("GET", "/api/v1/users"),
   createUser: (body) => request("POST", "/api/v1/users", body),

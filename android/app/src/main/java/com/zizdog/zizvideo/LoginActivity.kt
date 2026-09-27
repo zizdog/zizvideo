@@ -68,6 +68,30 @@ class LoginActivity : AppCompatActivity() {
         login.setOnClickListener { submit() }
         wireImeChain()
 
+        // 扫码登录（用户 2026-09-27）：只有电视端才显示 —— 手机上"用手机扫手机上显示的码"没意义
+        // （手机端要扫的话在「我的 → 扫码登录电视」里，那是相机入口）。
+        // 放在焦点链末尾：隐藏它不会让上面任何一跳卡住（登录页踩过这个坑）。
+        val qr = findViewById<MaterialButton>(R.id.qrlogin)
+        if (WebActivity.isTv(this)) {
+            qr.setOnClickListener {
+                val base = ZvApi.normalizeBase(server.text?.toString() ?: "", tlsBox.isChecked)
+                if (base.isEmpty()) {
+                    showError(getString(R.string.err_server_empty))
+                    return@setOnClickListener
+                }
+                prefs.baseUrl = base
+                server.setText(base)
+                // 不 finish：用户在二维码页按返回能回到这个表单接着手输
+                startActivity(
+                    Intent(this, WebActivity::class.java)
+                        .putExtra(WebActivity.EXTRA_BASE, base)
+                        .putExtra(WebActivity.EXTRA_PATH, "/#/qrlogin"),
+                )
+            }
+        } else {
+            qr.visibility = View.GONE
+        }
+
         // 一键申请"电池不优化"：国产 ROM 后台被杀的头号原因，让用户少翻一层系统设置。
         // 只在还没放行时显示；放行了就不显示（不占地方、不误导）。
         val battery = findViewById<MaterialButton>(R.id.battery)
@@ -88,6 +112,12 @@ class LoginActivity : AppCompatActivity() {
         }
 
         val data = intent?.data?.toString() ?: ""
+        // 扫码登录的深链（系统相机/任意扫码工具扫到电视上的码，系统把 zizvideo://qr 交给我们）：
+        // 本机已有会话就直接替电视确认，然后照常进网页；没登录就说清楚要先去手机端登录。
+        if (data.startsWith("zizvideo://qr")) {
+            claimQrFromLink(data)
+            return
+        }
         if (data.startsWith("zizvideo://listen/")) listenKind = data.removePrefix("zizvideo://listen/")
         // zizvideo://upload：快捷方式直接进上传页并弹系统选择器（后台传、息屏不断）
         if (data.startsWith("zizvideo://upload")) pickUploads = true
@@ -192,6 +222,29 @@ class LoginActivity : AppCompatActivity() {
             return true
         }
         return false
+    }
+
+    /** 深链扫码：拿本机会话替电视确认（QrClaim 里解析深链 + 发请求）。 */
+    private fun claimQrFromLink(payload: String) {
+        splash.visibility = View.VISIBLE
+        setBusy(true, getString(R.string.action_qr_checking))
+        armSplashWatchdog()
+        Thread {
+            val message = QrClaim.fromPayload(this, payload)
+            val ok = QrClaim.isOk(message)
+            runOnUiThread {
+                settled = true
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+                val base = prefs.baseUrl
+                if (ok && base.isNotBlank()) {
+                    enterWeb(base, message)
+                } else {
+                    showForm(message)
+                    setBusy(false, message)
+                    showError(message)
+                }
+            }
+        }.start()
     }
 
     /** 遮罩看门狗：万一探活/登录卡住，10 秒后也要把表单露出来（不能把用户锁在 logo 上）。 */

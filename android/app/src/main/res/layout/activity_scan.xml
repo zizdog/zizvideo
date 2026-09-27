@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 扫码登录（用户 2026-09-27）：手机端开相机扫电视上的二维码。
+     只放预览 + 一句提示，别的一个控件都不放 —— 扫描页越干净越好扫。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/scanRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:implementationMode="performance"
+        app:scaleType="fillCenter" />
+
+    <TextView
+        android:id="@+id/scanHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#99000000"
+        android:padding="14dp"
+        android:text="把电视上的二维码放进框里"
+        android:textColor="#FFFFFFFF"
+        android:textSize="15sp" />
+</FrameLayout>

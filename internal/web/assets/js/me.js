@@ -56,6 +56,16 @@ export function mountMe(view, options) {
     }
   }
   if (user.role === "admin") settings.append(cell("#/admin", "管理后台", "", "me-admin"));
+  // 扫码登录电视（用户 2026-09-27）：手机 App 开相机扫电视上那张码，电视就直接登录，不用在电视上打字。
+  // 只在原生桥在的时候出现（网页端没有相机扫描口，网页那边走 #/qrlogin 出码）。
+  if (window.ZvAndroid && typeof window.ZvAndroid.startQrScan === "function") {
+    const scanCell = cell("#/me", "扫码登录电视", "扫电视上的二维码", "me-qrscan");
+    settings.append(scanCell);
+    scanCell.addEventListener("click", (event) => {
+      event.preventDefault(); // 不跳页：相机页由原生拉起，结果也由原生提示
+      try { window.ZvAndroid.startQrScan(""); } catch (err) { /* 老版本 App 没这个口 */ }
+    });
+  }
   // 检查更新（App 才有原生桥；用户 2026-09-25："给 app 加自动检查更新，不想再一次次手动下载安装"）：
   // 平时进 App 就自动查一次，这里是"手动再查一次"的入口（自动那次被划掉/错过时用）。
   if (window.ZvAndroid && typeof window.ZvAndroid.checkUpdate === "function") {

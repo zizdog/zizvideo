@@ -13,6 +13,7 @@ import { mountMe, mountCached } from "./js/me.js";
 import { mountSettings } from "./js/settings.js";
 import { mountUpload, mountMyUploads } from "./js/upload.js";
 import { mountSearch } from "./js/search.js";
+import { mountQrLogin } from "./js/qrlogin.js";
 import { renderTopBar } from "./js/topbar.js";
 import { installTvKeys, focusFirst } from "./js/tv.js";
 
@@ -104,6 +105,16 @@ function route() {
   if (path === "/login") {
     if (session.user) { replace("#/feed"); return; }
     show((view) => mountLogin(view, () => go("#/feed")));
+    return;
+  }
+  // 扫码登录：电视/桌面显示二维码，手机 App 扫。未登录也能进（它就是为了"不用输账号"）。
+  if (path === "/qrlogin") {
+    show((view) => mountQrLogin(view, async () => {
+      // 扫码成功后**必须重新拉一次会话**：这一页是"未登录也能进"的，内存里的 session.user 还是 null，
+      // 直接 go("#/feed") 会被路由当成未登录又踢回 #/login（实测踩到）。
+      try { await loadMe(); } catch (err) { /* 拉不到就走下面，路由会按实际情况处理 */ }
+      go("#/feed");
+    }));
     return;
   }
   // 自助注册：只由登录页「注册」链接进入；开关由后端再拦一次（AUTH_REGISTER_DISABLED）。

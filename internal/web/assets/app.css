@@ -299,6 +299,10 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .center-inner { max-width: 80%; }
 .center-title { color: #fff; font-size: 16px; font-weight: 600; }
 .center-sub { color: rgba(255,255,255,.72); font-size: 13px; margin-top: 6px; word-break: break-word; }
+/* 电视端：空/错状态要能从沙发上读清，并且"重试"要是个够大的落焦点 */
+.tv .center-title { font-size: 26px; }
+.tv .center-sub { font-size: 17px; margin-top: 10px; }
+.tv .card.info .btn { margin-top: 18px; font-size: 17px; padding: 12px 28px; }
 .center-btn {
   position: absolute; z-index: 6; left: 50%; top: 50%; transform: translate(-50%,-50%);
   font: inherit; padding: 10px 20px; border-radius: 999px; cursor: pointer;
@@ -723,3 +727,12 @@ html.tv .tv-focus {
   outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 10px;
   box-shadow: 0 0 0 6px rgba(0,0,0,.45);
 }
+
+/* 扫码登录：二维码必须是"白底黑块"且四周留白，反色/贴边都会扫不动 */
+.qr-panel { text-align: center; }
+.qr-box {
+  background: #fff; border-radius: 12px; padding: 12px;
+  width: fit-content; margin: 6px auto 10px;
+}
+.qr-code { display: block; width: min(58vw, 240px); height: auto; image-rendering: pixelated; }
+.tv .qr-code { width: min(34vh, 260px); }

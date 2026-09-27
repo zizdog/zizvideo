@@ -241,6 +241,28 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /**
+         * 网页点「扫码登录电视」：开相机扫电视上的二维码（用户 2026-09-27）。
+         * payload 是**自测口**：给了就直接拿它当"扫到的内容"（模拟器上没有真实二维码可扫，
+         * 验收脚本要靠它走完确认链路）；正常调用传空字符串，走相机。
+         */
+        @android.webkit.JavascriptInterface
+        fun startQrScan(payload: String?): Boolean {
+            runOnUiThread {
+                try {
+                    val intent = Intent(this@WebActivity, ScanActivity::class.java)
+                    if (!payload.isNullOrBlank()) intent.putExtra(ScanActivity.EXTRA_TEST_PAYLOAD, payload)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(
+                        this@WebActivity, "打不开扫码页：" + e.javaClass.simpleName,
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            return true
+        }
+
         /** 网页点「检查更新」：interactive=true 时"已是最新"也要说一句（自动检查时不打扰）。 */
         @android.webkit.JavascriptInterface
         fun checkUpdate(interactive: Boolean): Boolean {

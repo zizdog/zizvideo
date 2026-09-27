@@ -40,7 +40,15 @@ object ZvApi {
         return try {
             val u = URL(s)
             if (u.host.isNullOrBlank()) return ""
-            val port = if (u.port > 0) ":" + u.port else ""
+            // 端口默认 7766（用户 2026-09-27："端口默认 7766 单独输入，可以不用输也可以改，比如反代访问"）：
+            //   · 自己写了端口 ⇒ 用写的（反代想走 80/8443 就写出来）
+            //   · 没写 + http ⇒ 补 :7766（zizvideo 的默认端口）
+            //   · 没写 + https ⇒ 不补（反代/证书场景走 443 默认）
+            val port = when {
+                u.port > 0 -> ":" + u.port
+                u.protocol == "http" -> ":7766"
+                else -> ""
+            }
             "${u.protocol}://${u.host}$port"
         } catch (e: Exception) {
             ""
@@ -90,6 +98,16 @@ object ZvApi {
     /** 通用读写（POST/DELETE 等），同样带 cookie + CSRF。 */
     fun send(url: String, method: String, body: String?, cookie: String, csrf: String): Reply =
         request(url, method, body, cookie, csrf)
+
+    /** 扫码登录：手机替电视确认（要带本机已有会话的 cookie + CSRF）。 */
+    fun qrClaim(base: String, id: String, secret: String, cookie: String, csrf: String): Reply {
+        val payload = JSONObject()
+            .put("id", id)
+            .put("secret", secret)
+            .put("base", base)
+            .toString()
+        return request("$base/api/v1/auth/qr/claim", "POST", payload, cookie, csrf)
+    }
 
     fun login(base: String, username: String, password: String): Reply {
         val payload = JSONObject()

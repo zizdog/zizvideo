@@ -94,6 +94,9 @@ export function mountLogin(view, onSuccess) {
   });
   view.append(form);
   username.focus();
+  // 扫码登录入口（用户 2026-09-27）：不用在电视上敲账号 —— 手机 App 扫一下就进。
+  form.append(el("div", { class: "muted small-note center" },
+    el("a", { class: "link", href: "#/qrlogin", text: "扫码登录（手机扫一下，不用输账号）" })));
   // 首屏那次"连不上服务器"要说出来：不然用户只看到"又回到登录页"，以为登录白输了
   // （用户 2026-09-27 报障；app.js boot 里两次尝试都失败才会置这个标记）。
   try {

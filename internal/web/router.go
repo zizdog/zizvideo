@@ -30,6 +30,12 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.HandleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.RequireAuth(s.HandleLogout))
 	mux.HandleFunc("GET /api/v1/auth/me", s.RequireAuth(s.HandleMe))
+	// 扫码登录（电视出码 → 手机扫 → 电视拿会话）：start/image/poll 匿名（靠二维码里的 secret），
+	// claim 必须已登录 + CSRF（否则攻击者能让受害者替他领码 = 会话固定）。
+	mux.HandleFunc("POST /api/v1/auth/qr/start", s.HandleQrStart)
+	mux.HandleFunc("GET /api/v1/auth/qr/image/{id}", s.HandleQrImage)
+	mux.HandleFunc("GET /api/v1/auth/qr/poll", s.HandleQrPoll)
+	mux.HandleFunc("POST /api/v1/auth/qr/claim", s.RequireAuth(s.HandleQrClaim))
 
 	mux.HandleFunc("GET /api/v1/users", s.RequireAdmin(s.HandleListUsers))
 	mux.HandleFunc("POST /api/v1/users", s.RequireAdmin(s.HandleCreateUser))

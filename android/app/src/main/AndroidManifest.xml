@@ -15,6 +15,8 @@
     <!-- 自动检查更新：下载完的 APK 要通过系统安装器装上（用户 2026-09-25："不想再一次次手动下载安装"）。
          自用分发（不上架），这个权限是唯一能省掉"手动拷包再点安装"的路子；安装界面仍由用户确认。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 扫码登录（用户 2026-09-27）：手机 App 里直接开相机扫电视上的二维码 -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- 电视端（用户 2026-09-25："同时开发电视端 app"）：同一个包装到 Android TV / 盒子上也能用。
          三个 required=false 是"兼容"的关键：电视没有触摸屏，也不能因为缺 leanback 就装不上手机。
@@ -22,6 +24,9 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+    <!-- 相机不是必需：电视/盒子没有相机也得能装（那边只显示二维码，不扫） -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:allowBackup="false"
@@ -107,6 +112,13 @@
             android:name=".UploadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 扫码登录：手机端相机扫码页（竖屏，不自转） -->
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Zizvideo" />
 
         <!-- 网页界面宿主：复用现成 UI，配置变化自己扛（别因旋转重建丢播放状态） -->
         <!-- B4：也支持画中画（网页工具条的「画中画」按钮走 ZvAndroid.enterPip） -->

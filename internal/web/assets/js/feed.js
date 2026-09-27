@@ -7,7 +7,7 @@ import { mountNav } from "./nav.js";
 import { session } from "./auth.js";
 import { choiceDialog } from "./confirm.js";
 import { createFeedSettingsForm, normalizeFeedSettings, seekSecondsOf, loopEffective } from "./play-settings.js";
-import { setFeedKeys, tvMode } from "./tv.js";
+import { setFeedKeys, tvMode, focusFirst } from "./tv.js";
 
 const WHEEL_STEP = 40;
 const TOUCH_STEP = 50;
@@ -182,7 +182,7 @@ export function mountFeed(view, options = {}) {
     libraries: [], librariesLoaded: !!playlist,
     // 剧场：自动连播写死开启、循环写死关闭（用户："自动连播且无法设置"）
     settings: normalizeFeedSettings(playlist ? { autoplay_next: true, loop_play: false } : undefined),
-    infoCard: null, emptyCard: null,
+    infoCard: null, emptyCard: null, errorCard: null,
   };
   let toastTimer = 0;
   let settleTimer = 0;
@@ -1528,9 +1528,20 @@ export function mountFeed(view, options = {}) {
     state.hasMore = !!(meta && meta.has_more);
     if (!state.items.length && !state.hasMore && !state.emptyCard) {
       const noLibrary = state.librariesLoaded && state.libraries.length === 0;
-      state.emptyCard = el("div", { class: "card info",
-        text: noLibrary ? "没有可访问的媒体库，请联系管理员" : "还没有视频" });
+      const retry = el("button", { class: "btn primary", type: "button", text: "重试", dataset: { role: "feed-retry" } });
+      retry.addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.emptyCard.remove();
+        state.emptyCard = null;
+        state.hasMore = true;
+        loadMore();
+      });
+      state.emptyCard = el("div", { class: "card info", dataset: { role: "feed-empty" } },
+        el("div", { class: "center-title", text: noLibrary ? "没有可访问的媒体库" : "还没有视频" }),
+        el("div", { class: "center-sub", text: noLibrary ? "请联系管理员给这个账号授权媒体库" : "换个库看看，或点重试再拉一次" }),
+        retry);
       feed.append(state.emptyCard);
+      if (tvMode()) { try { retry.focus(); } catch (err) { focusFirst(); } }
     }
     if (state.items.length && state.active < 0) {
       // 首页第一次进来：看"进入自动播放"设置；剧场（playlist）本来就是自动连播
@@ -1558,6 +1569,31 @@ export function mountFeed(view, options = {}) {
     maybeLoadMore(next);
   }
 
+  /**
+   * 加载失败要在**屏幕上留着**（用户 2026-09-27 报障："没有内容，报错没看清"）：
+   * 原来只弹一个 2 秒的 Toast，电视上从沙发上根本读不完，页面还是一片空白。
+   * 现在给一张大字错误卡：原因原文 + 一个遥控器能落焦的「重试」。
+   */
+  function showFeedError(message) {
+    if (state.errorCard && state.errorCard.parentNode) state.errorCard.remove();
+    const retry = el("button", { class: "btn primary", type: "button", text: "重试", dataset: { role: "feed-retry" } });
+    retry.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (state.errorCard && state.errorCard.parentNode) state.errorCard.remove();
+      state.errorCard = null;
+      state.hasMore = true; // 上次失败可能把 hasMore 弄成 false，重试要能再发一次
+      loadMore();
+    });
+    state.errorCard = el("div", { class: "card info error", dataset: { role: "feed-error" } },
+      el("div", { class: "center-title", text: "加载失败" }),
+      el("div", { class: "center-sub", text: message || "未知原因" }),
+      retry);
+    feed.append(state.errorCard);
+    // 电视端：焦点**直接落到「重试」**上（不是"页面上第一个能聚焦的东西"）——
+    // 用户报障那会儿遥控器"按了没反应"，就是错误状态里没有落点（2026-09-27）
+    if (tvMode()) { try { retry.focus(); } catch (err) { focusFirst(); } }
+  }
+
   async function loadMore() {
     if (playlist) return false; // 剧场：数据是一次性给的，没有翻页
     if (state.loading || !state.hasMore) return false;
@@ -1576,7 +1612,10 @@ export function mountFeed(view, options = {}) {
       appendItems(list, { has_more: !!meta.has_more && list.length > 0, settings: meta.settings });
       return true;
     } catch (err) {
-      showToast(err && err.message ? err.message : "加载失败");
+      // 用 detail()（带上接口与状态码）：这才是"能定位"的报错
+      const message = err && typeof err.detail === "function" ? err.detail() : (err && err.message ? err.message : "加载失败");
+      showFeedError(message);
+      if (!tvMode()) showToast(message); // 手机上 Toast 够用；电视上靠那张卡
       return false;
     } finally {
       state.loading = false;

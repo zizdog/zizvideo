@@ -88,6 +88,8 @@ var authedUnscopedAllowlist = map[string]bool{
 	"GET /api/v1/me/uploads":           true,
 	// 上传页的磁盘显示：自己按 resolveScope 选库（scope 判据仍在 authz.go），故不包 WithLibraryScope
 	"GET /api/v1/me/upload-space": true,
+	// 扫码登录的"手机确认"：只是把这个挑战绑到当前登录用户身上，不读任何媒体内容（见 handlers_qrlogin.go）。
+	"POST /api/v1/auth/qr/claim": true,
 }
 
 // 匿名可访问：新增公开接口必须显式登记，否则测试红（防止悄悄公开）。
@@ -98,7 +100,12 @@ var publicAllowlist = map[string]bool{
 	"POST /api/v1/setup":         true,
 	"POST /api/v1/auth/login":    true,
 	"POST /api/v1/auth/register": true,
-	"/api/":                      true,
+	// 扫码登录：start/image/poll 必须匿名（那时电视还没有任何会话），
+	// 安全性靠二维码里的 128 位 secret（只出现在码里、2 分钟过期、一次性），见 handlers_qrlogin.go。
+	"POST /api/v1/auth/qr/start":       true,
+	"GET /api/v1/auth/qr/image/{id}":   true,
+	"GET /api/v1/auth/qr/poll":         true,
+	"/api/":                            true,
 }
 
 var contentPathRe = regexp.MustCompile(`/(media|series|feed|me)(/|$)`)

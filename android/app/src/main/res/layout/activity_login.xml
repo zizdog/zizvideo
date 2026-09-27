@@ -27,7 +27,7 @@
                 android:text="@string/app_name"
                 android:textSize="30sp"
                 android:textStyle="bold"
-                android:layout_marginBottom="6dp" />
+                android:layout_marginBottom="2dp" />
 
             <TextView
                 android:id="@+id/title"
@@ -35,7 +35,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/login_title"
                 android:textColor="#FF9AA0A6"
-                android:layout_marginBottom="22dp" />
+                android:layout_marginBottom="12dp" />
 
             <com.google.android.material.textfield.TextInputLayout
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
@@ -62,7 +62,7 @@
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="6dp"
                 android:hint="@string/hint_username">
 
                 <com.google.android.material.textfield.TextInputEditText
@@ -81,7 +81,7 @@
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="6dp"
                 android:hint="@string/hint_password">
 
                 <com.google.android.material.textfield.TextInputEditText
@@ -100,7 +100,7 @@
                 android:id="@+id/login"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
+                android:layout_marginTop="10dp"
                 android:nextFocusUp="@id/password"
                 android:nextFocusDown="@id/tls"
                 android:text="@string/action_login" />
@@ -118,7 +118,6 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:nextFocusUp="@id/tls"
-                android:nextFocusDown="@id/battery"
                 android:text="@string/remember_me" />
 
             <com.google.android.material.button.MaterialButton
@@ -131,11 +130,23 @@
                 android:nextFocusUp="@id/remember"
                 android:text="@string/allow_background" />
 
+            <!-- 扫码登录（用户 2026-09-27）：电视上不用敲账号 —— 手机 App 扫一下就进。
+                 放在焦点链末尾：电视才显示（手机端隐藏），隐藏时不影响上面任何一跳。 -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/qrlogin"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:minHeight="44dp"
+                android:paddingVertical="2dp"
+                android:text="@string/action_qr_login" />
+
             <TextView
                 android:id="@+id/status"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="6dp"
                 android:textColor="#FFFFB4B4"
                 android:textSize="13sp" />
         </LinearLayout>

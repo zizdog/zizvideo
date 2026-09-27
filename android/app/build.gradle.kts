@@ -20,8 +20,8 @@ android {
         applicationId = "com.zizdog.zizvideo"
         minSdk = 24
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.3.3"
+        versionCode = 30
+        versionName = "0.3.4"
     }
 
     signingConfigs {
@@ -62,5 +62,12 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
+    // 扫码登录（用户 2026-09-27）：手机 App 里直接开相机扫电视上的二维码。
+    // CameraX 负责预览/取帧，ZXing core 负责解二维码（纯 Java，没有原生库）。
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
 }

@@ -25,7 +25,7 @@ import (
 )
 
 // Version is the reported build version; overridable with -ldflags.
-var Version = "0.3.9-mvp"
+var Version = "0.3.10-mvp"
 
 // Server holds every dependency the handlers need.
 type Server struct {
@@ -58,6 +58,9 @@ type Server struct {
 
 	// loud 是音量均一化的后台测量队列（第一次播某个视频时量一次响度）。见 loudness.go。
 	loud *loudnessQueue
+
+	// QR 是扫码登录的挑战表（进程内、2 分钟过期、一次性）。见 handlers_qrlogin.go。
+	QR *qrStore
 }
 
 // lockCover 返回该 media 的封面生成解锁函数（每个 id 一把锁）。
@@ -92,6 +95,7 @@ func NewServer(cfg *config.Config, db *storage.DB, a *auth.Manager, t *task.Mana
 	}
 	s.Transcodes = transcode.NewQueue(cfg, db, roots, r, log)
 	s.loud = newLoudnessQueue(s) // 音量均一化：后台量响度（第一次播时触发）
+	s.QR = newQRStore()          // 扫码登录挑战表（进程内、过期即清）
 	// 范围判据只在这里构造（scopeAll 是唯一构造点）：转码队列拿到的永远是"能查到的这条"。
 	s.Transcodes.LoadMedia = func(id string) (*domain.Media, error) {
 		return db.GetMediaIn(scopeAll(), id)
