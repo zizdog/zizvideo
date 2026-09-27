@@ -27,6 +27,9 @@ VERSION="${VERSION:-$(sed -n 's/^VERSION *?= *\(.*\)$/\1/p' Makefile | head -1)}
 APPDIR="dist/apps/zizvideo"
 VERDIR="$APPDIR/$VERSION"
 VERIFY_ONLY=0
+# 镜像上保留几个版本（版本目录与对应 APK 都按这个数留）。用户 2026-09-27："服务器上以后保留近 3 个版本的文件"。
+# 想改就改这里；--no-prune 仍然可以完全不清理。
+KEEP_VERSIONS="${ZV_KEEP_VERSIONS:-3}"
 ALLOW_EXISTING=0
 SELF_TEST=0
 DEEP="${VERIFY_DEEP:-0}"
@@ -196,13 +199,15 @@ PY
   phase "复验"
 }
 
-# prune_old_versions：发布成功后清理镜像上的旧版本目录，**只保留当前版本**（用户 2026-09-22 要求）。
+# prune_old_versions：发布成功后清理镜像上的旧版本目录，**保留最近 KEEP_VERSIONS 个**（用户 2026-09-27 要求）。
+# 为什么不是"只留最新"：用户偶尔要回滚/对比上一两版，镜像上留 3 份只占几十 MB。
+# ⚠️ 版本号**必须按数字段比较**：末段是 0~10 的计数器，字符串比较会把 0.3.10 排在 0.3.9 前面（错的）。
 # 安全约束（这里是递归删除，必须保守）：
 #   · 只在**新版本已经复验通过之后**才调用（绝不先删后传）；
 #   · 只删名字严格匹配 <数字.数字.数字>-mvp 的**目录**，且路径必须在 $APP_DIR 下；
 #   · 顶层文件（manifest.json / 安装器 / 证书）一律不碰；
 #   · 删完**回读目录**核对，残留就如实报错，不假装成功。
-# 安卓更新源目录只留最新那份 APK（App 只会拉最新版；旧包留着白占镜像空间）。
+# 安卓更新源目录同样保留最近 KEEP_VERSIONS 份 APK（与版本目录对齐；App 只会拉最新那份）。
 # 只在"新 APK 已经传完 + android.json 已指向它"之后调用 —— 顺序反了会把手上的更新源删掉。
 prune_old_apks() {
   [ -n "${ANDROID_APK:-}" ] || return 0
@@ -210,59 +215,84 @@ prune_old_apks() {
   listing="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR/android" 2>/dev/null || true)"
   [ -n "$listing" ] || { info "（列不出 $APP_DIR/android，跳过旧 APK 清理）"; return 0; }
   local olds
-  olds="$(printf '%s' "$listing" | KEEP="$ANDROID_APK" APP_DIR="$APP_DIR" python3 -c '
+  olds="$(printf '%s' "$listing" | KEEP="$ANDROID_APK" KEEP_N="$KEEP_VERSIONS" APP_DIR="$APP_DIR" python3 -c '
 import json, os, re, sys
-keep, app = os.environ["KEEP"], os.environ["APP_DIR"].rstrip("/")
-pat = re.compile(r"^zizvideo-android-.+\.apk$")
+cur, app = os.environ["KEEP"], os.environ["APP_DIR"].rstrip("/")
+keep_n = max(1, int(os.environ.get("KEEP_N") or "3"))
+pat = re.compile(r"^zizvideo-android-([0-9]+\.[0-9]+\.[0-9]+)\.apk$")
 try:
     data = json.load(sys.stdin)
 except Exception:
     raise SystemExit(0)
+apks = []
 for e in (data.get("data") or {}).get("entries") or []:
     name = str(e.get("name") or "")
     path = str(e.get("path") or (app + "/android/" + name))
-    if e.get("is_dir") or name == keep or not pat.match(name):
+    m = pat.match(name)
+    if e.get("is_dir") or not m:
         continue
     if not path.startswith(app + "/android/") or ".." in path:
         continue
-    print(path)
+    apks.append(((int(m.group(1)), int(m.group(2)), int(m.group(3))), name, path))
+# 当前这份一定留；其余按版本号从新到旧补到 keep_n 份（版本目录与 APK 一一对应，方便回滚）
+kept = {cur}
+for _, name, _ in sorted(apks, key=lambda a: a[0], reverse=True):
+    if len(kept) >= keep_n:
+        break
+    kept.add(name)
+for _, name, path in apks:
+    if name not in kept:
+        print(path)
 ')"
-  [ -z "$olds" ] && { ok "更新源目录只有最新一份 APK"; return 0; }
+  [ -z "$olds" ] && { ok "更新源目录不超过 ${KEEP_VERSIONS} 份 APK"; return 0; }
   echo "  将删除旧 APK：$(printf '%s' "$olds" | tr '\n' ' ')"
   local body
   body="$(printf '%s' "$olds" | python3 -c 'import json,sys; print(json.dumps({"paths":[l for l in sys.stdin.read().split("\n") if l]}))')"
   if api POST /api/v1/files/delete -H 'Content-Type: application/json' -d "$body" >/dev/null; then
-    ok "旧 APK 已清理（保留 ${ANDROID_APK}）"
+    ok "旧 APK 已清理（保留最近 ${KEEP_VERSIONS} 份，含 ${ANDROID_APK}）"
   else
     info "（旧 APK 没删掉；不影响更新，只是占地方）"
   fi
 }
 
 prune_old_versions() {
-  info "清理镜像旧版本（只保留 ${VERSION}）"
+  info "清理镜像旧版本（保留最近 ${KEEP_VERSIONS} 个，当前 ${VERSION}）"
   local listing
   listing="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR" 2>/dev/null || true)"
   [ -n "$listing" ] || die "清理失败：列不出 $APP_DIR（面板接口异常）"
   local olds
-  olds="$(printf '%s' "$listing" | VERSION="$VERSION" APP_DIR="$APP_DIR" python3 -c '
+  olds="$(printf '%s' "$listing" | VERSION="$VERSION" KEEP="$KEEP_VERSIONS" APP_DIR="$APP_DIR" python3 -c '
 import json, os, re, sys
 ver, app = os.environ["VERSION"], os.environ["APP_DIR"].rstrip("/")
-pat = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-mvp$")
+keep = max(1, int(os.environ.get("KEEP") or "3"))
+pat = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)-mvp$")
 try:
     data = json.load(sys.stdin)
 except Exception:
     raise SystemExit(0)
+dirs = []
 for e in (data.get("data") or {}).get("entries") or []:
     name = str(e.get("name") or "")
     path = str(e.get("path") or (app + "/" + name))
-    if not e.get("is_dir") or name == ver or not pat.match(name):
+    m = pat.match(name)
+    if not e.get("is_dir") or not m:
         continue
     if not path.startswith(app + "/") or ".." in path:
         continue
-    print(path)
+    dirs.append((tuple(int(x) for x in m.groups()), name, path))
+# 当前版本一定留；其余按版本号从新到旧补到 keep 个
+kept = {ver}
+ordered = sorted(dirs, key=lambda d: d[0], reverse=True)
+for _, name, _ in ordered:
+    if len(kept) >= keep:
+        break
+    kept.add(name)
+for _, name, path in ordered:
+    if name not in kept:
+        print(path)
 ')"
   if [ -z "$olds" ]; then
-    ok "没有需要清理的旧版本（镜像上只有 ${VERSION}）"
+    ok "没有需要清理的旧版本（镜像上不超过 ${KEEP_VERSIONS} 个）"
     return 0
   fi
   echo "  将删除：$(printf '%s' "$olds" | tr '\n' ' ')"
@@ -272,17 +302,19 @@ for e in (data.get("data") or {}).get("entries") or []:
     || die "删除旧版本失败（面板接口拒绝；旧版本仍在，不影响新版本使用）"
   local after
   after="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR" 2>/dev/null || true)"
-  printf '%s' "$after" | VERSION="$VERSION" python3 -c '
+  printf '%s' "$after" | VERSION="$VERSION" KEEP="$KEEP_VERSIONS" python3 -c '
 import json, os, re, sys
 ver = os.environ["VERSION"]
-pat = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-mvp$")
+keep = max(1, int(os.environ.get("KEEP") or "3"))
+pat = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)-mvp$")
 data = json.load(sys.stdin)
 left = [str(e.get("name")) for e in (data.get("data") or {}).get("entries") or []
         if e.get("is_dir") and pat.match(str(e.get("name") or ""))]
-bad = [n for n in left if n != ver]
-if bad:
-    raise SystemExit("!! 回读发现旧版本仍在：" + ", ".join(bad))
-print("  ✓ 回读确认：版本目录只剩 %s/" % ver)
+if ver not in left:
+    raise SystemExit("!! 回读发现当前版本 %s 不见了" % ver)
+if len(left) > keep:
+    raise SystemExit("!! 回读发现版本目录还有 %d 个（应不超过 %d）：%s" % (len(left), keep, ", ".join(sorted(left))))
+print("  ✓ 回读确认：版本目录 %d 个（保留最近 %d）：%s" % (len(left), keep, ", ".join(sorted(left))))
 ' || die "清理后回读不符（见上）"
   phase "清理旧版本"
 }
