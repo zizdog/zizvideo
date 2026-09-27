@@ -123,18 +123,23 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
             view.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) paintTvState(false) }
-            for (id in TvPlayerKeys.OWN_CONTROL_IDS) {
+            // ImageButton（收藏/喜欢/稍后/画中画）用 drawable 换背景；
+            // MaterialButton（上一集/下一集/倍速/缓存/停止）**不能**这么做 —— 它自己管背景
+            // （logcat 警告 + 实测选中样式完全看不到，A13 问题 2），它们的选中样式在 XML 里用
+            // backgroundTint / strokeColor 的 state list（res/color/tv_btn_focus_*.xml）。
+            for (id in listOf(R.id.fav, R.id.like, R.id.later, R.id.pip)) {
                 try {
-                    val v = findViewById<android.view.View>(id)
-                    v.setBackgroundResource(R.drawable.tv_focus_bg)
-                    v.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) paintTvState(true) }
+                    findViewById<android.view.View>(id).setBackgroundResource(R.drawable.tv_focus_bg)
                 } catch (e: Exception) {
                     Log.w("zv-tv", "focus bg: " + e.javaClass.simpleName)
                 }
             }
-            paintTvState(false)
-            findViewById<android.widget.TextView>(R.id.hint).text =
-                "遥控器：确定=播放/暂停 · 长按确定=底部控件 · ←→=快退快进 · ↑↓=上下集"
+            for (id in TvPlayerKeys.OWN_CONTROL_IDS) {
+                findViewById<android.view.View>(id).setOnFocusChangeListener { _, hasFocus ->
+                    if (hasFocus) paintTvState(true)
+                }
+            }
+            paintTvState(false) // 提示文案只由 paintTvState 决定（旧那行残留会把新文案盖掉 —— A13 踩过）
         }
         // 电视端不问通知权限：弹窗会抢走焦点，而且电视上没有"通知栏控制"的习惯（用户 2026-09-27 同类问题）
         if (!tv && Build.VERSION.SDK_INT >= 33 &&

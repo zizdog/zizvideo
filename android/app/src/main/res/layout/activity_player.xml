@@ -2,6 +2,7 @@
 <!-- 原生播放页：硬解播放 + 后台继续。控件交给 PlayerView（播放/暂停/上下条/进度/手势）。
      所有"画面以外"的东西都放进 id=chrome 这块，进画中画时整块藏起来（B4：小窗里只留画面）。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/playerRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -26,8 +27,7 @@
             app:use_controller="true"
             app:show_buffering="when_playing"
             app:resize_mode="fit"
-            app:surface_type="texture_view"
-            xmlns:app="http://schemas.android.com/apk/res-auto" />
+            app:surface_type="texture_view" />
 
         <!-- 双击点赞/取消的中央大拇指（与网页 .like-burst 同义） -->
         <ImageView
@@ -77,7 +77,8 @@
                 android:minWidth="0dp"
                 android:nextFocusUp="@id/player"
                 android:contentDescription="上一集"
-                android:text="上一集" />
+                android:text="上一集"
+                android:foreground="@drawable/tv_focus_bg" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/next"
@@ -87,7 +88,8 @@
                 android:minWidth="0dp"
                 android:nextFocusUp="@id/player"
                 android:contentDescription="下一集"
-                android:text="下一集" />
+                android:text="下一集"
+                android:foreground="@drawable/tv_focus_bg" />
 
             <ImageButton
                 android:id="@+id/fav"
@@ -125,7 +127,8 @@
                 android:layout_height="48dp"
                 android:minWidth="0dp"
                 android:contentDescription="倍速"
-                android:text="1×" />
+                android:text="1×"
+                android:foreground="@drawable/tv_focus_bg" />
 
             <!-- ④ 离线缓存：点一下下到本机（已缓存时点它=删缓存，带确认） -->
             <com.google.android.material.button.MaterialButton
@@ -136,7 +139,8 @@
                 android:layout_height="48dp"
                 android:minWidth="0dp"
                 android:contentDescription="离线缓存"
-                android:text="缓存" />
+                android:text="缓存"
+                android:foreground="@drawable/tv_focus_bg" />
 
             <!-- B4 画中画：缩成浮窗继续放，可以边刷别的（安卓 8+） -->
             <ImageButton
@@ -166,13 +170,14 @@
             android:textColor="#FF9AA0A6"
             android:textSize="12sp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/stop"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_margin="8dp"
-            android:nextFocusUp="@id/fav"
-            android:text="停止并退出" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stop"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="8dp"
+                android:nextFocusUp="@id/fav"
+                android:text="停止并退出"
+                android:foreground="@drawable/tv_focus_bg" />
     </LinearLayout>
 </LinearLayout>
