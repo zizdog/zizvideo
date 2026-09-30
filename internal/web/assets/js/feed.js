@@ -244,6 +244,10 @@ export function mountFeed(view, options = {}) {
     if (index < 0 || index === state.active) return;
     const options = opts || {};
     const previous = state.active;
+    // 电视端：焦点**本来就在视频列表里**时，换条（含"自动连播下一集"）要让焦点跟着走 ——
+    // 用户 2026-09-30："播放完一集后自动下一集，视频列表的焦点没有跟着变"。
+    const prevFocusInList = !!(tvLayout && document.activeElement && document.activeElement.closest &&
+      document.activeElement.closest(".tv-list"));
     if (previous >= 0) flushProgress(previous, false);
     state.active = index;
     paintTrack(animate !== false);
@@ -265,6 +269,7 @@ export function mountFeed(view, options = {}) {
     tvPaintLayers();
     if (tvLayout) tvPaint();
     if (tvSurface) tvFocusSurface();
+    if (prevFocusInList) focusSelector(".tv-row.on");
   }
 
   /**
@@ -311,6 +316,11 @@ export function mountFeed(view, options = {}) {
       meta = "看到 " + Math.min(99, Math.round((prog.position_ms / item.duration_ms) * 100)) + "%";
     } else if (playlist) meta = "第 " + (index + 1) + " 集";
     else if (item.library_name) meta = item.library_name;
+    // 非 H.264 的编码在电视端要走原生播放器 —— 标出来，用户一眼知道为什么
+    const vcodec = String((item.codecs && item.codecs.video) || "").toLowerCase();
+    if (vcodec && vcodec !== "h264" && vcodec !== "avc1") {
+      meta = (meta ? meta + " · " : "") + vcodec.toUpperCase();
+    }
     const row = el("div", { class: "tv-row", tabindex: "0", dataset: { index: String(index), id: String(item.id) } },
       el("span", { class: "tv-thumb" },
         item.cover_url ? el("img", { src: item.cover_url, alt: "", loading: "lazy" }) : null,
@@ -329,7 +339,9 @@ export function mountFeed(view, options = {}) {
   function tvPlayFromList(index) {
     closePanels();
     const item = state.items[index];
-    // 这一条 WebView 放不了（HEVC 这类）：交给原生播放器，别停在"放不了"那张卡上
+    // WebView 解不了的编码（HEVC/AV1）先交原生 —— 别让它去 <video> 里黑屏
+    if (tvNeedsNative(item)) return tvNativePlay(item);
+    // 这一条服务端说放不了（别的编码/状态）：也交给原生播放器，别停在"放不了"那张卡上
     if (item && !isPlayable(item) && !item.missing) return tvNativePlay(item);
     // 用户 2026-09-30："视频列表点击时只播放，不全屏，再次点击才全屏"
     // 第一次确定 = 切过去播（焦点留在列表里，方便接着挑下一条）；**同一条**再按确定才进全屏。
@@ -659,9 +671,23 @@ export function mountFeed(view, options = {}) {
    */
   function tvNativePlay(item) {
     if (!item || !item.id) return false;
+    if (!item || !item.id) return false;
     closePanels();
     location.hash = "#/play/single/" + encodeURIComponent(item.id);
     return true;
+  }
+
+  /**
+   * 这条**必须**交给原生播放器吗？电视端 + 原生桥在 + 编码是 WebView 解不出的（HEVC/AV1）——
+   * 用户 2026-09-30 实测："hevc 视频还是提示'这台浏览器解不出 hevc 画面'"：服务端已经不拦了，
+   * 但 WebView 自己解不出来（Android WebView 的 <video> 走的是 Chromium 的解码路径，
+   * 跟设备有没有硬件 HEVC 解码器不是一回事）。所以这类编码**别喂给 <video>**，直接原生硬解。
+   */
+  function tvNeedsNative(item) {
+    if (!tvLayout || !item) return false;
+    if (typeof window === "undefined" || !window.ZvAndroid) return false;
+    const codec = String((item.codecs && item.codecs.video) || "").toLowerCase();
+    return codec === "hevc" || codec === "h265" || codec === "av1";
   }
 
   /** 放不了的卡片：电视端多一个"用原生播放器打开"的按钮（WebView 解不了的编码走原生硬解）。 */
@@ -1061,6 +1087,11 @@ export function mountFeed(view, options = {}) {
     if (entry.destroyed || entry.broken || !entry.video) return;
     if (entry.video.videoWidth > 0) return;
     const codec = (entry.item.codecs && entry.item.codecs.video) || "该编码";
+    // 电视端（有原生桥）：说清"下一步按确定就能用原生播放器放"，别让人以为这条彻底放不了
+    if (tvNeedsNative(entry.item)) {
+      showBroken(entry, "WebView 解不了 " + String(codec).toUpperCase() + "：按确定用原生播放器播");
+      return;
+    }
     showBroken(entry, "这台浏览器解不出 " + String(codec).toUpperCase() + " 画面");
   }
 
@@ -2134,12 +2165,20 @@ export function mountFeed(view, options = {}) {
     tvHintSub.textContent = tvVersion ? "v" + tvVersion : "";
   }
 
+  // 进全屏前焦点在哪一栏（退出全屏要还回去）—— 用户 2026-09-30 报障："从视频列表点进全屏，按返回后
+  // 蓝色焦点框还在列表里，但实际焦点在播放画面（按上下键直接切播放）"：进全屏时列表被 display:none 藏了，
+  // 焦点掉给 body，而 tv.js 的兜底只在"焦点节点被删"时才补焦点（节点还在、只是被藏起来，兜不住），
+  // 于是**焦点在 body、焦点框留在列表行**，两边不一致 → 用户按上下键时看到的是"列表在选、实际在切播放"。
+  let tvReturnFocus = "surface";
   function tvSetFull(on) {
     if (!tvLayout || tvFull === !!on) return false;
     if (on) {
-      // 进全屏前先看这一条 WebView 能不能放：放不了的交原生播放器（同 tvPlayFromList）
+      // 进全屏前先看这一条 WebView 能不能放：解不了的编码 / 放不了的条目都交原生播放器
       const cur = state.items[state.active];
+      if (tvNeedsNative(cur)) return tvNativePlay(cur);
       if (cur && !isPlayable(cur) && !cur.missing) return tvNativePlay(cur);
+      const a = document.activeElement;
+      tvReturnFocus = (a && a.closest && a.closest(".tv-row")) ? "list" : "surface";
     }
     tvFull = !!on;
     if (tvFull) tvSetOps(false);
@@ -2148,6 +2187,11 @@ export function mountFeed(view, options = {}) {
       // 进全屏就开播（电视端永远不静音；有手势的这一下一定是有声的）
       const entry = tvSurfaceEntry();
       if (entry && entry.video && !entry.broken && entry.video.paused) tryPlay(entry);
+      tvFocusSurface();   // 全屏里焦点必须在画面上（否则焦点框和实际焦点会分家）
+    } else if (tvReturnFocus === "list") {
+      if (!focusSelector(".tv-row.on")) tvFocusList();
+    } else {
+      tvFocusSurface();
     }
     return true;
   }

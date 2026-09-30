@@ -246,7 +246,12 @@ export function installTvKeys() {
     setTimeout(() => {
       const now = document.activeElement;
       if (now && now !== document.body) return;
-      if (prev && prev.isConnected) return;
+      // ⚠️ "节点还在"不等于"焦点还在"：节点被 **display:none 藏起来**时浏览器会把焦点丢给 body，
+      // 而节点仍然 isConnected —— 老判据在这里直接 return，于是焦点框留在原处、实际焦点没了
+      // （用户 2026-09-30：进全屏后"焦点框在列表、按上下键却在切播放"）。
+      // 判据改成"元素现在**看得见**"：看得见但被主动 blur 的（播放页侧栏退出）仍旧不抢。
+      const prevVisible = !!(prev && prev.isConnected && prev.getClientRects && prev.getClientRects().length > 0);
+      if (prevVisible) return;
       focusFirst();
     }, 0);
   }, true);
