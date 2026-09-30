@@ -156,10 +156,13 @@ html.tv .view > .bottom-nav .nav-item {
 html.tv .view > .bottom-nav .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
 html.tv .view > .bottom-nav .nav-item.upload { display: none; }
 html.tv .tv-actions { margin-left: auto; display: flex; align-items: center; }
-html.tv .tv-actions .ov-rail { position: static; display: flex; flex-direction: row; align-items: center; }
-html.tv .tv-actions .ov-rail > * { margin-left: 6px; }
+/* 操作键那一整块（点赞/收藏/声音/全屏 + ⚙设置）：边栏模式在顶部工具行，影院模式搬回画面下方 */
+html.tv .tv-ops { display: flex; flex-direction: row; align-items: center; }
+html.tv .tv-ops .ov-rail { position: static; display: flex; flex-direction: row; align-items: center; }
 html.tv .tv-actions .icon-btn { width: 48px; height: 48px; }
 html.tv .tv-actions .icon-btn svg { width: 32px; height: 32px; }
+html.tv .tv-actions .ov-rail > * { margin-left: 6px; }
+html.tv .tv-actions .tv-ops > * { margin-left: 6px; }
 /* 第二行：该用户可访问的媒体库 tabs + 右侧按键提示 */
 html.tv .tv-top {
   flex: 0 0 auto; display: flex; align-items: center; white-space: nowrap;
@@ -180,7 +183,7 @@ html.tv .tv-tab {
 html.tv .tv-tab.on { background: #fff; color: #16181d; font-weight: 600; }
 html.tv .tv-top-title { color: #fff; font-size: 18px; font-weight: 600; padding: 8px 4px; }
 html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 0 18px 14px; }
-/* 左列：当前库的视频列表（行不进焦点图 —— 遥控器只有上下键翻页） */
+/* 左列：当前库的视频列表（行可以聚焦：← 进来选、↑↓ 走、确定 进全屏播放） */
 html.tv .tv-list { flex: 0 0 34%; max-width: 620px; min-width: 320px; overflow-y: auto; padding-right: 14px; }
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
@@ -222,6 +225,33 @@ html.tv .tv-stage .overlay {
 html.tv .tv-stage .ov-title { max-width: 100%; font-size: 16px; -webkit-line-clamp: 2; line-clamp: 2; }
 html.tv .tv-stage .times { font-size: 13px; margin-top: 3px; }
 html.tv .tv-stage .center-btn { z-index: 8; }
+/* 画面下方的操作键（影院模式才放这儿；边栏模式它们在顶部工具行） */
+html.tv .tv-stage .tv-ops { justify-content: flex-end; background: #17191d; padding: 4px 14px 10px; }
+html.tv .tv-stage .tv-ops .icon-btn { width: 48px; height: 48px; }
+html.tv .tv-stage .tv-ops .icon-btn svg { width: 32px; height: 32px; }
+html.tv .tv-stage .tv-ops > * { margin-left: 14px; }
+
+/* ---------- 影院（全屏）模式：用户 2026-09-28 点名的那套 ----------
+   边栏模式按确定进全屏（藏掉工具行/媒体库栏/左列表），返回键回到边栏模式。
+   全屏里默认**只有画面**：↓ 露进度条+操作键、↑ 露媒体库栏（再 ↑ 到剧场/收藏/我的）、← 露播放列表。 */
+html.tv .tv-feed.tv-cinema .tv-bar,
+html.tv .tv-feed.tv-cinema .tv-top,
+html.tv .tv-feed.tv-cinema .tv-list { display: none; }
+html.tv .tv-feed.tv-cinema .tv-cols { padding: 0; }
+html.tv .tv-feed.tv-cinema .tv-stage > .layer { border-radius: 0; }
+html.tv .tv-feed.tv-cinema .tv-stage .overlay { display: none; }
+html.tv .tv-feed.tv-cinema .tv-stage .tv-ops { display: none; }
+/* 影院里连顶栏也收起来（body 上的 class，因为顶栏不在 .feed 里） */
+body.tv-cinema .header { display: none; }
+/* ↑ 露顶部两块（工具行 + 媒体库栏） */
+html.tv .tv-feed.tv-cinema.tv-peek-top .tv-bar { display: flex; }
+html.tv .tv-feed.tv-cinema.tv-peek-top .tv-top { display: flex; }
+/* ↓ 露底部（标题/进度/时间 + 操作键） */
+html.tv .tv-feed.tv-cinema.tv-peek-bottom .tv-stage .overlay { display: flex; }
+html.tv .tv-feed.tv-cinema.tv-peek-bottom .tv-stage .tv-ops { display: flex; }
+/* ← 露左侧播放列表 */
+html.tv .tv-feed.tv-cinema.tv-peek-left .tv-list { display: block; }
+html.tv .tv-feed.tv-cinema.tv-peek-left .tv-cols { padding: 0 18px 14px; }
 .overlay {
   /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
