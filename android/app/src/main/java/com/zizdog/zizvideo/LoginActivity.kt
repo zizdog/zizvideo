@@ -30,6 +30,11 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var tlsBox: android.widget.CheckBox
     private lateinit var rememberBox: android.widget.CheckBox
 
+    /** 局域网自动探测那块（用户 2026-09-28）：状态行 / 结果列表 / 重新搜索。 */
+    private lateinit var scanStatus: TextView
+    private lateinit var scanList: android.widget.LinearLayout
+    private lateinit var scanBtn: com.google.android.material.button.MaterialButton
+
     /** 这一次启动是否已经有结论（进网页了 / 该露表单了）—— 给遮罩看门狗用。 */
     private var settled = false
 
@@ -61,6 +66,10 @@ class LoginActivity : AppCompatActivity() {
 
         tlsBox = findViewById(R.id.tls)
         rememberBox = findViewById(R.id.remember)
+        scanStatus = findViewById(R.id.scanStatus)
+        scanList = findViewById(R.id.scanList)
+        scanBtn = findViewById(R.id.scanBtn)
+        scanBtn.setOnClickListener { startScan() }
         server.setText(prefs.baseUrl)
         username.setText(prefs.username)
         tlsBox.isChecked = prefs.useTLS
@@ -289,6 +298,98 @@ class LoginActivity : AppCompatActivity() {
         splash.visibility = View.GONE
         status.visibility = if (note.isEmpty()) View.GONE else View.VISIBLE
         status.text = note
+        // 首次使用（地址没存过、也没手输）⇒ 自动扫一遍局域网，用户只需在结果里选一台
+        if (prefs.baseUrl.isBlank() && (server.text?.toString() ?: "").isBlank()) startScan()
+    }
+
+    /* ---------------- 局域网自动探测（用户 2026-09-28） ---------------- */
+
+    /** 正在扫的那一轮；重新扫/离开页面时置真让它尽快收工。 */
+    private var scanCancel: java.util.concurrent.atomic.AtomicBoolean? = null
+    private var scanning = false
+
+    /**
+     * 扫局域网并列出找到的服务器。端口取「默认 7766 + 用户已填/已存的端口」——
+     * 这样反代/自定义端口的部署（例如开发机的 17804）也能被搜到，而不是只认 7766。
+     */
+    private fun startScan() {
+        if (scanning) return
+        scanning = true
+        scanCancel?.set(true)
+        val cancel = java.util.concurrent.atomic.AtomicBoolean(false)
+        scanCancel = cancel
+        scanList.removeAllViews()
+        scanStatus.text = getString(R.string.scan_running)
+        scanBtn.isEnabled = false
+        val ports = ArrayList<Int>()
+        ports.add(LanScan.DEFAULT_PORT)
+        for (raw in listOf(server.text?.toString() ?: "", prefs.baseUrl)) {
+            val port = LanScan.portOf(raw)
+            if (port > 0 && !ports.contains(port)) ports.add(port)
+        }
+        android.util.Log.i("zv-login", "lan scan start ports=" + ports.joinToString(","))
+        Thread {
+            val found = LanScan.scan(ports, cancel = cancel) { hit ->
+                runOnUiThread { if (!cancel.get()) addScanRow(hit) }
+            }
+            runOnUiThread {
+                if (cancel.get() || isFinishing || isDestroyed) return@runOnUiThread
+                scanning = false
+                scanBtn.isEnabled = true
+                when {
+                    found.isEmpty() -> scanStatus.text = getString(R.string.scan_none)
+                    found.size == 1 -> {
+                        // 只有一台就**直接填好**（用户要的就是"只剩用户名密码要输"）
+                        scanStatus.text = getString(R.string.scan_found_one, found[0].base)
+                        pickServer(found[0])
+                    }
+                    else -> scanStatus.text = getString(R.string.scan_found_many, found.size)
+                }
+            }
+        }.start()
+    }
+
+    /** 一台服务器一颗按钮：遥控器上下走到它、按确定即选中（焦点链接回地址框/用户名）。 */
+    private fun addScanRow(hit: LanScan.Found) {
+        if (isFinishing || isDestroyed) return
+        val label = hit.base +
+            (if (hit.version.isNotBlank()) "　·　v" + hit.version else "") +
+            (if (hit.needsSetup) "　·　未初始化" else "")
+        val row = com.google.android.material.button.MaterialButton(this).apply {
+            id = View.generateViewId()
+            text = label
+            isAllCaps = false
+            textSize = 14f
+            setOnClickListener { pickServer(hit) }
+            nextFocusDownId = R.id.server
+            nextFocusForwardId = R.id.server
+        }
+        scanList.addView(row)
+        wireScanFocus()
+    }
+
+    /**
+     * 结果列表的焦点链：↑↓ 在结果**之间**走，最后一台再往下才回到地址框。
+     * （遥控器只有上下左右 + 确定：不给这条链，↓ 会直接从第一台跳回地址框，第二台永远选不到 ——
+     *  实测就是这样，验收里"遥控器选中第二台"那条一直是红的。）
+     */
+    private fun wireScanFocus() {
+        val rows = (0 until scanList.childCount).map { scanList.getChildAt(it) }
+        for ((i, row) in rows.withIndex()) {
+            row.nextFocusUpId = if (i > 0) rows[i - 1].id else R.id.scanBtn
+            row.nextFocusDownId = if (i < rows.size - 1) rows[i + 1].id else R.id.server
+        }
+        server.nextFocusUpId = if (rows.isNotEmpty()) rows.last().id else R.id.scanList
+    }
+
+    /** 选中一台：地址填好、记住它，焦点直接落到用户名 —— 用户只剩用户名/口令要输。 */
+    private fun pickServer(hit: LanScan.Found) {
+        prefs.baseUrl = hit.base
+        prefs.useTLS = hit.base.startsWith("https://")
+        server.setText(hit.base)
+        tlsBox.isChecked = prefs.useTLS
+        username.requestFocus()
+        android.util.Log.i("zv-login", "lan scan picked " + hit.base + " v" + hit.version)
     }
 
     /**
@@ -489,5 +590,11 @@ class LoginActivity : AppCompatActivity() {
         }
         startActivity(intent)
         finish()
+    }
+
+    /** 离开登录页就把还没跑完的局域网扫描停掉（别让几十个线程跟着页面走）。 */
+    override fun onDestroy() {
+        try { scanCancel?.set(true) } catch (e: Exception) { /* 忽略 */ }
+        super.onDestroy()
     }
 }

@@ -12,6 +12,13 @@
     <string name="action_checking">连接中…</string>
     <string name="action_qr_checking">正在确认扫码登录…</string>
     <string name="err_server_empty">请先填服务器地址</string>
+    <!-- 局域网自动探测（用户 2026-09-28）：首次登录自动找、点一下选中，之后只剩用户名密码 -->
+    <string name="scan_idle">首次使用：点右边「搜索局域网」自动找服务器</string>
+    <string name="scan_button">搜索局域网</string>
+    <string name="scan_running">正在搜索局域网里的 zizvideo…</string>
+    <string name="scan_found_one">找到 1 台：%1$s（已自动填好，输入用户名口令即可）</string>
+    <string name="scan_found_many">找到 %1$d 台，选一台（确定键选中）</string>
+    <string name="scan_none">没搜到。确认电视和服务器在同一个局域网，或在下面手动填地址</string>
     <string name="err_credentials_empty">请先填用户名和口令</string>
     <string name="shortcut_listen_feed">听首页</string>
     <string name="shortcut_open_app">打开浏览</string>

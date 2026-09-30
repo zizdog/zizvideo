@@ -37,6 +37,48 @@
                 android:textColor="#FF9AA0A6"
                 android:layout_marginBottom="12dp" />
 
+            <!-- 局域网自动探测（用户 2026-09-28："首次登录自动探测局域网的服务 zizvideo 服务器，
+                 可以直接选择，然后只用输入用户名密码"）。
+                 首次（没存过地址）自动扫一遍；扫到的每一台是一颗可聚焦的按钮，遥控器按确定就选中，
+                 选中后地址自动填好，用户只剩用户名/密码要输。手动输入地址的路仍在下面。 -->
+            <LinearLayout
+                android:id="@+id/scanBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="8dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:id="@+id/scanStatus"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:textColor="#FF9AA0A6"
+                        android:textSize="13sp"
+                        android:text="@string/scan_idle" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/scanBtn"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="0dp"
+                        android:text="@string/scan_button" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/scanList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
             <com.google.android.material.textfield.TextInputLayout
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                 android:layout_width="match_parent"
@@ -55,6 +97,7 @@
                     android:imeOptions="actionNext"
                     android:nextFocusForward="@id/username"
                     android:nextFocusDown="@id/username"
+                    android:nextFocusUp="@id/scanList"
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
