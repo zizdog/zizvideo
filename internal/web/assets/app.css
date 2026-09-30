@@ -123,6 +123,94 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .layer { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
 .stage { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; }
 .video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+/* ============================================================================
+   电视端新版布局（用户 2026-09-28：参考鲜时光 TV 重做）
+     顶部 = 该用户可访问的**媒体库** tabs；左 = 当前库的视频列表；右 = 播放区（半沉浸）。
+   手机 / 网页端一行都不受影响：只有 html.tv（原生带 ?tv=1 进来）下才有 .tv-feed。
+   ⚠️ 这里不用 flex 的 gap（老电视 WebView 是 Chrome 84 之前，gap 会全塌）—— 间距一律用 margin。
+   ============================================================================ */
+html.tv .tv-feed { background: #0b0d10; overflow: hidden; display: flex; flex-direction: column; }
+/* 顶部工具行：左边 = 应用导航（首页/剧场/收藏/我的 pills），右边 = 操作键（点赞/收藏/声音/全屏） */
+html.tv .tv-bar {
+  flex: 0 0 auto; display: flex; align-items: center;
+  /* 顶栏（搜索那颗）是浮在内容上的，这里让开它的高度，别把这一行压住 */
+  padding: calc(54px + var(--sat)) 18px 4px;
+}
+html.tv .tv-bar .bottom-nav { flex: 0 0 auto; display: flex; border-top: 0; background: transparent; padding-bottom: 0; }
+html.tv .tv-bar .nav-item {
+  flex: 0 0 auto; margin-right: 10px; padding: 7px 16px; border-radius: 9px; font-size: 17px;
+  color: rgba(255,255,255,.72); background: rgba(255,255,255,.06);
+}
+html.tv .tv-bar .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
+html.tv .tv-bar .nav-item.upload { display: none; } /* 电视上没有文件选择框，上传入口不显示 */
+html.tv .tv-actions { margin-left: auto; display: flex; align-items: center; }
+html.tv .tv-actions .ov-rail { position: static; display: flex; flex-direction: row; align-items: center; }
+html.tv .tv-actions .ov-rail > * { margin-left: 6px; }
+html.tv .tv-actions .icon-btn { width: 48px; height: 48px; }
+html.tv .tv-actions .icon-btn svg { width: 32px; height: 32px; }
+/* 第二行：该用户可访问的媒体库 tabs + 右侧按键提示 */
+html.tv .tv-top {
+  flex: 0 0 auto; display: flex; align-items: center; white-space: nowrap;
+  padding: 4px 18px 10px;
+  overflow-x: auto; overflow-y: hidden;
+}
+html.tv .tv-top::-webkit-scrollbar { height: 0; }
+/* 按键提示在电视端挪进 tabs 行右侧（原来那条压在画面/信息条上，新布局里会糊在一起） */
+html.tv .tv-top .tv-keyhint {
+  position: static; margin-left: auto; padding: 0 4px 0 20px; text-align: right;
+  font-size: 13px; color: rgba(255,255,255,.5); text-shadow: none;
+}
+html.tv .tv-top .tv-keyhint-sub { font-size: 12px; color: rgba(255,255,255,.34); margin-top: 1px; }
+html.tv .tv-tab {
+  flex: 0 0 auto; margin-right: 12px; padding: 8px 18px; border: 0; border-radius: 9px;
+  background: transparent; color: rgba(255,255,255,.72); font: inherit; font-size: 18px; cursor: pointer;
+}
+html.tv .tv-tab.on { background: #fff; color: #16181d; font-weight: 600; }
+html.tv .tv-top-title { color: #fff; font-size: 18px; font-weight: 600; padding: 8px 4px; }
+html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 0 18px 14px; }
+/* 左列：当前库的视频列表（行不进焦点图 —— 遥控器只有上下键翻页） */
+html.tv .tv-list { flex: 0 0 34%; max-width: 620px; min-width: 320px; overflow-y: auto; padding-right: 14px; }
+html.tv .tv-list::-webkit-scrollbar { width: 6px; }
+html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
+html.tv .tv-row { display: flex; width: 100%; align-items: flex-start; padding: 8px; border-radius: 10px; cursor: pointer; }
+html.tv .tv-row.on { background: rgba(255,255,255,.13); }
+html.tv .tv-thumb {
+  position: relative; flex: 0 0 auto; width: 152px; height: 86px; margin-right: 11px;
+  border-radius: 8px; overflow: hidden; background: #1b1e24; display: block;
+}
+html.tv .tv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+html.tv .tv-dur {
+  position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(0,0,0,.72); color: #fff; font-size: 12px;
+}
+html.tv .tv-row-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+html.tv .tv-row-title {
+  color: #ccd0d6; font-size: 16px; line-height: 1.35; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
+html.tv .tv-row.on .tv-row-title { color: #fff; }
+html.tv .tv-row-meta { color: rgba(255,255,255,.45); font-size: 13px; margin-top: 6px; }
+/* 右列：播放区（画面 + 标题/进度 + 操作行） */
+html.tv .tv-stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+html.tv .tv-row > .layer { display: none; } /* 列表行里的 layer 只是暂存 */
+html.tv .tv-stage > .layer {
+  position: relative; top: auto; right: auto; bottom: auto; left: auto;
+  display: flex; flex-direction: column; height: 100%; background: #000; border-radius: 10px; overflow: hidden;
+}
+html.tv .tv-stage .stage {
+  position: relative; top: auto; right: auto; bottom: auto; left: auto;
+  flex: 1 1 auto; min-height: 0;
+}
+/* 标题 + 进度 + 时间：从"压在画面上"改成画面下方的一条（同参考图）。
+   注意特异性：这一段必须排在下面 `.overlay` 的基础规则**之前/之后都行**（这里选更靠前的写法），
+   靠 `html.tv .tv-stage .overlay` 的选择器权重压过基础 `.overlay`。 */
+html.tv .tv-stage .overlay {
+  position: static; background: #17191d; padding: 10px 14px 6px; pointer-events: auto;
+}
+html.tv .tv-stage .ov-title { max-width: 100%; font-size: 16px; -webkit-line-clamp: 2; line-clamp: 2; }
+html.tv .tv-stage .times { font-size: 13px; margin-top: 3px; }
+html.tv .tv-stage .center-btn { z-index: 8; }
 .overlay {
   /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
