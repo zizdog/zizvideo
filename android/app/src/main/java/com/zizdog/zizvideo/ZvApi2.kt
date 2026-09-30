@@ -16,7 +16,13 @@ object ZvApi2 {
      * search 需要关键词（网页那边是临时缓存，原生用 ?q= 自己重放同一份结果）；
      * feed 是首页队列（GET /feed/next），给"听首页"快捷方式用 —— 网页/服务端都不用改。
      */
-    val supportedKinds = setOf("likes", "favorites", "history", "later", "search")
+    /**
+     * 播放队列的来源。前四种与网页 #/play/<kind>/<id> 一一对应；search 需要关键词；
+     * **single = 只播这一条**（id 走 query）：电视端遇到 WebView 放不了的编码（HEVC 等）时，
+     * 交给原生 ExoPlayer —— 它走平台 MediaCodec，小米电视这类机器有硬件 HEVC 解码器（用户 2026-09-29：
+     * "播放不了 hevc！我的小米电视硬件是支持的"）。
+     */
+    val supportedKinds = setOf("likes", "favorites", "history", "later", "search", "single")
 
     /** 播放器请求流地址时要带的头（会话 cookie）。 */
     fun streamHeaders(base: String): Map<String, String> {
@@ -39,6 +45,29 @@ object ZvApi2 {
     fun queue(base: String, kind: String, cookie: String, query: String = ""): List<Media> = queueDetailed(base, kind, cookie, query).list
 
     fun queueDetailed(base: String, kind: String, cookie: String, query: String = ""): QueueResult {
+        // single：query 就是那条媒体的 id，队列只有它一条
+        if (kind == "single") {
+            val id = query.trim()
+            if (id.isEmpty()) return QueueResult(emptyList(), "")
+            val reply = ZvApi.get(base + "/api/v1/media/" + enc(id), cookie)
+            if (!reply.ok) return QueueResult(emptyList(), reply.errorMessage() + "（HTTP " + reply.status + "）")
+            val item = reply.data() ?: return QueueResult(emptyList(), "")
+            val mid = item.optString("id")
+            val stream = item.optString("stream_url")
+            if (mid.isEmpty() || stream.isEmpty()) return QueueResult(emptyList(), "")
+            val prog = item.optJSONObject("progress")
+            val position = prog?.optLong("position_ms") ?: 0L
+            val completed = prog?.optBoolean("completed") ?: false
+            val one = Media(
+                id = mid,
+                title = item.optString("title").ifBlank { mid },
+                streamUrl = if (stream.startsWith("http")) stream else base + stream,
+                durationMs = item.optLong("duration_ms"),
+                resumeMs = if (position > 0 && !completed) position else 0L,
+                gainDb = item.optDouble("gain_db", 0.0),
+            )
+            return QueueResult(listOf(one), "")
+        }
         val path = when (kind) {
             "likes" -> "/api/v1/me/likes"
             "favorites" -> "/api/v1/me/favorites"

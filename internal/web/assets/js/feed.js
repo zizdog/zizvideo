@@ -328,6 +328,9 @@ export function mountFeed(view, options = {}) {
   /** 从左栏列表播放某一条：如果是全屏就用它，否则切过去并进全屏（用户 2026-09-28："确定进入全屏播放"）。 */
   function tvPlayFromList(index) {
     closePanels();
+    const item = state.items[index];
+    // 这一条 WebView 放不了（HEVC 这类）：交给原生播放器，别停在"放不了"那张卡上
+    if (item && !isPlayable(item) && !item.missing) return tvNativePlay(item);
     if (index !== state.active) goTo(index);
     if (tvFull) { tvFocusSurface(); return true; }
     return tvSetFull(true);
@@ -576,7 +579,7 @@ export function mountFeed(view, options = {}) {
       const reason = item.compatibility && item.compatibility.reason
         ? item.compatibility.reason
         : ("这个视频放不了（" + (item.status || "unknown") + "）");
-      layer.append(centerMessage(item.compatibility && item.compatibility.direct === false ? "无法直接播放" : "这个视频放不了", reason));
+      layer.append(brokenCard(item, item.compatibility && item.compatibility.direct === false ? "无法直接播放" : "这个视频放不了", reason));
       return entry;
     }
 
@@ -642,6 +645,30 @@ export function mountFeed(view, options = {}) {
       el("div", { class: "center-inner" },
         el("div", { class: "center-title", text: title }),
         el("div", { class: "center-sub", text: sub })));
+  }
+
+  /**
+   * 电视端：让**原生播放器**播这一条（ExoPlayer 走平台 MediaCodec —— 小米电视这类机器有硬件 HEVC 解码器）。
+   * 用户 2026-09-29："播放不了 hevc！我的小米电视硬件是支持的"：WebView 的 <video> 放不了的编码，
+   * 由原生播放页接手（路由 #/play/single/<id> 会被 WebActivity 拦下并拉起 PlayerActivity）。
+   */
+  function tvNativePlay(item) {
+    if (!item || !item.id) return false;
+    closePanels();
+    location.hash = "#/play/single/" + encodeURIComponent(item.id);
+    return true;
+  }
+
+  /** 放不了的卡片：电视端多一个"用原生播放器打开"的按钮（WebView 解不了的编码走原生硬解）。 */
+  function brokenCard(item, title, sub) {
+    const card = centerMessage(title, sub);
+    if (!tvLayout || !item || !item.id) return card;
+    const btn = el("button", { class: "btn primary center-action", type: "button", text: "用原生播放器打开",
+      dataset: { role: "tv-native-play" } });
+    btn.addEventListener("click", (event) => { event.stopPropagation(); tvNativePlay(item); });
+    const inner = card.querySelector ? card.querySelector(".center-inner") : null;
+    if (inner) inner.append(btn);
+    return card;
   }
 
   function libraryCorner(item) {
@@ -994,10 +1021,10 @@ export function mountFeed(view, options = {}) {
     entry.broken = true;
     if (entry.video) { try { entry.video.pause(); } catch (err) { /* ignore */ } }
     if (sub) {
-      entry.layer.append(centerMessage("这个视频放不了", sub));
+      entry.layer.append(brokenCard(entry.item, "这个视频放不了", sub));
       return;
     }
-    entry.layer.append(centerMessage("这个视频放不了", "状态：" + (entry.item.status || "unknown")));
+    entry.layer.append(brokenCard(entry.item, "这个视频放不了", "状态：" + (entry.item.status || "unknown")));
     // <video> 的 error 事件拿不到 HTTP 状态码，所以再问服务端一次"为什么"：
     // 403（路径不在允许的媒体根里）、404（文件没了）这类原文要显示出来 ——
     // 只说"状态：unknown"等于没说（用户 2026-09-27 报障过"报错要说真原因"这一类）。
@@ -2104,6 +2131,11 @@ export function mountFeed(view, options = {}) {
 
   function tvSetFull(on) {
     if (!tvLayout || tvFull === !!on) return false;
+    if (on) {
+      // 进全屏前先看这一条 WebView 能不能放：放不了的交原生播放器（同 tvPlayFromList）
+      const cur = state.items[state.active];
+      if (cur && !isPlayable(cur) && !cur.missing) return tvNativePlay(cur);
+    }
     tvFull = !!on;
     if (tvFull) tvSetOps(false);
     tvPaint();
@@ -2252,9 +2284,9 @@ export function mountFeed(view, options = {}) {
       case "ArrowDown":
         if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
         return true;
-      // → 在非全屏播放时**调出点赞/收藏/设置那栏**（用户 2026-09-29："再向右调出点赞栏"）；← 去视频列表
+      // 用户 2026-09-30："视频播放界面再按右键改为全屏播放；设置键调出点赞功能（和右键重复了）"
       case "ArrowLeft": tvFocusList(); return true;
-      case "ArrowRight": return tvSetOps(true);
+      case "ArrowRight": tvSetFull(true); return true;
       case "Enter": tvSetFull(true); return true;   // 确定 = 进全屏播放
       default: return false;
     }

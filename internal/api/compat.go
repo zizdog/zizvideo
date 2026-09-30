@@ -36,6 +36,14 @@ func parseUA(ua string) uaInfo {
 		return n
 	}
 	switch {
+	// Android App 的 WebView（UA 里有我们自己的标记，也有 Android 字样）：
+	// ⚠️ 它的解码能力来自**平台 MediaCodec**（小米电视这类机器有硬件 HEVC 解码器），
+	//    跟"桌面 Chrome 107 才有 HEVC"完全不是一回事 —— 老规则会把能放的机器误判成"放不了"。
+	//    所以这里单独成一家族；真正放不放得了由客户端先试、失败如实说（见 feed.js 的兜底）。
+	case strings.Contains(lower, "zizvideo-android"):
+		return uaInfo{"android", 0}
+	case strings.Contains(lower, "android"):
+		return uaInfo{"android", 0}
 	case strings.Contains(lower, "edg/") || strings.Contains(lower, "edge/"):
 		return uaInfo{"edge", pick("edg/")}
 	case strings.Contains(lower, "opr/") || strings.Contains(lower, "opera"):
@@ -74,6 +82,10 @@ func evaluateCompat(codecs domain.Codecs, ua uaInfo) compatibility {
 		switch ua.family {
 		case "safari":
 			return compatibility{Direct: true}
+		case "android":
+			// Android WebView / 我们的 App：交给平台解码器（有硬件 HEVC 就能放）。
+			// 播放失败时前端会如实报错并给"用原生播放器打开"这条兜底（ExoPlayer 一定走 MediaCodec）。
+			return compatibility{Direct: true, Reason: "HEVC：由这台设备的解码器决定（放不了会提示换原生播放器）"}
 		case "chrome", "edge", "opera":
 			if ua.major >= 107 {
 				return compatibility{Direct: true}
@@ -82,6 +94,8 @@ func evaluateCompat(codecs domain.Codecs, ua uaInfo) compatibility {
 		return compatibility{Direct: false, Reason: "该浏览器放不了 HEVC，请用 Safari（转码属 Phase2）"}
 	case "av1":
 		switch ua.family {
+		case "android":
+			return compatibility{Direct: true, Reason: "AV1：由这台设备的解码器决定（放不了会提示换原生播放器）"}
 		case "chrome", "edge", "opera":
 			if ua.major >= 70 {
 				return compatibility{Direct: true}

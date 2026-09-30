@@ -161,7 +161,7 @@ html.tv .tv-nav { flex: 0 0 auto; width: 0; overflow: hidden; }
 html.tv .tv-nav:not(.hidden) { width: 150px; margin-right: 12px; padding-top: 4px; }
 /* 中间：视频列表（窄卡片：预览图在上、标题在下；↑↓ 只走焦点，确定才播）
    用户 2026-09-29："视频列表太宽了，把标题放到视频预览图下面，宽度是现在的一半" */
-html.tv .tv-list { flex: 0 0 300px; max-width: 300px; min-width: 220px; overflow-y: auto; padding: 5px 12px 0 0; }
+html.tv .tv-list { flex: 0 0 180px; max-width: 180px; min-width: 150px; overflow-y: auto; padding: 5px 10px 0 0; }
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
 html.tv .tv-row { display: block; width: 100%; padding: 8px; border-radius: 10px; cursor: pointer; }
@@ -172,6 +172,7 @@ html.tv .tv-thumb {
   margin: 0 0 8px; border-radius: 8px; overflow: hidden; background: #1b1e24; display: block;
 }
 html.tv .tv-thumb img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+html.tv .center-action { margin-top: 12px; }
 html.tv .tv-dur {
   position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px;
   background: rgba(0,0,0,.72); color: #fff; font-size: 12px;
@@ -184,7 +185,7 @@ html.tv .tv-row-title {
 html.tv .tv-row.on .tv-row-title { color: #fff; }
 html.tv .tv-row-meta { color: rgba(255,255,255,.45); font-size: 12.5px; margin-top: 5px; }
 /* 中栏：播放窗口（画面 + 暂停才显示的信息条 + 设置键弹出的操作栏） */
-html.tv .tv-stage { flex: 0 0 44%; min-width: 320px; display: flex; flex-direction: column; position: relative; }
+html.tv .tv-stage { flex: 1 1 auto; min-width: 320px; display: flex; flex-direction: column; position: relative; }
 html.tv .tv-row > .layer { display: none; } /* 列表行里的 layer 只是暂存 */
 html.tv .tv-stage > .layer {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;

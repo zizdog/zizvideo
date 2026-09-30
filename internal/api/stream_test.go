@@ -387,3 +387,45 @@ func TestHEVCIsNotDirectForOldChrome(t *testing.T) {
 }
 
 var _ = strconv.Itoa
+
+// TestHEVCIsDirectOnAndroidWebView 锁死"Android WebView 不能按桌面 Chrome 那套判"：
+// 用户 2026-09-29 报障"播放不了 hevc！我的小米电视硬件是支持的"——根因就是这里把老 WebView 一刀切成
+// "浏览器放不了 HEVC"。Android 的解码能力来自平台 MediaCodec（有硬件解码器就能放），
+// 与"桌面 Chrome 107"那条规则无关；真正放不放得了由客户端先试、失败给原生 ExoPlayer 兜底。
+// （旧门禁 TestHEVCIsNotDirectForOldChrome 只喂桌面 Chrome UA，抓不到这一类。）
+func TestHEVCIsDirectOnAndroidWebView(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	lib := e.newLibrary("l", e.Root)
+	m := e.newMedia(lib.ID, filepath.Join(e.Root, "hevc-tv.mp4"), body(16))
+	m.Codecs.Video = "hevc"
+	if err := e.DB.UpdateMediaProbe(m); err != nil {
+		t.Fatal(err)
+	}
+	for _, ua := range []string{
+		"Mozilla/5.0 (Linux; Android 14; sdk_google_atv64_arm64 Build/UTT1.2401) AppleWebKit/537.36 Chrome/90.0 Safari/537.36 zizvideo-android/0.1",
+		"Mozilla/5.0 (Linux; Android 9; MiTV) AppleWebKit/537.36 Chrome/80.0 Safari/537.36",
+	} {
+		req, err := http.NewRequest(http.MethodGet, e.TS.URL+"/api/v1/media/"+m.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("User-Agent", ua)
+		res, err := e.Client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env envelope
+		decodeRaw(t, readAll(t, res.Body), &env)
+		res.Body.Close()
+		var item struct {
+			Compatibility struct {
+				Direct bool `json:"direct"`
+			} `json:"compatibility"`
+		}
+		decodeInto(t, env.Data, &item)
+		if !item.Compatibility.Direct {
+			t.Fatalf("Android WebView 不该被判成放不了 HEVC：%s", ua)
+		}
+	}
+}
