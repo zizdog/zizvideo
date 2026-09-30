@@ -113,14 +113,12 @@ class PlayerActivity : AppCompatActivity() {
             // 底部控件：① 换"看得见的选中样式" ② 两态视觉 —— 看片态整条变暗（提示"现在不在这层"），
             // 焦点进来就点亮；提示条也跟着换文案（屏幕上看得到"这层能干什么"）。
             val chrome = findViewById<android.view.View>(R.id.chrome)
+            // 电视端**不显示操作提示**（用户 2026-10-01："进入到视频全屏页面后会有播放操作提示，
+            // 这是不必要的！去掉"）：那行 TextView 直接收起来，也不再往里写文案。
             val hintView = findViewById<android.widget.TextView>(R.id.hint)
+            hintView.visibility = android.view.View.GONE
             fun paintTvState(inChrome: Boolean) {
                 chrome.alpha = if (inChrome) 1f else 0.62f
-                hintView.text = if (inChrome) {
-                    "←→ 选按钮 · ↑ 回画面 · 确定 按下 · 返回 收起"
-                } else {
-                    "↑↓=操作条 · ←→=快退快进 10 秒 · 确定=播放/暂停"
-                }
             }
             view.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) paintTvState(false) }
             // ImageButton（收藏/喜欢/稍后/画中画）用 drawable 换背景；

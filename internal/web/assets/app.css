@@ -245,6 +245,9 @@ html.tv .tv-feed.tv-cinema .tv-cols { padding: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage { flex: 1 1 auto; width: 100%; max-width: none; min-width: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage > .layer { border-radius: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage .overlay { display: none; }
+/* 全屏里"什么都不显示"（用户 2026-10-01："进入到视频全屏页面后会有播放操作提示，这是不必要的！去掉"）：
+   .hint（"已续播"这类）也一并藏掉 —— 只留暂停时的进度/信息条。 */
+html.tv .tv-feed.tv-cinema .hint { display: none; }
 html.tv .tv-feed.tv-cinema.tv-paused .tv-stage .overlay { display: flex; }
 body.tv-cinema .header { display: none; }
 .overlay {
