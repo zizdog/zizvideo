@@ -148,7 +148,13 @@ export function mountFeed(view, options = {}) {
   const tvList = tvLayout ? el("div", { class: "tv-list", dataset: { role: "tv-list" }, tabindex: "-1" }) : null;
   const tvStage = tvLayout ? el("div", { class: "tv-stage", dataset: { role: "tv-stage" } }) : null;
   // 右栏：媒体库（竖排）＋ 展开出来的「剧场/收藏/我的」（也竖排）
-  const tvLibs = tvLayout ? el("div", { class: "tv-libs", dataset: { role: "tv-libs" } }) : null;
+  const tvLibs = tvLayout ? el("div", { class: "tv-libs collapsed", dataset: { role: "tv-libs" } }) : null;
+  // 折叠时露出来的那一条（可聚焦）：焦点一进来就展开媒体库列表（用户 2026-09-29："默认折叠，有焦点再展开"）
+  const tvLibsStrip = tvLayout ? el("button", {
+    class: "tv-libs-strip", type: "button", text: "媒体库", dataset: { role: "tv-libs-strip" },
+  }) : null;
+  const tvLibsBody = tvLayout ? el("div", { class: "tv-libs-body" }) : null;
+  if (tvLayout) tvLibs.append(tvLibsStrip, tvLibsBody);
   const tvNav = tvLayout ? el("div", { class: "tv-nav", dataset: { role: "tv-nav" } }) : null;
   // 选库入口（P1）：库列表只来自 GET /me/libraries，不再从当前视频反推。
   // 播放列表模式（剧场）没有"切库"概念，所以这两个节点不建。
@@ -161,9 +167,10 @@ export function mountFeed(view, options = {}) {
     style: { left: "12px", right: "auto", top: "80px" },
   });
   if (tvLayout) {
-    // 电视端三栏。原来顶部那条工具行、顶部库 tabs 都不再挂（库挪到右栏；操作键进设置键的侧栏）。
+    // 电视端（用户 2026-09-29 再调整）：从左到右 = 媒体库（默认折叠，有焦点才展开）· 视频列表 · 播放界面。
+    // 「剧场/收藏/我的」抽屉在最左边（库里再按 ← 露出来）；「点赞/收藏/设置」那栏贴在播放界面右侧（默认隐藏）。
     feed.classList.add("tv-feed");
-    feed.append(el("div", { class: "tv-cols" }, tvList, tvStage, el("div", { class: "tv-right" }, tvLibs, tvNav)));
+    feed.append(el("div", { class: "tv-cols" }, tvNav, tvLibs, tvList, tvStage));
   } else if (picker && pickerBtn) {
     picker.addEventListener("click", (event) => event.stopPropagation());
     pickerBtn.addEventListener("click", (event) => {
@@ -311,11 +318,10 @@ export function mountFeed(view, options = {}) {
       el("span", { class: "tv-row-body" },
         el("span", { class: "tv-row-title", text: titleOf(item, index) }),
         el("span", { class: "tv-row-meta", text: meta || "未看" })));
+    // ⚠️ 只移动焦点、**不切播放**（用户 2026-09-29："视频列表上下切换时不播放！切换到对应焦点，
+    // 点击确定再播放，期间正在播放的视频不停止"）。焦点框由 tv.js 的 .tv-focus 画，
+    // "正在播的那条"由 .on 画 —— 两者可以不是同一条。
     row.addEventListener("click", () => tvPlayFromList(index));
-    // 焦点走到哪一行，右边就放到哪一条（遥控器上"选"和"看"是同一件事）
-    row.addEventListener("focusin", () => {
-      if (state.active !== index) goTo(index);
-    });
     return row;
   }
 
@@ -339,13 +345,12 @@ export function mountFeed(view, options = {}) {
    */
   function renderTvLibs() {
     if (!tvLayout || !tvLibs) return;
-    clear(tvLibs);
+    clear(tvLibsBody);
     if (playlist) {
       tvLibs.classList.add("hidden");
       return;
     }
     tvLibs.classList.remove("hidden");
-    tvLibs.append(el("div", { class: "tv-col-title", text: "媒体库" }));
     for (const it of tvTabs()) {
       const on = String(state.scope || "") === String(it.id || "");
       const tab = el("button", {
@@ -353,12 +358,26 @@ export function mountFeed(view, options = {}) {
         dataset: { role: "tv-tab", lib: it.id || "" }, text: it.name,
       });
       tab.addEventListener("click", () => switchScope(it.id, it.name));
-      tvLibs.append(tab);
+      tvLibsBody.append(tab);
     }
-    const cur = tvLibs.querySelector(".tv-tab.on");
+    const cur = tvLibsBody.querySelector(".tv-tab.on");
     if (cur && cur.scrollIntoView) {
       try { cur.scrollIntoView({ block: "nearest" }); } catch (err) { /* 忽略 */ }
     }
+  }
+
+  /** 媒体库那一栏：展开 / 折叠（折叠时只留左边那条可聚焦的窄条）。 */
+  function tvLibsExpand(on) {
+    if (!tvLayout || !tvLibs) return;
+    tvLibs.classList.toggle("collapsed", !on);
+    tvLibs.classList.toggle("expanded", !!on);
+  }
+  /** 焦点进媒体库：先展开，再落到当前那个库上。 */
+  function tvFocusLibs() {
+    tvLibsExpand(true);
+    void tvLibs.offsetHeight;
+    if (focusSelector(".tv-libs-body .tv-tab.on")) return true;
+    return focusSelector(".tv-libs-body .tv-tab");
   }
 
   /**
@@ -2047,6 +2066,8 @@ export function mountFeed(view, options = {}) {
   /** 全屏（影院）状态；tvOpsOpen = 设置键弹出的「点赞/收藏/设置」栏开着。 */
   let tvFull = false;
   let tvOpsOpen = false;
+  /** 服务器版本号（只用来显示，读不到就空着）—— 电视端"这版到底生效没有"的第一判据。 */
+  let tvVersion = "";
   function tvInChrome() {
     const a = document.activeElement;
     if (!a || a === document.body) return false;
@@ -2080,10 +2101,26 @@ export function mountFeed(view, options = {}) {
       tvHintSub.textContent = "";
       return;
     }
-    tvHintMain.textContent = playlist
-      ? "←→ 换栏 · ↑↓ 换集 · 确定 全屏播放"
-      : "←→ 换栏 · ↑↓ 换视频 · 确定 全屏播放";
-    tvHintSub.textContent = "设置键 = 点赞/收藏/设置";
+    // 提示按"焦点在哪一栏"说清这一栏能干什么（用户 2026-09-29：列表 ↑↓ 只选、确定才播）
+    const a = document.activeElement;
+    const inList = !!(a && a.closest && a.closest(".tv-list"));
+    const inLibs = !!(a && a.closest && a.closest(".tv-libs, .tv-nav"));
+    const inOps = !!(a && a.closest && a.closest(".tv-ops"));
+    if (inList) {
+      tvHintMain.textContent = playlist ? "↑↓ 选集 · 确定 播放" : "↑↓ 选片 · 确定 播放";
+    } else if (inLibs) {
+      tvHintMain.textContent = "↑↓ 选库 · 确定 切换 · → 回去";
+    } else if (inOps) {
+      tvHintMain.textContent = "↑↓ 选 · 确定 按下 · ← 回画面";
+    } else {
+      tvHintMain.textContent = playlist
+        ? "←→ 换栏 · ↑↓ 换集 · 确定 全屏播放"
+        : "←→ 换栏 · ↑↓ 换视频 · 确定 全屏播放";
+    }
+    // 屏幕左下角顺手把**服务器版本**写出来（用户 2026-09-28："没有任何变化！"那次的教训）：
+    // 电视端看不出前端是哪一版时，用户和我都只能猜 —— 现在一眼就能看到 v0.4.10 这种字样，
+    // 是"没更新成功/WebView 还在吃旧页面"还是"新版真的没生效"，当场就能分辨。
+    tvHintSub.textContent = "设置键 = 点赞/收藏/设置" + (tvVersion ? " · v" + tvVersion : "");
   }
   function tvSetFull(on) {
     if (!tvLayout || tvFull === !!on) return false;
@@ -2136,11 +2173,6 @@ export function mountFeed(view, options = {}) {
     if (focusSelector(".tv-row.on")) return true;
     return focusSelector(".tv-row");
   }
-  /** 焦点进右栏库列表。 */
-  function tvFocusLibs() {
-    if (focusSelector(".tv-libs .tv-tab.on")) return true;
-    return focusSelector(".tv-libs .tv-tab");
-  }
   /** 右栏再往右：露出「剧场/收藏/我的」并把焦点送进去。 */
   function tvShowNav() {
     if (!tvLayout || !tvNav) return false;
@@ -2182,34 +2214,46 @@ export function mountFeed(view, options = {}) {
     }
     const active = document.activeElement;
     const inOps = !!(active && active.closest && active.closest(".tv-ops"));
-    const inList = !!(active && active.closest && active.closest(".tv-row"));
+    const inList = !!(active && active.closest && active.closest(".tv-list"));
     const inLibs = !!(active && active.closest && active.closest(".tv-libs"));
     const inNav = !!(active && active.closest && active.closest(".tv-nav"));
-    const onSurface = !tvInChrome();
+    const onStrip = !!(active && active.closest && active.closest(".tv-libs-strip"));
 
-    // 面板/弹窗之外的按键都先过这里，按"焦点在哪一栏"决定语义。
+    // ① 「点赞/收藏/设置」栏：↑↓ 走栏内按钮，← 收起并往左走（视频列表），→ 回播放界面
     if (inOps) {
-      // 「点赞/收藏/设置」栏里：↑↓ 走栏内按钮，← 或返回 = 收起回画面
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") return false; // 交给空间导航
-      if (event.key === "ArrowLeft") { tvSetOps(false); return true; }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") return false;
+      if (event.key === "ArrowLeft") { tvSetOps(false); tvFocusList(); return true; }
+      if (event.key === "ArrowRight") { tvSetOps(false); return true; }
       return false;
     }
+    // ② 「剧场/收藏/我的」抽屉（最左，← 露出来的）：→ 收起并回媒体库；其它交给空间导航
+    if (inNav) {
+      if (event.key === "ArrowRight") { tvHideNav(); tvFocusLibs(); return true; }
+      return false;
+    }
+    // ③ 媒体库那一栏（展开态）：← 再往左露「剧场/收藏/我的」；→ 回视频列表并折叠
+    if (inLibs) {
+      if (event.key === "ArrowLeft") return tvShowNav();
+      if (event.key === "ArrowRight") { tvLibsExpand(false); tvFocusList(); return true; }
+      return false;   // ↑↓ 在库里走，确定 = 换库
+    }
+    // ④ 折叠时的那条窄条：焦点一进来就展开（用户 2026-09-29："默认折叠，有焦点再展开"）
+    if (onStrip) {
+      if (event.key === "ArrowRight") { tvLibsExpand(false); tvFocusList(); return true; }
+      if (event.key === "Enter" || event.key === "ArrowDown" || event.key === "ArrowUp") {
+        tvFocusLibs();
+        return true;
+      }
+      return false;
+    }
+    // ⑤ 视频列表：↑↓ 只走焦点（**不切播放**），确定才播；→ 回播放界面；← 去媒体库栏
     if (inList) {
       if (event.key === "Enter") { tvPlayFromList(Number(active.dataset.index)); return true; }
-      if (event.key === "ArrowRight") { tvFocusSurface(); return true; }   // 视频列表 → 播放窗口
-      if (event.key === "ArrowLeft") return true;                          // 已经在最左栏：停住
-      return false;                                                        // ↑↓ 在列表里走
-    }
-    if (inLibs) {
-      if (event.key === "ArrowRight") return tvShowNav();                  // 库列表 → 剧场/收藏/我的
-      if (event.key === "ArrowLeft") { tvFocusSurface(); return true; }    // 回播放窗口
-      return false;                                                        // ↑↓ 在库里走，确定 = 换库
-    }
-    if (inNav) {
-      if (event.key === "ArrowLeft") { tvHideNav(); tvFocusLibs(); return true; } // 收起并回库列表
+      if (event.key === "ArrowRight") { tvFocusSurface(); return true; }
+      if (event.key === "ArrowLeft") { tvFocusLibs(); return true; }
       return false;
     }
-    // 焦点在中间的画面栏上
+    // ⑥ 焦点在播放界面上
     if (tvFull) {
       switch (event.key) {
         case "Enter": togglePlay(entry); tvPaint(); return true;   // 全屏：确定 = 播放/暂停
@@ -2217,7 +2261,7 @@ export function mountFeed(view, options = {}) {
         case "ArrowDown":
           if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
           return true;
-        default: return false;   // 全屏里 ←→ 不切栏（用户 2026-09-28："非全屏播放时"才切）
+        default: return false;   // 全屏里 ←→ 不切栏（用户："非全屏播放时"才切）
       }
     }
     switch (event.key) {
@@ -2227,9 +2271,10 @@ export function mountFeed(view, options = {}) {
       case "ArrowDown":
         if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
         return true;
-      case "ArrowLeft": tvFocusList(); return true;      // 中栏 → 左栏视频列表
-      case "ArrowRight": tvFocusLibs(); return true;     // 中栏 → 右栏库列表
-      case "Enter": tvSetFull(true); return true;        // 中间栏按确定 = 进全屏播放
+      // ← 在非全屏播放时**调出点赞/收藏/设置那栏**（用户 2026-09-29 点名）；栏里再按 ← 才走到视频列表
+      case "ArrowLeft": return tvSetOps(true) || tvFocusList();
+      case "ArrowRight": return true;   // 播放界面已经是最右一栏（操作栏是它右边那条隐藏栏）
+      case "Enter": tvSetFull(true); return true;   // 确定 = 进全屏播放
       default: return false;
     }
   }
@@ -2277,6 +2322,12 @@ export function mountFeed(view, options = {}) {
   document.addEventListener("visibilitychange", onVisibility);
   // 电视端：把遥控器按键接过来（tv.js 的通用空间导航在它之后跑）
   function onTvFocusIn() {
+    // 媒体库那一栏：焦点不在它里面就折回去（用户 2026-09-29："默认折叠，有焦点再展开"）
+    if (tvLayout) {
+      const a = document.activeElement;
+      const inside = !!(a && a.closest && a.closest(".tv-libs"));
+      if (!inside) tvLibsExpand(false);
+    }
     const next = !tvInChrome();
     if (next !== tvSurface) {
       tvSurface = next;
@@ -2293,7 +2344,16 @@ export function mountFeed(view, options = {}) {
     document.addEventListener("focusin", onTvFocusIn, true);
     document.body.classList.add("tv-surface");
     renderTvNav();
+    if (tvLibsStrip) {
+      tvLibsStrip.addEventListener("focusin", () => { tvFocusLibs(); });
+    }
     tvPaint();
+    api.setupStatus().then((st) => {
+      const v = st && st.version;
+      if (!v) return;
+      tvVersion = String(v);
+      tvPaintHint();
+    }).catch(() => { /* 读不到就不显示，不打扰 */ });
     // 遥控器「设置/菜单」键（用户 2026-09-28 最新版）：播放时弹画面右侧的「点赞/收藏/设置」栏，
     // 焦点直接进栏里；再按一次（或返回键）收起、焦点回画面。
     window.__zvTvMenu = () => {

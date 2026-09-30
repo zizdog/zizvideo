@@ -139,8 +139,26 @@ html.tv .tv-feed > .tv-keyhint {
 html.tv .tv-feed > .tv-keyhint .tv-keyhint-sub { font-size: 12px; color: rgba(255,255,255,.3); margin-top: 1px; }
 /* 顶部留一行给左上角那行按键提示（它绝对定位在 .tv-feed 上），别压在左栏第一行视频上 */
 html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 36px 16px 12px; }
-/* 左栏：视频列表（行可聚焦：焦点走到哪条就播哪条） */
-html.tv .tv-list { flex: 0 0 30%; max-width: 560px; min-width: 300px; overflow-y: auto; padding: 5px 12px 0 0; }
+/* 最左：媒体库栏（默认折叠成一条窄条，焦点进来才展开 —— 用户 2026-09-29） */
+html.tv .tv-libs { flex: 0 0 auto; display: flex; height: 100%; }
+html.tv .tv-libs.collapsed { width: 44px; }
+html.tv .tv-libs.collapsed .tv-libs-body { display: none; }
+html.tv .tv-libs.expanded { width: 176px; margin-right: 12px; }
+html.tv .tv-libs.expanded .tv-libs-strip { display: none; }
+html.tv .tv-libs-strip {
+  width: 44px; height: 100%; padding: 10px 0; border: 0; border-radius: 9px;
+  background: rgba(255,255,255,.06); color: rgba(255,255,255,.75);
+  font: inherit; font-size: 14px; line-height: 1.25; cursor: pointer;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;
+}
+html.tv .tv-libs-body { flex: 1 1 auto; overflow-y: auto; padding-top: 4px; }
+html.tv .tv-libs-body::-webkit-scrollbar { width: 6px; }
+html.tv .tv-libs-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
+/* 「剧场/收藏/我的」抽屉：在媒体库再往左，默认隐藏 */
+html.tv .tv-nav { flex: 0 0 auto; width: 0; overflow: hidden; }
+html.tv .tv-nav:not(.hidden) { width: 150px; margin-right: 12px; padding-top: 4px; }
+/* 中间：视频列表（行可聚焦；↑↓ 只走焦点，确定才播） */
+html.tv .tv-list { flex: 1 1 auto; min-width: 260px; max-width: 620px; overflow-y: auto; padding: 5px 12px 0 0; }
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
 html.tv .tv-row { display: flex; width: 100%; align-items: flex-start; padding: 8px; border-radius: 10px; cursor: pointer; }
@@ -162,7 +180,7 @@ html.tv .tv-row-title {
 html.tv .tv-row.on .tv-row-title { color: #fff; }
 html.tv .tv-row-meta { color: rgba(255,255,255,.45); font-size: 12.5px; margin-top: 5px; }
 /* 中栏：播放窗口（画面 + 暂停才显示的信息条 + 设置键弹出的操作栏） */
-html.tv .tv-stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; position: relative; }
+html.tv .tv-stage { flex: 0 0 44%; min-width: 320px; display: flex; flex-direction: column; position: relative; }
 html.tv .tv-row > .layer { display: none; } /* 列表行里的 layer 只是暂存 */
 html.tv .tv-stage > .layer {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;
@@ -190,20 +208,13 @@ html.tv .tv-ops .icon-btn { width: 54px; height: 54px; }
 html.tv .tv-ops .icon-btn svg { width: 36px; height: 36px; }
 html.tv .tv-ops > * { margin-top: 6px; }
 html.tv .tv-ops .ov-rail > * { margin-top: 6px; }
-/* 右栏：媒体库（竖排）＋ 再往右露出来的「剧场/收藏/我的」 */
-html.tv .tv-right { flex: 0 0 auto; display: flex; }
-html.tv .tv-libs { flex: 0 0 auto; width: 168px; margin-left: 12px; overflow-y: auto; padding-top: 5px; }
 html.tv .tv-libs.hidden { display: none; }
-html.tv .tv-col-title { color: rgba(255,255,255,.4); font-size: 12.5px; padding: 4px 8px 8px; }
 html.tv .tv-tab {
   display: block; width: 100%; margin-bottom: 8px; padding: 9px 12px; border: 0; border-radius: 9px;
   background: rgba(255,255,255,.06); color: rgba(255,255,255,.78);
   font: inherit; font-size: 16px; text-align: left; cursor: pointer;
 }
 html.tv .tv-tab.on { background: #fff; color: #16181d; font-weight: 600; }
-html.tv .tv-nav {
-  flex: 0 0 auto; width: 158px; margin-left: 12px; padding-top: 5px;
-}
 html.tv .tv-nav.hidden { display: none; }
 html.tv .tv-nav .bottom-nav { display: flex; flex-direction: column; border-top: 0; background: transparent; padding: 0; }
 html.tv .tv-nav .nav-item {
