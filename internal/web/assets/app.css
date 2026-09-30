@@ -144,6 +144,17 @@ html.tv .tv-bar .nav-item {
 }
 html.tv .tv-bar .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
 html.tv .tv-bar .nav-item.upload { display: none; } /* 电视上没有文件选择框，上传入口不显示 */
+/* 其它页面（剧场/收藏/我的）在电视端也把导航挂在顶部：同一套 pills（withNav 里挂到 view 顶部） */
+html.tv .view > .bottom-nav {
+  flex: 0 0 auto; display: flex; border-top: 0; background: transparent;
+  padding: calc(10px + var(--sat)) 18px 4px;
+}
+html.tv .view > .bottom-nav .nav-item {
+  flex: 0 0 auto; margin-right: 10px; padding: 7px 16px; border-radius: 9px; font-size: 17px;
+  color: rgba(255,255,255,.72); background: rgba(255,255,255,.06);
+}
+html.tv .view > .bottom-nav .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
+html.tv .view > .bottom-nav .nav-item.upload { display: none; }
 html.tv .tv-actions { margin-left: auto; display: flex; align-items: center; }
 html.tv .tv-actions .ov-rail { position: static; display: flex; flex-direction: row; align-items: center; }
 html.tv .tv-actions .ov-rail > * { margin-left: 6px; }

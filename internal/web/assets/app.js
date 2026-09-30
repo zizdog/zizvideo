@@ -259,10 +259,14 @@ function route() {
   show((view) => mountFeed(view));
 }
 
-// withNav 给新页面挂底栏：mount 先执行，底栏固定在底部，路由切换时随 view 一起清空。
+// withNav 给新页面挂导航：手机/网页端固定在底部；电视端挪到**顶部**（用户 2026-09-28 参考鲜时光 TV：
+// 导航是顶部那排 pills）—— 与首页（mountFeed 里的 tvBar）保持一致，免得两个页面两套结构。
 function withNav(view, active, mount) {
+  const tv = tvMode();
+  const nav = mountNav(active);
+  if (tv) view.append(nav);
   const cleanup = mount();
-  view.append(mountNav(active));
+  if (!tv) view.append(nav);
   return typeof cleanup === "function" ? cleanup : null;
 }
 
