@@ -125,72 +125,28 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
 /* ============================================================================
-   电视端新版布局（用户 2026-09-28：参考鲜时光 TV 重做）
-     顶部 = 该用户可访问的**媒体库** tabs；左 = 当前库的视频列表；右 = 播放区（半沉浸）。
-   手机 / 网页端一行都不受影响：只有 html.tv（原生带 ?tv=1 进来）下才有 .tv-feed。
+   电视端布局（用户 2026-09-28 最新版）：整屏**三栏**
+     左 = 视频列表 · 中 = 播放窗口 · 右 = 媒体库列表（库里再按 → 露出「剧场/收藏/我的」）
+   ←→ 在这几栏之间切；非全屏时才有左右切换。手机 / 网页端一行都不受影响（只作用于 html.tv）。
    ⚠️ 这里不用 flex 的 gap（老电视 WebView 是 Chrome 84 之前，gap 会全塌）—— 间距一律用 margin。
    ============================================================================ */
-html.tv .tv-feed { background: #0b0d10; overflow: hidden; display: flex; flex-direction: column; }
-/* 顶部工具行：左边 = 应用导航（首页/剧场/收藏/我的 pills），右边 = 操作键（点赞/收藏/声音/全屏） */
-html.tv .tv-bar {
-  flex: 0 0 auto; display: flex; align-items: center;
-  /* 顶栏（搜索那颗）是浮在内容上的，这里让开它的高度，别把这一行压住 */
-  padding: calc(54px + var(--sat)) 18px 4px;
+html.tv .tv-feed { background: #0b0d10; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+/* 左上角那行按键提示（不是按钮，全屏时整行藏起来） */
+html.tv .tv-feed > .tv-keyhint {
+  position: absolute; top: calc(8px + var(--sat)); left: 18px; right: auto; bottom: auto;
+  text-align: left; font-size: 13px; color: rgba(255,255,255,.42); padding: 0; z-index: 9;
 }
-html.tv .tv-bar .bottom-nav { flex: 0 0 auto; display: flex; border-top: 0; background: transparent; padding-bottom: 0; }
-html.tv .tv-bar .nav-item {
-  flex: 0 0 auto; margin-right: 10px; padding: 7px 16px; border-radius: 9px; font-size: 17px;
-  color: rgba(255,255,255,.72); background: rgba(255,255,255,.06);
-}
-html.tv .tv-bar .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
-html.tv .tv-bar .nav-item.upload { display: none; } /* 电视上没有文件选择框，上传入口不显示 */
-/* 其它页面（剧场/收藏/我的）在电视端也把导航挂在顶部：同一套 pills（withNav 里挂到 view 顶部） */
-html.tv .view > .bottom-nav {
-  flex: 0 0 auto; display: flex; border-top: 0; background: transparent;
-  padding: calc(10px + var(--sat)) 18px 4px;
-}
-html.tv .view > .bottom-nav .nav-item {
-  flex: 0 0 auto; margin-right: 10px; padding: 7px 16px; border-radius: 9px; font-size: 17px;
-  color: rgba(255,255,255,.72); background: rgba(255,255,255,.06);
-}
-html.tv .view > .bottom-nav .nav-item.on { color: #16181d; background: #fff; font-weight: 600; }
-html.tv .view > .bottom-nav .nav-item.upload { display: none; }
-html.tv .tv-actions { margin-left: auto; display: flex; align-items: center; }
-/* 操作键那一整块（点赞/收藏/声音/全屏 + ⚙设置）：边栏模式在顶部工具行，影院模式搬回画面下方 */
-html.tv .tv-ops { display: flex; flex-direction: row; align-items: center; }
-html.tv .tv-ops .ov-rail { position: static; display: flex; flex-direction: row; align-items: center; }
-html.tv .tv-actions .icon-btn { width: 48px; height: 48px; }
-html.tv .tv-actions .icon-btn svg { width: 32px; height: 32px; }
-html.tv .tv-actions .ov-rail > * { margin-left: 6px; }
-html.tv .tv-actions .tv-ops > * { margin-left: 6px; }
-/* 第二行：该用户可访问的媒体库 tabs + 右侧按键提示 */
-html.tv .tv-top {
-  flex: 0 0 auto; display: flex; align-items: center; white-space: nowrap;
-  padding: 4px 18px 10px;
-  overflow-x: auto; overflow-y: hidden;
-}
-html.tv .tv-top::-webkit-scrollbar { height: 0; }
-/* 按键提示在电视端挪进 tabs 行右侧（原来那条压在画面/信息条上，新布局里会糊在一起） */
-html.tv .tv-top .tv-keyhint {
-  position: static; margin-left: auto; padding: 0 4px 0 20px; text-align: right;
-  font-size: 13px; color: rgba(255,255,255,.5); text-shadow: none;
-}
-html.tv .tv-top .tv-keyhint-sub { font-size: 12px; color: rgba(255,255,255,.34); margin-top: 1px; }
-html.tv .tv-tab {
-  flex: 0 0 auto; margin-right: 12px; padding: 8px 18px; border: 0; border-radius: 9px;
-  background: transparent; color: rgba(255,255,255,.72); font: inherit; font-size: 18px; cursor: pointer;
-}
-html.tv .tv-tab.on { background: #fff; color: #16181d; font-weight: 600; }
-html.tv .tv-top-title { color: #fff; font-size: 18px; font-weight: 600; padding: 8px 4px; }
-html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 0 18px 14px; }
-/* 左列：当前库的视频列表（行可以聚焦：← 进来选、↑↓ 走、确定 进全屏播放） */
-html.tv .tv-list { flex: 0 0 34%; max-width: 620px; min-width: 320px; overflow-y: auto; padding-right: 14px; }
+html.tv .tv-feed > .tv-keyhint .tv-keyhint-sub { font-size: 12px; color: rgba(255,255,255,.3); margin-top: 1px; }
+/* 顶部留一行给左上角那行按键提示（它绝对定位在 .tv-feed 上），别压在左栏第一行视频上 */
+html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 36px 16px 12px; }
+/* 左栏：视频列表（行可聚焦：焦点走到哪条就播哪条） */
+html.tv .tv-list { flex: 0 0 30%; max-width: 560px; min-width: 300px; overflow-y: auto; padding: 5px 12px 0 0; }
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
 html.tv .tv-row { display: flex; width: 100%; align-items: flex-start; padding: 8px; border-radius: 10px; cursor: pointer; }
 html.tv .tv-row.on { background: rgba(255,255,255,.13); }
 html.tv .tv-thumb {
-  position: relative; flex: 0 0 auto; width: 152px; height: 86px; margin-right: 11px;
+  position: relative; flex: 0 0 auto; width: 132px; height: 74px; margin-right: 10px;
   border-radius: 8px; overflow: hidden; background: #1b1e24; display: block;
 }
 html.tv .tv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -200,13 +156,13 @@ html.tv .tv-dur {
 }
 html.tv .tv-row-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 html.tv .tv-row-title {
-  color: #ccd0d6; font-size: 16px; line-height: 1.35; overflow: hidden;
+  color: #ccd0d6; font-size: 15px; line-height: 1.35; overflow: hidden;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
 }
 html.tv .tv-row.on .tv-row-title { color: #fff; }
-html.tv .tv-row-meta { color: rgba(255,255,255,.45); font-size: 13px; margin-top: 6px; }
-/* 右列：播放区（画面 + 标题/进度 + 操作行） */
-html.tv .tv-stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+html.tv .tv-row-meta { color: rgba(255,255,255,.45); font-size: 12.5px; margin-top: 5px; }
+/* 中栏：播放窗口（画面 + 暂停才显示的信息条 + 设置键弹出的操作栏） */
+html.tv .tv-stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; position: relative; }
 html.tv .tv-row > .layer { display: none; } /* 列表行里的 layer 只是暂存 */
 html.tv .tv-stage > .layer {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;
@@ -216,42 +172,56 @@ html.tv .tv-stage .stage {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;
   flex: 1 1 auto; min-height: 0;
 }
-/* 标题 + 进度 + 时间：从"压在画面上"改成画面下方的一条（同参考图）。
-   注意特异性：这一段必须排在下面 `.overlay` 的基础规则**之前/之后都行**（这里选更靠前的写法），
-   靠 `html.tv .tv-stage .overlay` 的选择器权重压过基础 `.overlay`。 */
+/* 信息条（标题/进度/时间）：非全屏时贴在画面下沿；全屏时**只在暂停**才出来 */
 html.tv .tv-stage .overlay {
   position: static; background: #17191d; padding: 10px 14px 6px; pointer-events: auto;
 }
 html.tv .tv-stage .ov-title { max-width: 100%; font-size: 16px; -webkit-line-clamp: 2; line-clamp: 2; }
 html.tv .tv-stage .times { font-size: 13px; margin-top: 3px; }
-html.tv .tv-stage .center-btn { z-index: 8; }
-/* 画面下方的操作键（影院模式才放这儿；边栏模式它们在顶部工具行） */
-html.tv .tv-stage .tv-ops { justify-content: flex-end; background: #17191d; padding: 4px 14px 10px; }
-html.tv .tv-stage .tv-ops .icon-btn { width: 48px; height: 48px; }
-html.tv .tv-stage .tv-ops .icon-btn svg { width: 32px; height: 32px; }
-html.tv .tv-stage .tv-ops > * { margin-left: 14px; }
-
-/* ---------- 影院（全屏）模式：用户 2026-09-28 点名的那套 ----------
-   边栏模式按确定进全屏（藏掉工具行/媒体库栏/左列表），返回键回到边栏模式。
-   全屏里默认**只有画面**：↓ 露进度条+操作键、↑ 露媒体库栏（再 ↑ 到剧场/收藏/我的）、← 露播放列表。 */
-html.tv .tv-feed.tv-cinema .tv-bar,
-html.tv .tv-feed.tv-cinema .tv-top,
-html.tv .tv-feed.tv-cinema .tv-list { display: none; }
+/* 设置键弹出的「点赞 / 收藏 / 设置」栏：贴在**画面右侧**（用户 2026-09-28 第 3 条） */
+html.tv .tv-stage .tv-ops {
+  position: absolute; z-index: 8; right: 12px; top: 50%; transform: translateY(-50%);
+  display: none; flex-direction: column; align-items: center;
+  background: rgba(18,20,24,.82); border-radius: 14px; padding: 10px 6px;
+}
+html.tv .tv-feed.tv-ops-open .tv-stage .tv-ops { display: flex; }
+html.tv .tv-ops .ov-rail { position: static; display: flex; flex-direction: column; align-items: center; }
+html.tv .tv-ops .icon-btn { width: 54px; height: 54px; }
+html.tv .tv-ops .icon-btn svg { width: 36px; height: 36px; }
+html.tv .tv-ops > * { margin-top: 6px; }
+html.tv .tv-ops .ov-rail > * { margin-top: 6px; }
+/* 右栏：媒体库（竖排）＋ 再往右露出来的「剧场/收藏/我的」 */
+html.tv .tv-right { flex: 0 0 auto; display: flex; }
+html.tv .tv-libs { flex: 0 0 auto; width: 168px; margin-left: 12px; overflow-y: auto; padding-top: 5px; }
+html.tv .tv-libs.hidden { display: none; }
+html.tv .tv-col-title { color: rgba(255,255,255,.4); font-size: 12.5px; padding: 4px 8px 8px; }
+html.tv .tv-tab {
+  display: block; width: 100%; margin-bottom: 8px; padding: 9px 12px; border: 0; border-radius: 9px;
+  background: rgba(255,255,255,.06); color: rgba(255,255,255,.78);
+  font: inherit; font-size: 16px; text-align: left; cursor: pointer;
+}
+html.tv .tv-tab.on { background: #fff; color: #16181d; font-weight: 600; }
+html.tv .tv-nav {
+  flex: 0 0 auto; width: 158px; margin-left: 12px; padding-top: 5px;
+}
+html.tv .tv-nav.hidden { display: none; }
+html.tv .tv-nav .bottom-nav { display: flex; flex-direction: column; border-top: 0; background: transparent; padding: 0; }
+html.tv .tv-nav .nav-item {
+  display: block; margin-bottom: 8px; padding: 9px 12px; border-radius: 9px; font-size: 16px;
+  color: rgba(255,255,255,.78); background: rgba(255,255,255,.06); text-align: left;
+}
+html.tv .tv-nav .nav-item.on { background: #fff; color: #16181d; font-weight: 600; }
+html.tv .tv-nav .nav-item.upload { display: none; }
+/* ---------- 全屏播放：**什么都不显示**（进度条只在暂停时出现） ---------- */
+html.tv .tv-feed.tv-cinema .tv-list,
+html.tv .tv-feed.tv-cinema .tv-libs,
+html.tv .tv-feed.tv-cinema .tv-nav,
+html.tv .tv-feed.tv-cinema > .tv-keyhint { display: none; }
 html.tv .tv-feed.tv-cinema .tv-cols { padding: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage > .layer { border-radius: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage .overlay { display: none; }
-html.tv .tv-feed.tv-cinema .tv-stage .tv-ops { display: none; }
-/* 影院里连顶栏也收起来（body 上的 class，因为顶栏不在 .feed 里） */
+html.tv .tv-feed.tv-cinema.tv-paused .tv-stage .overlay { display: flex; }
 body.tv-cinema .header { display: none; }
-/* ↑ 露顶部两块（工具行 + 媒体库栏） */
-html.tv .tv-feed.tv-cinema.tv-peek-top .tv-bar { display: flex; }
-html.tv .tv-feed.tv-cinema.tv-peek-top .tv-top { display: flex; }
-/* ↓ 露底部（标题/进度/时间 + 操作键） */
-html.tv .tv-feed.tv-cinema.tv-peek-bottom .tv-stage .overlay { display: flex; }
-html.tv .tv-feed.tv-cinema.tv-peek-bottom .tv-stage .tv-ops { display: flex; }
-/* ← 露左侧播放列表 */
-html.tv .tv-feed.tv-cinema.tv-peek-left .tv-list { display: block; }
-html.tv .tv-feed.tv-cinema.tv-peek-left .tv-cols { padding: 0 18px 14px; }
 .overlay {
   /* 用户 2026-09-24：名字/进度/时间这一块要**贴着底栏**，底边距底栏 10px、行距收紧 */
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
