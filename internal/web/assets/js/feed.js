@@ -331,7 +331,12 @@ export function mountFeed(view, options = {}) {
     const item = state.items[index];
     // 这一条 WebView 放不了（HEVC 这类）：交给原生播放器，别停在"放不了"那张卡上
     if (item && !isPlayable(item) && !item.missing) return tvNativePlay(item);
-    if (index !== state.active) goTo(index);
+    // 用户 2026-09-30："视频列表点击时只播放，不全屏，再次点击才全屏"
+    // 第一次确定 = 切过去播（焦点留在列表里，方便接着挑下一条）；**同一条**再按确定才进全屏。
+    if (index !== state.active) {
+      goTo(index);
+      return true;
+    }
     if (tvFull) { tvFocusSurface(); return true; }
     return tvSetFull(true);
   }
