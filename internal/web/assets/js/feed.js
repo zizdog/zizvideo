@@ -2492,10 +2492,24 @@ export function mountFeed(view, options = {}) {
   //   ② 电视端在影院（全屏）⇒ 回到有边栏的界面（用户 2026-09-28）；
   //   ③ 在全屏 ⇒ 退全屏；
   //   ④ 都没有 ⇒ 返回 false，交给路由（返回上一页）。
+  // 电视端：什么都开着的时候，返回键**第一次只提示**"再按一次退出"（用户 2026-09-30：
+  // "视频播放页面获得焦点时点返回会直接退回软件，很容易误操作"）。第二次（2.5 秒内）才放行给原生退出。
+  // 选这个方案而不是"返回键只移动焦点"：① ←/→ 已经在四栏之间走，返回再管移动就是重复；
+  // ② 返回键在安卓/TV 上的语义就是"退出上一层"，改成移动焦点会让所有人误判；③ "再按一次退出"是 TV 通行做法。
+  let tvExitArmed = 0;
+  function tvBackWantsExit() {
+    const now = Date.now();
+    if (tvExitArmed && now - tvExitArmed < 2500) { tvExitArmed = 0; return true; }
+    tvExitArmed = now;
+    showToast(tvFull ? "再按一次返回键退出" : "再按一次返回键退出应用");
+    return false;
+  }
   window.__zvExitFullscreen = () => {
     if (anyPanelOpen()) { closePanels(); return true; }
     if (tvLayout && tvOpsOpen) { tvSetOps(false); return true; }
     if (tvLayout && tvFull) { tvSetFull(false); return true; }
+    // 电视端：没别的可退时，第一次吃掉这一下并提示，第二次才真的退出（手机/网页端行为不变）
+    if (tvLayout) return !tvBackWantsExit();
     if (!immersiveOn()) return false;
     exitFullscreen();
     return true;
