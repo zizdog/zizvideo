@@ -2265,12 +2265,26 @@ export function mountFeed(view, options = {}) {
     switchScope(tabs[next].id, tabs[next].name);
     return true;
   }
+  /**
+   * 在某栏（scope 选择器）里按方向键走一步；scope 传 null = 用通用空间导航（面板/弹窗靠 overlayRoots 收窄）。
+   * ⚠️ 走不动就停在原地，但调用方**照样吃掉这个按键** —— 漏出去会被 feed 的桌面键盘处理器接走
+   * （ArrowDown = 切下一个视频），那就是用户报的"没按确定、播放自己换了"。
+   */
+  function tvMoveIn(arrowKey, scope) {
+    const dir = arrowKey === "ArrowUp" ? "up" : arrowKey === "ArrowDown" ? "down"
+      : arrowKey === "ArrowLeft" ? "left" : "right";
+    if (scope) moveFocusIn(dir, scope);
+    else moveFocusIn(dir);
+  }
   function onTvKeyDown(event) {
     const entry = tvSurfaceEntry();
     if (!entry) return false;
     // 面板开着：↑↓ 交给空间导航走动，← 收面板
     if (tvPanelOpen()) {
       if (event.key === "ArrowLeft") { closePanels(); return true; }
+      // ⚠️ ↑↓ 必须**自己吃掉**：漏给 tv.js 的空间导航，一旦它移动失败（到边界），事件会继续冒泡到
+      // feed 的"桌面键盘处理器"，那边 ArrowDown = goTo(next) —— 于是"没按确定，播放自己换了"。
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, null); return true; }
       return false;
     }
     const active = document.activeElement;
@@ -2282,7 +2296,7 @@ export function mountFeed(view, options = {}) {
 
     // ① 「点赞/收藏/设置」栏：↑↓ 走栏内按钮，← 收起并往左走（视频列表），→ 回播放界面
     if (inOps) {
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") return false;   // 栏内 ↑↓ 走
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-ops"); return true; }
       // 这栏在**画面右侧**：← 回画面（用户 2026-09-29 纠正方向后的自然走法），→ 到头停住
       if (event.key === "ArrowLeft") { tvSetOps(false); return true; }
       if (event.key === "ArrowRight") return true;
@@ -2291,13 +2305,15 @@ export function mountFeed(view, options = {}) {
     // ② 「剧场/收藏/我的」抽屉（最左，← 露出来的）：→ 收起并回媒体库；其它交给空间导航
     if (inNav) {
       if (event.key === "ArrowRight") { tvHideNav(); tvFocusLibs(); return true; }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-nav"); return true; }
       return false;
     }
     // ③ 媒体库那一栏（展开态）：← 再往左露「剧场/收藏/我的」；→ 回视频列表并折叠
     if (inLibs) {
       if (event.key === "ArrowLeft") return tvShowNav();
       if (event.key === "ArrowRight") { tvLibsExpand(false); tvFocusList(); return true; }
-      return false;   // ↑↓ 在库里走，确定 = 换库
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-libs"); return true; }
+      return false;   // 确定 = 换库
     }
     // ④ 折叠时的那条窄条：焦点一进来就展开（用户 2026-09-29："默认折叠，有焦点再展开"）
     if (onStrip) {
@@ -2313,6 +2329,19 @@ export function mountFeed(view, options = {}) {
       if (event.key === "Enter") { tvPlayFromList(Number(active.dataset.index)); return true; }
       if (event.key === "ArrowRight") { tvFocusSurface(); return true; }
       if (event.key === "ArrowLeft") { tvFocusLibs(); return true; }
+      // ⚠️ 用户 2026-10-01 报障："焦点每走几次播放就自己换了（没按确定）"：
+      // 走到列表**最后一行**时空间导航找不到下一个 → 事件冒泡到桌面键盘处理器 → ArrowDown = goTo(next)。
+      // 现在 ↑↓ 一律在**列表内部**走并吃掉按键（到边界就停住，不会漏出去、也不会溜到别的栏）。
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        tvMoveIn(event.key, ".tv-list");
+        // 焦点走到（接近）当前批次末尾就继续加载 —— 以前是靠"漏出去被 goTo 接走"顺带触发的，
+        // 现在按键被我们自己吃掉了，得显式补上，否则用户选到第 10 条就到头了。
+        const cur = document.activeElement;
+        if (cur && cur.dataset && cur.dataset.index !== undefined) maybeLoadMore(Number(cur.dataset.index));
+        return true;
+      }
+      if (event.key === "Home") { focusSelector(".tv-row"); return true; }
+      if (event.key === "End") { focusSelector(".tv-list .tv-row:last-child"); return true; }
       return false;
     }
     // ⑥ 焦点在播放界面上
