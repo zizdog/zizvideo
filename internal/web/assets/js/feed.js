@@ -664,15 +664,33 @@ export function mountFeed(view, options = {}) {
         el("div", { class: "center-sub", text: sub })));
   }
 
+  /** 交给原生播放器前，先把网页这边的声音关掉：两边同时放就是"两个声音"（用户 2026-09-30 反馈过）。 */
+  function pauseWebPlayback() {
+    for (const entry of state.built.values()) {
+      if (entry.video && !entry.video.paused) {
+        try { entry.video.pause(); } catch (err) { /* ignore */ }
+      }
+    }
+  }
+
   /**
    * 电视端：让**原生播放器**播这一条（ExoPlayer 走平台 MediaCodec —— 小米电视这类机器有硬件 HEVC 解码器）。
    * 用户 2026-09-29："播放不了 hevc！我的小米电视硬件是支持的"：WebView 的 <video> 放不了的编码，
-   * 由原生播放页接手（路由 #/play/single/<id> 会被 WebActivity 拦下并拉起 PlayerActivity）。
+   * 由原生播放页接手。
+   * ⚠️ 优先走原生桥（App 0.4.3+）：**不改 hash**。改 hash 会被前端路由器当成一次真跳转
+   * （首页整个重挂、列表重新拉一遍 ⇒ 用户返回时"列表都变了"），再叠加 App 那边的 web.goBack()
+   * 就把用户正在看的列表冲掉了（用户 2026-10-01 报障）。老 App 没有这个桥，退回 hash 深链兜底。
    */
   function tvNativePlay(item) {
     if (!item || !item.id) return false;
-    if (!item || !item.id) return false;
     closePanels();
+    pauseWebPlayback();
+    const bridge = typeof window !== "undefined" ? window.ZvAndroid : null;
+    if (bridge && typeof bridge.playNative === "function") {
+      try {
+        if (bridge.playNative(String(item.id), "single")) return true;
+      } catch (err) { /* 桥出错就退回 hash 深链 */ }
+    }
     location.hash = "#/play/single/" + encodeURIComponent(item.id);
     return true;
   }

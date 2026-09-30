@@ -167,6 +167,28 @@ class WebActivity : AppCompatActivity() {
             return true
         }
 
+        /**
+         * 电视端：网页把"这条 WebView 自己解不了（HEVC/AV1），交给原生硬解"交过来。
+         * 为什么不走 `#/play/single/<id>` 深链（那是老版本 App 的兜底）：改 hash 会被前端路由器
+         * 当成一次真跳转 —— 首页整个重挂、列表被重新拉一遍，用户返回时"列表都变了"，
+         * 再加上 handlePlayRoute 里的 web.goBack() 就把用户在看的列表冲掉了（用户 2026-10-01 报障）。
+         * 这里直接 startActivity，网页**原地不动**（它自己负责把网页的声音停掉）。
+         */
+        @android.webkit.JavascriptInterface
+        fun playNative(mediaId: String, kind: String): Boolean {
+            if (mediaId.isBlank()) return false
+            val k = kind.ifBlank { "single" }
+            if (k !in ZvApi2.supportedKinds) return false
+            runOnUiThread {
+                startActivity(
+                    Intent(this@WebActivity, PlayerActivity::class.java)
+                        .putExtra(PlayerActivity.EXTRA_KIND, k)
+                        .putExtra(PlayerActivity.EXTRA_MEDIA_ID, mediaId),
+                )
+            }
+            return true
+        }
+
         /** 老的缓存口（只有标题）：新网页优先用下面的 cacheVideo2。 */
         @android.webkit.JavascriptInterface
         fun cacheVideo(mediaId: String, title: String): Boolean {

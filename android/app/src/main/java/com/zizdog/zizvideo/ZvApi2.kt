@@ -38,16 +38,30 @@ object ZvApi2 {
         return ""
     }
 
+    /**
+     * single 这一条该拿哪个 id 去拉：**mediaId 优先**（PlayerActivity 那条交接路径），
+     * query 只是老调用方的兼容入口。单独拎出来是为了上单测当回归护栏 ——
+     * 2026-10-01 的报障正是这里只看 query（对 single 是空的）⇒ 队列 0 条 ⇒"放的不是我选的那条"。
+     */
+    internal fun singleId(mediaId: String, query: String): String = mediaId.ifBlank { query }.trim()
+
     /** 拉队列的结果：失败时带上服务端原话（别把 403"路径不在允许的媒体根里"说成"连不上服务器"）。 */
     class QueueResult(val list: List<Media>, val error: String)
 
     /** 拉一份列表当播放队列。history 的形状是 {list:[{media:{...}}]}，其余是 {list:[media...]}。 */
-    fun queue(base: String, kind: String, cookie: String, query: String = ""): List<Media> = queueDetailed(base, kind, cookie, query).list
+    fun queue(base: String, kind: String, cookie: String, query: String = "", mediaId: String = ""): List<Media> =
+        queueDetailed(base, kind, cookie, query, mediaId).list
 
-    fun queueDetailed(base: String, kind: String, cookie: String, query: String = ""): QueueResult {
-        // single：query 就是那条媒体的 id，队列只有它一条
+    /**
+     * ⚠️ `single`（电视端 WebView 解不出的编码交给原生播的那条）的 id **从 mediaId 来**，不是 query：
+     * query 只给 search 用，PlayerActivity 交接时对 single 传的是空 query。用户 2026-10-01 报障
+     * "每次进这个原生播放页，放的都不是我选的那条；返回后列表也变了" —— 真因就是这里读了空 query ⇒
+     * 队列 0 条 ⇒ 页面写"这条没有可播的内容"，而**上一个视频还在后台接着放**（看着就像换了别的片子）。
+     */
+    fun queueDetailed(base: String, kind: String, cookie: String, query: String = "", mediaId: String = ""): QueueResult {
+        // single：队列只有这一条（id 走 mediaId；老调用方塞在 query 里也认）
         if (kind == "single") {
-            val id = query.trim()
+            val id = singleId(mediaId, query)
             if (id.isEmpty()) return QueueResult(emptyList(), "")
             val reply = ZvApi.get(base + "/api/v1/media/" + enc(id), cookie)
             if (!reply.ok) return QueueResult(emptyList(), reply.errorMessage() + "（HTTP " + reply.status + "）")
@@ -61,6 +75,7 @@ object ZvApi2 {
             val one = Media(
                 id = mid,
                 title = item.optString("title").ifBlank { mid },
+                fileName = item.optString("file_name"),
                 streamUrl = if (stream.startsWith("http")) stream else base + stream,
                 durationMs = item.optLong("duration_ms"),
                 resumeMs = if (position > 0 && !completed) position else 0L,
@@ -102,6 +117,7 @@ object ZvApi2 {
                 Media(
                     id = id,
                     title = item.optString("title").ifBlank { id },
+                    fileName = item.optString("file_name"),
                     streamUrl = if (stream.startsWith("http")) stream else base + stream,
                     durationMs = item.optLong("duration_ms"),
                     resumeMs = if (position > 0 && !completed) position else 0L,
@@ -173,6 +189,8 @@ object ZvApi2 {
     data class Media(
         val id: String,
         val title: String,
+        /** 文件名（**不是标题**）：原生播放页那行"正在播放：…"显示它（用户 2026-10-01）。老服务端没有就空着。 */
+        val fileName: String,
         val streamUrl: String,
         val durationMs: Long,
         val resumeMs: Long,

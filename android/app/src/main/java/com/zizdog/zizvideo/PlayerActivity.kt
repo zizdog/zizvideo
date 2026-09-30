@@ -35,6 +35,9 @@ class PlayerActivity : AppCompatActivity() {
 
         /** search 队列要关键词（网页那边是临时缓存，原生拿地址里的词自己重放同一份结果）。 */
         const val EXTRA_QUERY = "query"
+
+        /** 文件名随 MediaItem 的 metadata 一起走：「正在播放：…」显示的是**文件名**而不是标题（用户 2026-10-01）。 */
+        private const val EXTRA_FILE_NAME = "zv_file_name"
     }
 
     private lateinit var view: PlayerView
@@ -181,9 +184,9 @@ class PlayerActivity : AppCompatActivity() {
                 svc.lastError?.let { nowPlaying.text = it } // 进页面前就错了的，也别漏
             }
             c.addListener(object : androidx.media3.common.Player.Listener {
-                override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(metadata.title?.toString() ?: "")
+                override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(c.currentMediaItem)
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-                    paint(item?.mediaMetadata?.title?.toString() ?: "")
+                    paint(item)
                     paintOffline()
                     refreshState(item?.mediaId ?: "")
                 }
@@ -196,7 +199,7 @@ class PlayerActivity : AppCompatActivity() {
             } else if (kind.isNotEmpty() && mediaId.isNotEmpty()) {
                 loadQueue(base, kind, mediaId, c, query)
             } else {
-                paint(c.currentMediaItem?.mediaMetadata?.title?.toString() ?: "正在播放")
+                paint(c.currentMediaItem)
             }
         }, MoreExecutors.directExecutor())
 
@@ -514,6 +517,17 @@ class PlayerActivity : AppCompatActivity() {
     private fun paint(title: String) {
         val base = if (title.isBlank()) "正在播放" else "正在播放：$title"
         nowPlaying.text = if (resumed) "$base（已续播）" else base
+        // 这行文字进 logcat：电视上截不到屏/uiautomator 读不到时，这是唯一能核对"到底在放哪一条"的凭据
+        Log.i("zvplayer", "paint=" + nowPlaying.text)
+    }
+
+    /**
+     * 这一条该显示什么：**文件名**优先（用户 2026-10-01："正在播放：文件名（不是标题，是文件名）"），
+     * 拿不到文件名（老服务端 / 网页交接过来的队列）才退回标题。
+     */
+    private fun paint(item: MediaItem?) {
+        val name = item?.mediaMetadata?.extras?.getString(EXTRA_FILE_NAME)?.takeIf { it.isNotBlank() }
+        paint(name ?: item?.mediaMetadata?.title?.toString() ?: "")
     }
 
     /** 拉列表 → 转成 ExoPlayer 的队列 → 从点中的那一条开始播。 */
@@ -523,7 +537,7 @@ class PlayerActivity : AppCompatActivity() {
             var fetched = true
             var failReason = ""
             val list = try {
-                val qr = ZvApi2.queueDetailed(base, kind, cookie, query)
+                val qr = ZvApi2.queueDetailed(base, kind, cookie, query, mediaId)
                 if (qr.error.isNotBlank()) { fetched = false; failReason = qr.error }
                 qr.list
             } catch (e: Exception) {
@@ -550,6 +564,8 @@ class PlayerActivity : AppCompatActivity() {
                             // 由 PlaybackService 的换条回调落到 player.volume 上（用户 2026-09-26）
                             .setExtras(android.os.Bundle().apply {
                                 putFloat(PlaybackService.EXTRA_VOLUME, gainVolume(m.gainDb))
+                                // 文件名（不是标题）：这行"正在播放：…"显示它（用户 2026-10-01）
+                                putString(EXTRA_FILE_NAME, m.fileName)
                             })
                             .build(),
                     )
@@ -559,6 +575,10 @@ class PlayerActivity : AppCompatActivity() {
             val resume = list.getOrNull(index)?.resumeMs ?: 0L
             runOnUiThread {
                 if (items.isEmpty()) {
+                    // 拉不到队列时必须**把上一个视频停掉**：不停就是"我选了 A，响的却是 B"（用户 2026-10-01
+                    // 报障的另一半真因 —— 队列 0 条，后台还在放上一条，看起来就像"换了别的片子"）。
+                    c.stop()
+                    c.clearMediaItems()
                     // 如实区分"没内容"和"连不上"：说错原因比不说更糟（原来一律说"没有可播的内容"）
                     // 失败时把服务端的原话显示出来（403 路径越界 vs 真连不上，是两回事）
                     nowPlaying.text = if (fetched) "这条没有可播的内容" else ("拉不到播放列表：" + (failReason.ifBlank { "未知原因" }))
@@ -569,7 +589,7 @@ class PlayerActivity : AppCompatActivity() {
                 c.setMediaItems(items, index, resume) // 续播位置与网页端同语义（没看完才续）
                 c.prepare()
                 c.play()
-                paint(list.getOrNull(index)?.title ?: "")
+                paint(items.getOrNull(index))
             }
         }.start()
     }

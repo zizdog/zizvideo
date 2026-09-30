@@ -310,7 +310,8 @@ class PlaybackService : MediaSessionService() {
         base = Prefs(this).baseUrl
         val c = cookie()
         Thread {
-            val list = ZvApi2.queue(base, kind, c)
+            // mediaId 显式传进去：`single` 那种队列的 id 只从这儿来（坑 65 —— 只看 query 会拉出空队列）
+            val list = ZvApi2.queue(base, kind, c, "", mediaId)
             if (list.isEmpty()) return@Thread
             val items = list.map { m ->
                 val local = OfflineStore.localUri(this, m.id)

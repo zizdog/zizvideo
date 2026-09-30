@@ -23,6 +23,10 @@ type mediaItem struct {
 	LibraryID  string        `json:"library_id"`
 	Title      string        `json:"title"`
 	Path       string        `json:"path,omitempty"`
+	// FileName 只给文件名（不含目录）：原生播放页的「正在播放：…」要显示**文件名**而不是标题
+	// （用户 2026-10-01："是文件名，不是标题"）。宿主机绝对路径只给管理员（见 withPath），
+	// 文件名对"能播这一条"的人不算秘密，但目录不给（坑 65）。
+	FileName   string        `json:"file_name,omitempty"`
 	Size       int64         `json:"size"`
 	DurationMS int64         `json:"duration_ms"`
 	Width      int           `json:"width"`
@@ -83,7 +87,8 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 	for _, m := range rows {
 		item := mediaItem{
 			ID: m.ID, LibraryID: m.LibraryID, Title: m.Title,
-			Size: m.Size, DurationMS: m.DurationMS, Width: m.Width, Height: m.Height,
+			FileName: mediaFileName(m.Path),
+			Size:     m.Size, DurationMS: m.DurationMS, Width: m.Width, Height: m.Height,
 			Codecs: m.Codecs, Container: m.Container, FPS: m.FPS, Bitrate: m.Bitrate,
 			Status: m.Status, ErrorClass: m.ErrorClass,
 			CoverURL:  "/api/v1/media/" + m.ID + "/cover",
@@ -111,6 +116,19 @@ func (s *Server) buildItems(rows []domain.Media, r *http.Request, withPath bool)
 		out = append(out, item)
 	}
 	return out
+}
+
+// mediaFileName 取路径里的文件名（**不含目录**）：原生播放页显示"正在播放：<文件名>"用。
+// 路径是宿主机绝对路径，只有管理员看得到（withPath）；这里只放文件名出去（坑 65）。
+func mediaFileName(p string) string {
+	if p == "" {
+		return ""
+	}
+	name := filepath.Base(filepath.FromSlash(strings.ReplaceAll(p, "\\", "/")))
+	if name == "." || name == string(filepath.Separator) || name == "/" {
+		return ""
+	}
+	return name
 }
 
 // HandleListMedia returns a filtered page of media.
