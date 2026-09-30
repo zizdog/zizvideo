@@ -165,7 +165,13 @@ html.tv .tv-list { flex: 0 0 180px; max-width: 180px; min-width: 150px; overflow
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
 html.tv .tv-row { display: block; width: 100%; padding: 8px; border-radius: 10px; cursor: pointer; }
-html.tv .tv-row.on { background: rgba(255,255,255,.13); }
+/* 列表里"正在播的那条"**始终高亮**（不管焦点在列表还是在播放画面）——用户 2026-09-30：
+   "无论焦点在视频列表栏还是播放栏，当前视频都要高亮显示"；其余条目压暗，一眼能分出哪条在播。 */
+html.tv .tv-row.on { background: rgba(255,255,255,.20); }
+html.tv .tv-row:not(.on) { opacity: .5; }
+/* 蓝色焦点框只在**焦点进列表**时出现（tv.js 给当前焦点加 .tv-focus）：
+   焦点在列表 ⇒ 选中那条变亮 + 蓝框；焦点在播放画面 ⇒ 列表里只有"在播那条"高亮，没有蓝框。 */
+html.tv .tv-row.tv-focus { opacity: 1; }
 /* 预览图：宽度撑满、16:9（用 padding-top 撑高 —— 老 WebView 没有 aspect-ratio） */
 html.tv .tv-thumb {
   position: relative; width: 100%; height: 0; padding-top: 56.25%;
