@@ -2120,7 +2120,7 @@ export function mountFeed(view, options = {}) {
     // 屏幕左下角顺手把**服务器版本**写出来（用户 2026-09-28："没有任何变化！"那次的教训）：
     // 电视端看不出前端是哪一版时，用户和我都只能猜 —— 现在一眼就能看到 v0.4.10 这种字样，
     // 是"没更新成功/WebView 还在吃旧页面"还是"新版真的没生效"，当场就能分辨。
-    tvHintSub.textContent = "设置键 = 点赞/收藏/设置" + (tvVersion ? " · v" + tvVersion : "");
+    tvHintSub.textContent = "→ 调出点赞/收藏/设置 · 设置键同效" + (tvVersion ? " · v" + tvVersion : "");
   }
   function tvSetFull(on) {
     if (!tvLayout || tvFull === !!on) return false;
@@ -2221,9 +2221,10 @@ export function mountFeed(view, options = {}) {
 
     // ① 「点赞/收藏/设置」栏：↑↓ 走栏内按钮，← 收起并往左走（视频列表），→ 回播放界面
     if (inOps) {
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") return false;
-      if (event.key === "ArrowLeft") { tvSetOps(false); tvFocusList(); return true; }
-      if (event.key === "ArrowRight") { tvSetOps(false); return true; }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") return false;   // 栏内 ↑↓ 走
+      // 这栏在**画面右侧**：← 回画面（用户 2026-09-29 纠正方向后的自然走法），→ 到头停住
+      if (event.key === "ArrowLeft") { tvSetOps(false); return true; }
+      if (event.key === "ArrowRight") return true;
       return false;
     }
     // ② 「剧场/收藏/我的」抽屉（最左，← 露出来的）：→ 收起并回媒体库；其它交给空间导航
@@ -2271,9 +2272,9 @@ export function mountFeed(view, options = {}) {
       case "ArrowDown":
         if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
         return true;
-      // ← 在非全屏播放时**调出点赞/收藏/设置那栏**（用户 2026-09-29 点名）；栏里再按 ← 才走到视频列表
-      case "ArrowLeft": return tvSetOps(true) || tvFocusList();
-      case "ArrowRight": return true;   // 播放界面已经是最右一栏（操作栏是它右边那条隐藏栏）
+      // → 在非全屏播放时**调出点赞/收藏/设置那栏**（用户 2026-09-29："再向右调出点赞栏"）；← 去视频列表
+      case "ArrowLeft": tvFocusList(); return true;
+      case "ArrowRight": return tvSetOps(true);
       case "Enter": tvSetFull(true); return true;   // 确定 = 进全屏播放
       default: return false;
     }

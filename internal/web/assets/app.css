@@ -157,17 +157,19 @@ html.tv .tv-libs-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1
 /* 「剧场/收藏/我的」抽屉：在媒体库再往左，默认隐藏 */
 html.tv .tv-nav { flex: 0 0 auto; width: 0; overflow: hidden; }
 html.tv .tv-nav:not(.hidden) { width: 150px; margin-right: 12px; padding-top: 4px; }
-/* 中间：视频列表（行可聚焦；↑↓ 只走焦点，确定才播） */
-html.tv .tv-list { flex: 1 1 auto; min-width: 260px; max-width: 620px; overflow-y: auto; padding: 5px 12px 0 0; }
+/* 中间：视频列表（窄卡片：预览图在上、标题在下；↑↓ 只走焦点，确定才播）
+   用户 2026-09-29："视频列表太宽了，把标题放到视频预览图下面，宽度是现在的一半" */
+html.tv .tv-list { flex: 0 0 300px; max-width: 300px; min-width: 220px; overflow-y: auto; padding: 5px 12px 0 0; }
 html.tv .tv-list::-webkit-scrollbar { width: 6px; }
 html.tv .tv-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
-html.tv .tv-row { display: flex; width: 100%; align-items: flex-start; padding: 8px; border-radius: 10px; cursor: pointer; }
+html.tv .tv-row { display: block; width: 100%; padding: 8px; border-radius: 10px; cursor: pointer; }
 html.tv .tv-row.on { background: rgba(255,255,255,.13); }
+/* 预览图：宽度撑满、16:9（用 padding-top 撑高 —— 老 WebView 没有 aspect-ratio） */
 html.tv .tv-thumb {
-  position: relative; flex: 0 0 auto; width: 132px; height: 74px; margin-right: 10px;
-  border-radius: 8px; overflow: hidden; background: #1b1e24; display: block;
+  position: relative; width: 100%; height: 0; padding-top: 56.25%;
+  margin: 0 0 8px; border-radius: 8px; overflow: hidden; background: #1b1e24; display: block;
 }
-html.tv .tv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+html.tv .tv-thumb img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 html.tv .tv-dur {
   position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px;
   background: rgba(0,0,0,.72); color: #fff; font-size: 12px;
@@ -229,6 +231,9 @@ html.tv .tv-feed.tv-cinema .tv-libs,
 html.tv .tv-feed.tv-cinema .tv-nav,
 html.tv .tv-feed.tv-cinema > .tv-keyhint { display: none; }
 html.tv .tv-feed.tv-cinema .tv-cols { padding: 0; }
+/* 全屏：播放界面必须占满整屏（用户 2026-09-29 报障："全屏时只占左半，右半是黑屏"）——
+   三栏那套 `flex: 0 0 44%` 在全屏里要把宽度还回来。 */
+html.tv .tv-feed.tv-cinema .tv-stage { flex: 1 1 auto; width: 100%; max-width: none; min-width: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage > .layer { border-radius: 0; }
 html.tv .tv-feed.tv-cinema .tv-stage .overlay { display: none; }
 html.tv .tv-feed.tv-cinema.tv-paused .tv-stage .overlay { display: flex; }
