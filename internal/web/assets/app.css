@@ -131,14 +131,16 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
    ⚠️ 这里不用 flex 的 gap（老电视 WebView 是 Chrome 84 之前，gap 会全塌）—— 间距一律用 margin。
    ============================================================================ */
 html.tv .tv-feed { background: #0b0d10; overflow: hidden; display: flex; flex-direction: column; position: relative; }
-/* 左上角那行按键提示（不是按钮，全屏时整行藏起来） */
+/* 画面上**不放任何操作提示**（用户 2026-09-29）；这里只剩右下角一个很淡的版本号，
+   用来判断"服务端更新生效没有"（不是操作提示）。全屏里连它也藏掉。 */
 html.tv .tv-feed > .tv-keyhint {
-  position: absolute; top: calc(8px + var(--sat)); left: 18px; right: auto; bottom: auto;
-  text-align: left; font-size: 13px; color: rgba(255,255,255,.42); padding: 0; z-index: 9;
+  position: absolute; right: 14px; bottom: 8px; left: auto; top: auto;
+  text-align: right; font-size: 11px; color: rgba(255,255,255,.26); padding: 0; z-index: 9;
 }
-html.tv .tv-feed > .tv-keyhint .tv-keyhint-sub { font-size: 12px; color: rgba(255,255,255,.3); margin-top: 1px; }
+html.tv .tv-feed > .tv-keyhint .tv-keyhint-main { display: none; }
+html.tv .tv-feed > .tv-keyhint .tv-keyhint-sub { font-size: 11px; color: rgba(255,255,255,.26); margin: 0; }
 /* 顶部留一行给左上角那行按键提示（它绝对定位在 .tv-feed 上），别压在左栏第一行视频上 */
-html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 36px 16px 12px; }
+html.tv .tv-cols { flex: 1 1 auto; min-height: 0; display: flex; padding: 10px 16px 12px; }
 /* 最左：媒体库栏（默认折叠成一条窄条，焦点进来才展开 —— 用户 2026-09-29） */
 html.tv .tv-libs { flex: 0 0 auto; display: flex; height: 100%; }
 html.tv .tv-libs.collapsed { width: 44px; }

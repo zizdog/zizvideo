@@ -2095,33 +2095,13 @@ export function mountFeed(view, options = {}) {
   }
   function tvPaintHint() {
     if (!tvMode()) return;
-    if (tvFull) {
-      // 全屏里"不显示任何东西" —— 提示也收掉（暂停时那条进度信息由 overlay 负责）
-      tvHintMain.textContent = "";
-      tvHintSub.textContent = "";
-      return;
-    }
-    // 提示按"焦点在哪一栏"说清这一栏能干什么（用户 2026-09-29：列表 ↑↓ 只选、确定才播）
-    const a = document.activeElement;
-    const inList = !!(a && a.closest && a.closest(".tv-list"));
-    const inLibs = !!(a && a.closest && a.closest(".tv-libs, .tv-nav"));
-    const inOps = !!(a && a.closest && a.closest(".tv-ops"));
-    if (inList) {
-      tvHintMain.textContent = playlist ? "↑↓ 选集 · 确定 播放" : "↑↓ 选片 · 确定 播放";
-    } else if (inLibs) {
-      tvHintMain.textContent = "↑↓ 选库 · 确定 切换 · → 回去";
-    } else if (inOps) {
-      tvHintMain.textContent = "↑↓ 选 · 确定 按下 · ← 回画面";
-    } else {
-      tvHintMain.textContent = playlist
-        ? "←→ 换栏 · ↑↓ 换集 · 确定 全屏播放"
-        : "←→ 换栏 · ↑↓ 换视频 · 确定 全屏播放";
-    }
-    // 屏幕左下角顺手把**服务器版本**写出来（用户 2026-09-28："没有任何变化！"那次的教训）：
-    // 电视端看不出前端是哪一版时，用户和我都只能猜 —— 现在一眼就能看到 v0.4.10 这种字样，
-    // 是"没更新成功/WebView 还在吃旧页面"还是"新版真的没生效"，当场就能分辨。
-    tvHintSub.textContent = "→ 调出点赞/收藏/设置 · 设置键同效" + (tvVersion ? " · v" + tvVersion : "");
+    // 用户 2026-09-29："画面上不要出现操作提示" —— 操作提示（按键说明）整条撤掉。
+    // 这里只留一个**很淡的版本号**（右下角那种）：它帮我们判断"服务端更新到底生效没有"
+    // （2026-09-29 那次"没有任何变化"就是服务端没升级成功，当时只能猜）。全屏里连它也藏掉。
+    tvHintMain.textContent = "";
+    tvHintSub.textContent = tvVersion ? "v" + tvVersion : "";
   }
+
   function tvSetFull(on) {
     if (!tvLayout || tvFull === !!on) return false;
     tvFull = !!on;
