@@ -569,16 +569,19 @@ export function mountFeed(view, options = {}) {
     // 其余入口全在底部设置面板里（长按画面或网页右键打开）；选集/删除也搬进面板，不占边栏。
     // 电视端：这排按钮 + 一个「设置」键会被整体搬来搬去（tvActionsSet）——
     // 边栏模式下在顶部工具行，影院（全屏）模式下回到画面下方的信息条里。
-    // ⚙ 是必须的：用户 2026-09-28 明确"设置键调出设置面板在 tv 端不适用"，
-    // 所以面板（选集/倍速/清晰度/收藏/删除）得有个屏幕上点得到的入口。
-    // ⚠️ 电视端**不放声音键、不放全屏键**（用户 2026-09-28："不要在 tv 端显示全屏按钮！不要显示静音！
-    // 任何情况下都不要静音！"）—— TV 上恒定有声；"全屏"由确定键负责（影院模式）。
+    // ⚙ **只在电视端挂**：用户 2026-09-28 明确"设置键调出设置面板在 tv 端不适用"，
+    // 所以 TV 上面板得有个屏幕上点得到的入口。网页/手机端**不挂** —— 那边靠长按画面（App）
+    // 或右键（网页）开面板（用户 2026-09-24 定稿），挂上反而会落在画面左上角、**正好压住顶栏的菜单键**
+    // （用户 2026-10-01 报障："web 端和手机 app 端这里 2 个按钮重叠：一个三条横线、一个设置轮子"，坑 67）。
     const railKids = [entry.like, entry.fav];
     if (!tvLayout) railKids.push(soundButton(entry), (entry.fullscreen = fullscreenButton()));
     entry.rail = el("div", { class: "ov-rail" }, railKids);
-    entry.gear = el("button", { class: "icon-btn", type: "button", title: "设置（选集/倍速/清晰度）" }, icon("gear"));
-    entry.gear.addEventListener("click", (event) => { event.stopPropagation(); openPanel(entry); });
-    entry.ops = el("div", { class: "tv-ops" }, entry.rail, entry.gear);
+    entry.ops = el("div", { class: "tv-ops" }, entry.rail);
+    if (tvLayout) {
+      entry.gear = el("button", { class: "icon-btn", type: "button", title: "设置（选集/倍速/清晰度）" }, icon("gear"));
+      entry.gear.addEventListener("click", (event) => { event.stopPropagation(); openPanel(entry); });
+      entry.ops.append(entry.gear);
+    }
     layer.append(entry.ops);
     layer.append(centerPlayPause(entry));
 
