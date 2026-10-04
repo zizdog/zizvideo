@@ -467,7 +467,37 @@ html.tv body.tv-surface .header { opacity: .62; }
 /* ---------- admin ---------- */
 /* 用户 2026-09-22：后台内容多，必须**整页滚动**（标签/提示也一起滚走），
    不要内层小盒子滚 —— 内层滚动会把列表挤成一条，几乎没法操作。 */
-.admin { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.admin { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: row; gap: 12px; padding: 12px; align-items: flex-start; }
+/* ---------- 后台左边栏（用户 2026-10-01：左边栏菜单 + 可折叠成图标 + 版块名 4 个字） ----------
+   ⚠️ 这一栏不用 `gap`：老电视 WebView（Chrome 84 以下）没有 flex gap，间距会全塌，
+   统一用 margin 撑开（同侧边面板那块的教训）。 */
+.admin-side {
+  flex: 0 0 auto; position: sticky; top: 0; width: 176px;
+  display: flex; flex-direction: column; padding: 6px; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--line);
+}
+.admin-side.collapsed { width: 58px; }
+.admin-toggle {
+  font: inherit; width: 100%; height: 34px; margin-bottom: 6px; padding: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 9px; background: transparent; color: var(--muted);
+}
+.admin-toggle:hover { background: var(--panel2); color: var(--fg); }
+.admin-toggle svg { width: 20px; height: 20px; }
+.admin-nav { display: flex; flex-direction: column; }
+.admin-tab {
+  font: inherit; font-size: 15px; width: 100%; padding: 9px 10px; margin-bottom: 2px; cursor: pointer;
+  display: flex; align-items: center; text-align: left; white-space: nowrap;
+  border: 0; border-radius: 9px; background: transparent; color: var(--fg);
+}
+.admin-tab:hover { background: var(--panel2); }
+.admin-tab.on { background: var(--accent); color: #04121f; font-weight: 600; }
+.admin-tab svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.admin-label { margin-left: 10px; overflow: hidden; text-overflow: ellipsis; }
+/* 折成图标栏：只剩图标（居中），文字整块撤掉；版块名靠 title 提示 */
+.admin-side.collapsed .admin-label { display: none; }
+.admin-side.collapsed .admin-tab { justify-content: center; padding: 9px 0; }
+.admin-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .tab {
   font: inherit; padding: 6px 12px; border-radius: 999px; cursor: pointer;

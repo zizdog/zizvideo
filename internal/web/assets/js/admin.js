@@ -7,6 +7,7 @@ import { uploadToLibrary } from "./uploads.js";
 import { mountSeriesTab } from "./admin-series.js";
 import { mountUploadsTab } from "./uploads-tab.js";
 import { videoCard, stopInlinePlayers } from "./cards.js";
+import { icon } from "./icons.js";
 
 function button(label, onclick, extraClass) {
   return el("button", {
@@ -1626,10 +1627,28 @@ function mountSystem(root) {
 
 /* ---------- 容器 ---------- */
 
+// 左边栏折叠状态（用户 2026-10-01："左边栏菜单 + 可折叠成图标"）：记在本机，下次进来还是那个样子。
+const ADMIN_NAV_KEY = "zv_admin_nav";
+
+function loadNavCollapsed() {
+  try {
+    const saved = localStorage.getItem(ADMIN_NAV_KEY);
+    if (saved === "collapsed") return true;
+    if (saved === "expanded") return false;
+  } catch (err) { /* 隐私模式：直接按屏宽判断 */ }
+  // 没存过：窄屏（手机）默认折成图标栏 —— 展开的 190px 会把内容挤没
+  return window.innerWidth < 760;
+}
+
+function saveNavCollapsed(collapsed) {
+  try { localStorage.setItem(ADMIN_NAV_KEY, collapsed ? "collapsed" : "expanded"); } catch (err) { /* ignore */ }
+}
+
 export function mountAdmin(view, initialTab) {
   const note = banner();
-  const tabs = el("nav", { class: "tabs" });
   const panel = el("div", { class: "admin-body" });
+  const nav = el("nav", { class: "admin-nav", dataset: { role: "admin-nav" } });
+  const side = el("aside", { class: "admin-side", dataset: { role: "admin-side" } });
   // 条目 12：顶部固定的「返回播放」，Esc 也能回播放页
   // 「返回播放」不再放这里：顶栏已经有返回键（用户 2026-09-23 要抖音式顶栏）。Esc 快捷方式保留。
   function onBackKey(event) {
@@ -1639,18 +1658,20 @@ export function mountAdmin(view, initialTab) {
     location.hash = "#/feed";
   }
   document.addEventListener("keydown", onBackKey);
+  // ⚠️ 版块名一律**四个字**（用户 2026-10-01："所有版块改为 4 个字"：媒体根目录→媒体目录、
+  // 扫描→扫描媒体）。改名字时字数要对得上，不然左边栏一行长一行短。
   const definitions = [
-    { key: "libraries", label: "媒体库", mount: mountLibraries },
-    { key: "media", label: "媒体", mount: mountMedia },
-    { key: "series", label: "剧场", mount: mountSeriesTab },
-    { key: "roots", label: "媒体根目录", mount: mountRoots },
-    { key: "uploads", label: "待审", mount: mountUploadsTab },
-    { key: "users", label: "用户", mount: mountUsers },
-    { key: "settings", label: "注册", mount: mountSettings },
-    { key: "autoscan", label: "扫描", mount: mountAutoScan },
-    { key: "tasks", label: "任务", mount: mountTasks },
-    { key: "duplicates", label: "去重", mount: mountDuplicates },
-    { key: "system", label: "系统", mount: mountSystem },
+    { key: "libraries", label: "媒体管理", icon: "grid", mount: mountLibraries },
+    { key: "media", label: "媒体列表", icon: "play", mount: mountMedia },
+    { key: "series", label: "剧场管理", icon: "theater", mount: mountSeriesTab },
+    { key: "roots", label: "媒体目录", icon: "home", mount: mountRoots },
+    { key: "uploads", label: "上传审核", icon: "up", mount: mountUploadsTab },
+    { key: "users", label: "用户管理", icon: "person", mount: mountUsers },
+    { key: "settings", label: "注册开关", icon: "gear", mount: mountSettings },
+    { key: "autoscan", label: "扫描媒体", icon: "scan", mount: mountAutoScan },
+    { key: "tasks", label: "任务中心", icon: "clock", mount: mountTasks },
+    { key: "duplicates", label: "重复检测", icon: "clean", mount: mountDuplicates },
+    { key: "system", label: "系统信息", icon: "speed", mount: mountSystem },
   ];
   const tabButtons = new Map();
   let cleanup = null;
@@ -1661,25 +1682,56 @@ export function mountAdmin(view, initialTab) {
     activeKey = key;
     if (cleanup) { try { cleanup(); } catch (err) { /* ignore */ } cleanup = null; }
     clear(panel);
-    for (const [tabKey, node] of tabButtons) node.classList.toggle("on", tabKey === key);
+    for (const [tabKey, node] of tabButtons) {
+      node.classList.toggle("on", tabKey === key);
+      node.setAttribute("aria-current", tabKey === key ? "true" : "false");
+    }
     const definition = definitions.filter((item) => item.key === key)[0];
     if (definition) cleanup = definition.mount(panel) || null;
   }
 
   for (const definition of definitions) {
-    const tabButton = el("button", { class: "tab", type: "button", text: definition.label, onclick: () => select(definition.key) });
+    // title 就是版块名：折成图标栏时全靠它认（鼠标悬停/读屏都读得到）
+    const tabButton = el("button", {
+      class: "admin-tab", type: "button", title: definition.label,
+      dataset: { role: "admin-tab", tab: definition.key },
+      onclick: () => select(definition.key),
+    }, icon(definition.icon), el("span", { class: "admin-label", text: definition.label }));
     tabButtons.set(definition.key, tabButton);
-    tabs.append(tabButton);
+    nav.append(tabButton);
   }
+
+  // 折叠 = 只剩图标（用户 2026-10-01）。
+  let collapsed = loadNavCollapsed();
+  const toggle = el("button", {
+    class: "admin-toggle", type: "button", dataset: { role: "admin-toggle" },
+    onclick: () => {
+      collapsed = !collapsed;
+      saveNavCollapsed(collapsed);
+      paintCollapsed();
+    },
+  });
+  function paintCollapsed() {
+    clear(toggle);
+    toggle.append(icon(collapsed ? "expand" : "collapse"));
+    const text = collapsed ? "展开菜单" : "折叠菜单";
+    toggle.setAttribute("title", text);
+    toggle.setAttribute("aria-label", text);
+    side.classList.toggle("collapsed", collapsed);
+  }
+  side.append(toggle, nav);
+  paintCollapsed();
 
   // 用户 2026-09-24："管理后台页面没有返回入口" —— 顶栏只在播放页显示，后台自己带一个返回。
   const back = el("a", { class: "btn small", href: "#/me", dataset: { role: "admin-back" }, text: "← 返回「我的」" });
   view.append(el("div", { class: "admin" },
-    el("div", { class: "row" }, back),
-    note,
-    el("div", { class: "muted ", text: "剧场的新建/导入/识别/上传/管理都在「剧场」页签 " }),
-    el("div", { class: "muted" , text: "请确保添加了正确的【媒体根目录】，默认为【用户/视频】文件夹。" }),
-    tabs, panel));
+    side,
+    el("div", { class: "admin-main" },
+      el("div", { class: "row" }, back),
+      note,
+      el("div", { class: "muted", text: "剧场的新建/导入/识别/上传/管理都在「剧场管理」版块。" }),
+      el("div", { class: "muted", text: "请确保添加了正确的【媒体目录】，默认为【用户/视频】文件夹。" }),
+      panel)));
   select(tabButtons.has(initialTab) ? initialTab : "libraries");
 
   return () => {
