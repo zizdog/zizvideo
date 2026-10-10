@@ -76,8 +76,6 @@ type UserPrefs struct {
 	SeekSeconds  int
 	// AutoplayEnter = 进入首页就自动播放（用户 2026-09-24）。关掉时只显示预览帧，点了才播。
 	AutoplayEnter bool
-	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24）。默认关（保持原行为）。
-	FeedHideSeries bool
 	// PlaybackRate = 播放倍速（B5）：0.5~2.0，默认 1.0。
 	PlaybackRate float64
 }
@@ -99,11 +97,11 @@ func PlaybackRateOK(v float64) bool {
 func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
 	p := &UserPrefs{AutoplayNext: true, SeekSeconds: DefaultSeekSeconds, AutoplayEnter: true,
 		PlaybackRate: 1}
-	var loop, auto, enter, hideSeries int
+	var loop, auto, enter int
 	err := db.QueryRow(`SELECT loop_play, autoplay_next, seek_seconds, autoplay_enter,
-			feed_hide_series, playback_rate
+			playback_rate
 		FROM user_prefs WHERE user_id = ?`, userID).
-		Scan(&loop, &auto, &p.SeekSeconds, &enter, &hideSeries, &p.PlaybackRate)
+		Scan(&loop, &auto, &p.SeekSeconds, &enter, &p.PlaybackRate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, nil
 	}
@@ -111,7 +109,6 @@ func (db *DB) GetUserPrefs(userID string) (*UserPrefs, error) {
 		return nil, err
 	}
 	p.LoopPlay, p.AutoplayNext, p.AutoplayEnter = loop != 0, auto != 0, enter != 0
-	p.FeedHideSeries = hideSeries != 0
 	if !PlaybackRateOK(p.PlaybackRate) {
 		p.PlaybackRate = 1 // 库里出现意外值时按 1× 走，别把视频放成 0.07 倍速
 	}
@@ -132,30 +129,29 @@ func (db *DB) SaveUserPrefs(userID string, p *UserPrefs) error {
 		rate = 1
 	}
 	_, err := db.Exec(`INSERT INTO user_prefs (user_id, loop_play, autoplay_next, seek_seconds,
-			autoplay_enter, feed_hide_series, playback_rate, updated_at)
-		VALUES (?,?,?,?,?,?,?,?)
+			autoplay_enter, playback_rate, updated_at)
+		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			loop_play = excluded.loop_play, autoplay_next = excluded.autoplay_next,
 			seek_seconds = excluded.seek_seconds, autoplay_enter = excluded.autoplay_enter,
-			feed_hide_series = excluded.feed_hide_series, playback_rate = excluded.playback_rate,
+			playback_rate = excluded.playback_rate,
 			updated_at = excluded.updated_at`,
 		userID, boolToInt(p.LoopPlay), boolToInt(p.AutoplayNext), seek,
-		boolToInt(p.AutoplayEnter), boolToInt(p.FeedHideSeries), rate, domain.NowString())
+		boolToInt(p.AutoplayEnter), rate, domain.NowString())
 	return err
 }
 
-// HideSeriesClause 是"首页不显示剧场内容"的判据（用户 2026-09-24）：
-// 只要这条 media 出现在 series_media 里就排除 —— 免得首页刷到剧集、打乱剧场「观看中」的进度。
-const HideSeriesClause = ` AND id NOT IN (SELECT media_id FROM series_media)`
+// ShortOnlyClause 是首页的**结构性**判据（用户 2026-10-10 拍板，Jellyfin 式模型）：
+// 首页/短视频流**永不出短剧库的内容** —— 一条媒体属于哪种形态由它所在的库决定，
+// 不再是"用户可切的开关"（老的 feed_hide_series 已删）。剧场只出 drama，两块各管各的。
+const ShortOnlyClause = ` AND library_id IN (SELECT id FROM media_libraries WHERE kind = 'short')`
 
 // CountPlayable counts the rows a feed scope can ever serve.
 // "文件不在了"（missing_since 非空）不算可播：它只会 404，进了 feed 就是"放不了"。
-func (db *DB) CountPlayable(scope domain.LibraryScope, hideSeries bool) (int, error) {
-	q := `SELECT COUNT(1) FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL`
+func (db *DB) CountPlayable(scope domain.LibraryScope) (int, error) {
+	q := `SELECT COUNT(1) FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL` +
+		ShortOnlyClause
 	args := []any{domain.MediaReady}
-	if hideSeries {
-		q += HideSeriesClause
-	}
 	if w, sargs := scopeWhere(scope, "library_id"); w != "" {
 		q += w
 		args = append(args, sargs...)
@@ -173,11 +169,11 @@ func (db *DB) CountPlayable(scope domain.LibraryScope, hideSeries bool) (int, er
 // repeat before the cycle is exhausted。排序在 Go 里做：媒体量级是个人库，
 // 每次翻页只读 id 列，换来的是与 SQLite 无关的确定顺序。
 func (db *DB) FeedPage(scope domain.LibraryScope, seed string, afterHash int64, afterID string,
-	limit int, hideSeries bool) ([]domain.Media, error) {
+	limit int) ([]domain.Media, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
-	ids, err := db.feedScopeIDs(scope, hideSeries)
+	ids, err := db.feedScopeIDs(scope)
 	if err != nil {
 		return nil, err
 	}
@@ -217,12 +213,10 @@ func (db *DB) FeedPage(scope domain.LibraryScope, seed string, afterHash int64, 
 
 // feedScopeIDs lists the playable ids of one scope, unordered.
 // 同 CountPlayable：missing_since 非空的行（文件已不在磁盘上）不进推荐流。
-func (db *DB) feedScopeIDs(scope domain.LibraryScope, hideSeries bool) ([]string, error) {
-	q := `SELECT id FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL`
+func (db *DB) feedScopeIDs(scope domain.LibraryScope) ([]string, error) {
+	q := `SELECT id FROM media WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL` +
+		ShortOnlyClause
 	args := []any{domain.MediaReady}
-	if hideSeries {
-		q += HideSeriesClause
-	}
 	if w, sargs := scopeWhere(scope, "library_id"); w != "" {
 		q += w
 		args = append(args, sargs...)

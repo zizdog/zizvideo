@@ -26,7 +26,6 @@ type feedSettingsBody struct {
 	AutoplayNext  bool `json:"autoplay_next"`
 	SeekSeconds   int  `json:"seek_seconds"`
 	AutoplayEnter bool `json:"autoplay_enter"`
-	FeedHideSeries bool `json:"feed_hide_series"`
 }
 
 type feedMetaBody struct {
@@ -206,19 +205,11 @@ func TestFeedSettingsPersistPerUser(t *testing.T) {
 		t.Fatalf("再打开应为 true: %+v", got)
 	}
 
-	// 「首页不显示剧场内容」也是用户级开关（用户 2026-09-24 拍板）：默认关、能开、能持久化。
-	if got.FeedHideSeries {
-		t.Fatalf("「首页不显示剧场内容」默认应为关: %+v", got)
-	}
-	_, env, _ = e.write(http.MethodPatch, "/api/v1/feed/settings", map[string]any{"feed_hide_series": true})
-	decodeInto(t, env.Data, &got)
-	if !got.FeedHideSeries {
-		t.Fatalf("打开后应为 true: %+v", got)
-	}
-	_, env, _ = e.do(http.MethodGet, "/api/v1/feed/settings", nil)
-	decodeInto(t, env.Data, &got)
-	if !got.FeedHideSeries {
-		t.Fatalf("重新读取时应持久化为 true: %+v", got)
+	// 「首页不显示剧场内容」这个用户级开关已删（用户 2026-10-10 拍板）：短视频/短剧按
+	// Jellyfin 的电影库/电视剧库分开后，"首页不出剧集"是**结构性规则**（feed 只查 kind='short'
+	// 的库），不再是用户可切的状态。这里钉住"设置里再也没有这个字段"。
+	if _, env, _ = e.do(http.MethodGet, "/api/v1/feed/settings", nil); strings.Contains(string(env.Data), "feed_hide_series") {
+		t.Fatalf("feed_hide_series 应当已经从设置里彻底消失: %s", env.Data)
 	}
 
 	_, env, _ = e.do(http.MethodGet, "/api/v1/feed/settings", nil)

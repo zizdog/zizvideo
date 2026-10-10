@@ -1,0 +1,11 @@
+-- 0025_drop_feed_hide_series: 删掉"首页不显示剧场内容"这个用户级开关。
+--
+-- 为什么删（用户 2026-10-10 拍板）：短视频与短剧按 Jellyfin 的电影库/电视剧库分开之后，
+-- "首页永不出现剧集"成了**结构性规则**（feed 只查 kind='short' 的库），不再需要一个
+-- 用户可切、默认关（= 默认混着放）的开关 —— 少一个状态，也少一类"用户不知道为什么混着"的困惑。
+--
+-- 老库可能还有这一列；SQLite 3.35+ 支持 DROP COLUMN（本项目驱动 modernc.org/sqlite 支持）。
+-- 若该列已经不存在（全新库），这条会因为 duplicate column 之外的原因失败 —— 所以先判存在性。
+-- SQLite 没有 IF EXISTS 给 DROP COLUMN，这里用"重建表"太重，改用版本化迁移的天然幂等：
+-- 迁移只跑一次，且本迁移只对"曾经建过该列"的库生效。
+ALTER TABLE user_prefs DROP COLUMN feed_hide_series;

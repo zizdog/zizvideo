@@ -6,7 +6,7 @@ import { icon } from "./icons.js";
 
 export const FEED_SETTINGS_DEFAULTS = {
   loop_play: false, autoplay_next: true, seek_seconds: 10, autoplay_enter: true,
-  feed_hide_series: false, playback_rate: 1,
+  playback_rate: 1,
 };
 
 // 倍速档位（B5）：与后端白名单一致
@@ -24,9 +24,8 @@ export function normalizeFeedSettings(data) {
     seek_seconds: seek,
     // 用户 2026-09-24：进入首页是否自动播放（默认开；关掉时首页显示预览帧，点了才播）
     autoplay_enter: src.autoplay_enter === undefined ? FEED_SETTINGS_DEFAULTS.autoplay_enter : !!src.autoplay_enter,
-    // 用户 2026-09-24：首页不显示剧场内容（默认关）—— 免得刷到剧集打乱「观看中」的进度
-    feed_hide_series: src.feed_hide_series === undefined
-      ? FEED_SETTINGS_DEFAULTS.feed_hide_series : !!src.feed_hide_series,
+    // ⚠️ "首页不显示剧场内容"这个开关**已删**（用户 2026-10-10）：短视频/短剧分开后，
+    // 首页一律只出短视频库的内容，是结构性规则（服务端 SQL 里过滤库类型），前端不再有状态。
     // B5 播放倍速：只认白名单档位，其它值按 1×
     playback_rate: PLAYBACK_RATES.some((r) => Math.abs(r - Number(src.playback_rate)) < 0.01)
       ? Number(src.playback_rate) : FEED_SETTINGS_DEFAULTS.playback_rate,
@@ -54,7 +53,6 @@ export function loopEffective(settings) {
 export function createFeedSettingsForm(options) {
   const opts = options || {};
   const lockAutoplay = !!opts.lockAutoplay;
-  const hideSeries = el("input", { type: "checkbox" });
   const enter = el("input", { type: "checkbox" });
   const auto = el("input", { type: "checkbox" });
   const loop = el("input", { type: "checkbox" });
@@ -62,8 +60,6 @@ export function createFeedSettingsForm(options) {
   const rate = el("select", { class: "input", dataset: { role: "set-rate" } },
     ...PLAYBACK_RATES.map((r) => el("option", { value: String(r), text: rateLabel(r) })));
   const note = el("div", { class: "set-note", text: "连播开启时循环不生效" });
-  const hideSeriesRow = el("label", { class: "set-row" }, hideSeries,
-    el("span", { text: "首页不显示剧场内容" }));
   const enterRow = el("label", { class: "set-row" }, enter, el("span", { text: "进入自动播放" }));
   const autoRow = el("label", { class: "set-row" }, auto, el("span", { text: "自动播放下一个" }));
   const loopRow = el("label", { class: "set-row" }, loop, el("span", { text: "循环播放" }));
@@ -124,10 +120,8 @@ export function createFeedSettingsForm(options) {
         lockAutoplay ? null : loopRow,
         lockAutoplay ? null : autoRow,
         lockAutoplay ? null : enterRow,
-        lockAutoplay ? null : hideSeriesRow,
         lockAutoplay ? el("div", { class: "set-note", text: "剧场自动连播（不可设置）" }) : note)
     : el("div", { class: "set-form" },
-        lockAutoplay ? null : hideSeriesRow,
         lockAutoplay ? null : enterRow,
         lockAutoplay ? null : autoRow,
         lockAutoplay ? null : loopRow,
@@ -143,7 +137,6 @@ export function createFeedSettingsForm(options) {
       [loopRow, sheetRow("repeat", "循环播放", switchEl(loop), toggleOf(loop))],
       [autoRow, sheetRow("next", "自动播放下一个", switchEl(auto), toggleOf(auto))],
       [enterRow, sheetRow("play", "进入自动播放", switchEl(enter), toggleOf(enter))],
-      [hideSeriesRow, sheetRow("theater", "首页不显示剧场内容", switchEl(hideSeries), toggleOf(hideSeries))],
     ];
     // 原节点换成行式节点（顺序按上面的数组；rateSheetRow/seekRow 已在 form 里，不动）
     for (const [oldNode, newNode] of pairs) {
@@ -158,7 +151,6 @@ export function createFeedSettingsForm(options) {
 
   let last = normalizeFeedSettings(opts.settings);
 
-  hideSeries.addEventListener("change", () => emit({ feed_hide_series: hideSeries.checked }));
   rate.addEventListener("change", () => emit({ playback_rate: Number(rate.value) }));
   enter.addEventListener("change", () => emit({ autoplay_enter: enter.checked }));
   auto.addEventListener("change", () => emit({ autoplay_next: auto.checked }));
@@ -173,7 +165,6 @@ export function createFeedSettingsForm(options) {
   function paint(settings) {
     last = normalizeFeedSettings(settings || last);
     rate.value = String(last.playback_rate);
-    hideSeries.checked = !!last.feed_hide_series;
     enter.checked = !!last.autoplay_enter;
     auto.checked = !!last.autoplay_next;
     loop.checked = !!last.loop_play;
@@ -184,7 +175,7 @@ export function createFeedSettingsForm(options) {
     for (const b of rateSeg.querySelectorAll(".sheet-seg-btn")) {
       b.classList.toggle("on", Math.abs(Number(b.dataset.rate) - last.playback_rate) < 0.01);
     }
-    for (const input of [loop, auto, enter, hideSeries]) paintSwitch(input);
+    for (const input of [loop, auto, enter]) paintSwitch(input);
   }
 
   paint();

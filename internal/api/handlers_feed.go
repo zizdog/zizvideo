@@ -95,8 +95,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, perr)
 		return
 	}
-	hideSeries := feedPrefs.FeedHideSeries
-	rows, err := s.DB.FeedPage(feedScope, st.Seed, st.CursorHash, st.CursorID, limit, hideSeries)
+	rows, err := s.DB.FeedPage(feedScope, st.Seed, st.CursorHash, st.CursorID, limit)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -104,7 +103,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 	rotated := false
 	if len(rows) == 0 && st.Played > 0 {
 		st.Seed, st.CursorHash, st.CursorID, st.Played = domain.NewID("s"), 0, "", 0
-		rows, err = s.DB.FeedPage(feedScope, st.Seed, 0, "", limit, hideSeries)
+		rows, err = s.DB.FeedPage(feedScope, st.Seed, 0, "", limit)
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -132,7 +131,7 @@ func (s *Server) HandleFeedNext(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	total, err := s.DB.CountPlayable(feedScope, hideSeries)
+	total, err := s.DB.CountPlayable(feedScope)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -165,8 +164,6 @@ type feedSettingsReq struct {
 	SeekSeconds  *int  `json:"seek_seconds"`
 	// AutoplayEnter = 进入首页自动播放（用户 2026-09-24）。
 	AutoplayEnter *bool `json:"autoplay_enter"`
-	// FeedHideSeries = 首页不显示剧场内容（用户 2026-09-24 选"用户级开关"）。
-	FeedHideSeries *bool `json:"feed_hide_series"`
 	// PlaybackRate = 播放倍速（B5）：只认白名单档位。
 	PlaybackRate *float64 `json:"playback_rate"`
 }
@@ -202,9 +199,6 @@ func (s *Server) HandlePatchFeedSettings(w http.ResponseWriter, r *http.Request)
 	if req.AutoplayEnter != nil {
 		prefs.AutoplayEnter = *req.AutoplayEnter
 	}
-	if req.FeedHideSeries != nil {
-		prefs.FeedHideSeries = *req.FeedHideSeries
-	}
 	if req.PlaybackRate != nil && storage.PlaybackRateOK(*req.PlaybackRate) {
 		prefs.PlaybackRate = *req.PlaybackRate
 	}
@@ -225,7 +219,6 @@ func feedSettingsBody(p *storage.UserPrefs) map[string]any {
 		"seek_seconds":   p.SeekSeconds,
 		"autoplay_enter": p.AutoplayEnter,
 		// 首页是否排除剧场内容（用户级开关）
-		"feed_hide_series": p.FeedHideSeries,
 		// 播放倍速（B5）：界面按这个显示当前档位
 		"playback_rate": p.PlaybackRate,
 	}

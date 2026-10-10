@@ -37,14 +37,15 @@ func seedFeedMedia(t *testing.T, db *DB, libID string, n int) map[string]bool {
 }
 
 // collectFeed walks one cycle and returns the ids in visit order.
-// hideSeries=true 对应"首页不显示剧场内容"这个用户级开关（用户 2026-09-24）。
-func collectFeed(t *testing.T, db *DB, scope domain.LibraryScope, seed string, limit int, hideSeries bool) []string {
+// 首页现在**结构性地**只出短视频库的内容（用户 2026-10-10 的 Jellyfin 式模型），
+// 老的 feed_hide_series 用户级开关已删。
+func collectFeed(t *testing.T, db *DB, scope domain.LibraryScope, seed string, limit int) []string {
 	t.Helper()
 	out := []string{}
 	var hash int64
 	id := ""
 	for guard := 0; guard < 200; guard++ {
-		rows, err := db.FeedPage(scope, seed, hash, id, limit, hideSeries)
+		rows, err := db.FeedPage(scope, seed, hash, id, limit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,7 +84,7 @@ func TestFeedPageVisitsEachItemOncePerCycle(t *testing.T) {
 	}
 	want := seedFeedMedia(t, db, lib.ID, 7)
 
-	got := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-1", 3, false)
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-1", 3)
 	if len(got) != len(want) {
 		t.Fatalf("一轮覆盖 %d 条, 期望 %d", len(got), len(want))
 	}
@@ -100,7 +101,7 @@ func TestFeedPageVisitsEachItemOncePerCycle(t *testing.T) {
 		}
 	}
 	// 换 seed 重开一轮，仍然覆盖全部（只是顺序不同）
-	if again := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-2", 3, false); len(again) != len(want) {
+	if again := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-2", 3); len(again) != len(want) {
 		t.Fatalf("新 seed 一轮覆盖 %d 条, 期望 %d", len(again), len(want))
 	}
 }
@@ -126,7 +127,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 2, false)
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 2)
 	if len(got) != 2 {
 		t.Fatalf("feed = %d 条, 期望 2（缺失那条必须被排除），得到 %v", len(got), got)
 	}
@@ -135,7 +136,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 			t.Fatalf("缺失记录 %s 仍然进了 feed", gone)
 		}
 	}
-	n, err := db.CountPlayable(domain.LibraryScope{All: true}, false)
+	n, err := db.CountPlayable(domain.LibraryScope{All: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestFeedExcludesMissingRows(t *testing.T) {
 	if err := db.ClearMissing(gone); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := db.CountPlayable(domain.LibraryScope{All: true}, false); n != 3 {
+	if n, _ := db.CountPlayable(domain.LibraryScope{All: true}); n != 3 {
 		t.Fatalf("文件回来后 CountPlayable = %d, 期望 3", n)
 	}
 }
@@ -272,10 +273,10 @@ func TestFeedPageScopeFiltersLibrary(t *testing.T) {
 	seedFeedMedia(t, db, libA.ID, 3)
 	seedFeedMedia(t, db, libB.ID, 2)
 
-	if got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 4, false); len(got) != 5 {
+	if got := collectFeed(t, db, domain.LibraryScope{All: true}, "s", 4); len(got) != 5 {
 		t.Fatalf("全部库 = %d 条, 期望 5", len(got))
 	}
-	scoped := collectFeed(t, db, domain.LibraryScope{IDs: map[string]bool{libA.ID: true}}, "s", 4, false)
+	scoped := collectFeed(t, db, domain.LibraryScope{IDs: map[string]bool{libA.ID: true}}, "s", 4)
 	if len(scoped) != 3 {
 		t.Fatalf("库 A = %d 条, 期望 3", len(scoped))
 	}
@@ -290,62 +291,68 @@ func TestFeedPageScopeFiltersLibrary(t *testing.T) {
 	}
 }
 
-// 门禁（用户 2026-09-22 明确）：普通视频 feed 的范围与顺序不受剧场影响 ——
-// 加入剧场的某一集仍在本轮里，且 (scope, seed) 的顺序一字不变。
-func TestFeedOrderIgnoresSeriesMembership(t *testing.T) {
+// 门禁（用户 2026-10-10 拍板，Jellyfin 式模型）：首页**结构性地**只出短视频库的内容。
+//
+//	· 形态由**库类型**决定，不再看"这条有没有被剧场引用"（老的 feed_hide_series 开关已删）；
+//	· 短剧库里的媒体（哪怕还没归入任何剧）也**永不**出现在首页；
+//	· 短视频库里的媒体即使被挂进某个剧，顺序与集合也不受影响（库里没有剧这个概念）。
+func TestFeedOnlyServesShortLibraries(t *testing.T) {
 	db := openFeedDB(t)
-	lib := newLib("lib_f", "F", "/tmp/f")
-	if err := db.CreateLibrary(lib); err != nil {
+	shortLib := newLib("lib_short", "散片库", "/tmp/short")
+	if err := db.CreateLibrary(shortLib); err != nil {
 		t.Fatal(err)
 	}
-	want := seedFeedMedia(t, db, lib.ID, 5)
-
-	before := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, false)
-	if len(before) != len(want) {
-		t.Fatalf("加入剧场前一轮覆盖 %d 条, 期望 %d", len(before), len(want))
-	}
-
-	series := &domain.Series{ID: domain.NewID("ser"), Title: "剧场"}
-	if err := db.CreateSeries(series); err != nil {
+	drama := newLib("lib_drama", "短剧库", "/tmp/drama")
+	drama.Kind = domain.KindDrama
+	if err := db.CreateLibrary(drama); err != nil {
 		t.Fatal(err)
 	}
-	inSeries := before[0]
-	if _, err := db.AddSeriesMedia(series.ID, []SeriesMediaInput{{MediaID: inSeries}}); err != nil {
-		t.Fatal(err)
-	}
+	shortWant := seedFeedMedia(t, db, shortLib.ID, 5)
+	_ = seedFeedMedia(t, db, drama.ID, 4) // 短剧库的内容：一条都不许进首页
 
-	after := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, false)
-	if len(after) != len(want) {
-		t.Fatalf("加入剧场后一轮覆盖 %d 条, 期望 %d（剧集不许被 feed 排除）", len(after), len(want))
+	got := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 10)
+	if len(got) != len(shortWant) {
+		t.Fatalf("首页一轮覆盖 %d 条，期望 %d（只出短视频库）", len(got), len(shortWant))
 	}
-	seen := map[string]bool{}
-	for i, id := range after {
-		seen[id] = true
-		if id != before[i] {
-			t.Fatalf("剧场成员改变了 feed 的种子随机顺序: before=%v after=%v", before, after)
+	for _, id := range got {
+		if !shortWant[id] {
+			t.Fatalf("首页里出现了短剧库的媒体 %s", id)
 		}
 	}
-	if !seen[inSeries] {
-		t.Fatalf("已加入剧场的那一集 %s 必须仍在 feed 的 id 集合里", inSeries)
-	}
-
-	// 同一个剧场成员，在"首页不显示剧场内容"打开后必须被排除（用户 2026-09-24 的用户级开关）。
-	hidden := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 2, true)
-	if len(hidden) != len(want)-1 {
-		t.Fatalf("打开开关后一轮覆盖 %d 条, 期望 %d（只排除那一条剧集）", len(hidden), len(want)-1)
-	}
-	for _, id := range hidden {
-		if id == inSeries {
-			t.Fatalf("打开开关后剧集 %s 仍在 feed 里", inSeries)
-		}
-	}
-	// 总数判据（首页空态/换轮判断）也必须跟着开关走，否则游标会提前换轮。
-	n, err := db.CountPlayable(domain.LibraryScope{All: true}, true)
+	n, err := db.CountPlayable(domain.LibraryScope{All: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != len(want)-1 {
-		t.Fatalf("打开开关后 CountPlayable = %d, 期望 %d", n, len(want)-1)
+	if n != len(shortWant) {
+		t.Fatalf("CountPlayable = %d，期望 %d（短剧库不计入首页总数，否则游标会提前换轮）", n, len(shortWant))
+	}
+	// 短剧库范围内的首页为空（前台切到该库时如实空态，而不是混着放剧集）
+	if n, err := db.CountPlayable(domain.LibraryScope{IDs: map[string]bool{drama.ID: true}}); err != nil {
+		t.Fatal(err)
+	} else if n != 0 {
+		t.Fatalf("短剧库范围的可播数应为 0，实际 %d", n)
+	}
+	// 剧场成员身份不再影响首页（形态只看库类型）：把短视频库里的一条挂进剧，首页不变
+	series := &domain.Series{ID: domain.NewID("ser"), Title: "剧", LibraryID: drama.ID}
+	if err := db.CreateSeries(series); err != nil {
+		t.Fatal(err)
+	}
+	var anyShort string
+	for id := range shortWant {
+		anyShort = id
+		break
+	}
+	if _, err := db.AddSeriesMedia(series.ID, []SeriesMediaInput{{MediaID: anyShort}}); err != nil {
+		t.Fatal(err)
+	}
+	again := collectFeed(t, db, domain.LibraryScope{All: true}, "seed-fixed", 10)
+	if len(again) != len(got) {
+		t.Fatalf("把短视频库的一条挂进剧场后首页条数变了：%d → %d", len(got), len(again))
+	}
+	for i := range again {
+		if again[i] != got[i] {
+			t.Fatalf("剧场成员身份改变了首页顺序: before=%v after=%v", got, again)
+		}
 	}
 }
 
