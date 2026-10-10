@@ -3,7 +3,9 @@ package storage
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/zizdog/zizvideo/internal/domain"
 	"github.com/zizdog/zizvideo/migrations"
@@ -480,5 +482,23 @@ func TestListProgressReturnsFullMediaRow(t *testing.T) {
 	}
 	if *ref != got {
 		t.Fatalf("两条路径返回的 Media 不一致：\n单条=%+v\n历史=%+v", *ref, got)
+	}
+}
+
+// TestTruncateKeepsValidUTF8：备注里存中文（转码失败原因就是中文）时，
+// 按 byte 截断会切裂多字节字符，写进库就是非法 UTF-8（界面显示成 U+FFFD）——审计 P3。
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	long := strings.Repeat("转码失败原因很长", 50) // 每字 3 字节
+	for _, n := range []int{1, 2, 5, 29, 30, 300} {
+		got := truncate(long, n)
+		if len(got) > n {
+			t.Fatalf("截断后超过上限：n=%d len=%d", n, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("截断产生了非法 UTF-8：n=%d %q", n, got)
+		}
+	}
+	if got := truncate("短", 1); got != "" {
+		t.Fatalf("1 字节连一个完整 rune 都放不下，应返回空串，实际 %q", got)
 	}
 }

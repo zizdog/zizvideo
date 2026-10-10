@@ -181,19 +181,27 @@ func (db *DB) GetLoginState(username string) (LoginState, error) {
 
 // RegisterLoginFailure increments the counter and locks the account once the
 // threshold is reached; the lock duration doubles per extra failure.
+//
+// ⚠️ 计数器走**单条原子自增**（2026-10-10 审计）：老实现是 SELECT 读、Go 里 +1、
+// 再 UPDATE 写回 —— 并发失败登录会丢更新，锁定阈值被稀释（暴力破解者用并发把
+// 5 次窗口拖长）。这里在 SQL 里 `failed_attempts + 1`，并用 RETURNING 拿回真实值。
 func (db *DB) RegisterLoginFailure(id string, threshold int, window time.Duration) error {
 	var attempts int
-	if err := db.QueryRow(`SELECT failed_attempts FROM users WHERE id = ?`, id).Scan(&attempts); err != nil {
+	err := db.QueryRow(`UPDATE users SET failed_attempts = failed_attempts + 1, updated_at = ?
+		WHERE id = ? RETURNING failed_attempts`, domain.NowString(), id).Scan(&attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
 		return err
 	}
-	attempts++
-	var locked any
-	if attempts >= threshold {
-		mult := 1 << min(attempts-threshold, 4)
-		locked = domain.FormatTime(time.Now().Add(window * time.Duration(mult)))
+	if attempts < threshold {
+		return nil
 	}
-	_, err := db.Exec(`UPDATE users SET failed_attempts = ?, locked_until = ?, updated_at = ?
-		WHERE id = ?`, attempts, locked, domain.NowString(), id)
+	mult := 1 << min(attempts-threshold, 4)
+	locked := domain.FormatTime(time.Now().Add(window * time.Duration(mult)))
+	_, err = db.Exec(`UPDATE users SET locked_until = ?, updated_at = ? WHERE id = ?`,
+		locked, domain.NowString(), id)
 	return err
 }
 

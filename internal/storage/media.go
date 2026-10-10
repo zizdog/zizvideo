@@ -3,8 +3,8 @@ package storage
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/zizdog/zizvideo/internal/domain"
 )
@@ -529,14 +529,21 @@ func escapeLike(s string) string {
 	return string(out)
 }
 
+// truncate 按 **rune 边界**截断：老实现按 byte 切，中文备注正好卡在多字节字符中间时
+// 会写进非法 UTF-8（JSON 编码成 U+FFFD，界面出现乱码方块）—— 2026-10-10 审计。
 func truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
+	// 退到下一个 rune 的起点：s[n] 是续字节（10xxxxxx）说明 n 切在字符中间。
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
 	return s[:n]
 }
-
-var _ = fmt.Sprintf
 
 // UpdateMediaLoudness 记下一次响度测量结果（0 = 还没量过；量失败也写 0，不要写垃圾值）。
 // 单独一个方法而不是塞进 UpdateMediaProbe：量响度是"第一次播时才做"的后台步骤，
