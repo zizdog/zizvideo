@@ -40,6 +40,32 @@ case "$ARCH" in
   *) echo "!! --arch 只支持 arm64/amd64/both" >&2; exit 2 ;;
 esac
 
+# 与 tools/check-release-dir.sh 同一规则：版本目录的上一级
+STAMP="$ROOT/dist/apps/zizvideo/.linux-verified.json"
+
+# record_verified <arch> <二进制路径>：把 sha256 + 时间戳并进 stamp（同 arch 覆盖）
+record_verified() {
+  python3 - "$STAMP" "$1" "$2" <<'PYR' 2>/dev/null || return 0
+import hashlib, json, os, sys, time
+stamp, arch, path = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {}
+if os.path.exists(stamp):
+    try:
+        with open(stamp) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+with open(path, "rb") as f:
+    digest = hashlib.sha256(f.read()).hexdigest()
+data.setdefault("verified", {})[arch] = {"sha256": digest, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+data["version"] = os.path.basename(os.path.dirname(path)).replace("zizvideo-", "") or data.get("version", "")
+os.makedirs(os.path.dirname(stamp), exist_ok=True)
+with open(stamp, "w") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PYR
+}
+
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); printf '  ✓ %s\n' "$*"; }
 bad() { FAIL=$((FAIL + 1)); printf '  ✗ %s\n' "$*"; }
@@ -143,6 +169,9 @@ for arch in "${ARCHS[@]}"; do
   fi
   ver_in_log="$(docker logs "$name" 2>&1 | grep -o '"version":"[^"]*"' | head -1)"
   ok "发布件在真 Linux 上跑起来了（/readyz HTTP ${code}；${ver_in_log}）"
+  # 记证据：**这一份字节**（sha256）在真 Linux 上起过服务。发布前自检会拿它对账，
+  # 免得"发布件换了但没人再验过"这种最危险的漂移（stamp 与产物不同源就该提示）。
+  record_verified "$arch" "$BIN" >/dev/null 2>&1 || note "（证据文件没写成：${STAMP}）"
   case "$(cat "$WORK/readyz.json" 2>/dev/null)" in
     *'"db":{"ok":true'*|*'"db": {"ok": true'*) ok "容器里数据库正常（SQLite 迁移在 Linux 上跑通）" ;;
     *) note "readyz 里没读到 db ok（老版本字段？）" ;;

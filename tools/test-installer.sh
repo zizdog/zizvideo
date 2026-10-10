@@ -1342,6 +1342,40 @@ case "$crout" in
   *"latest"*) ok "顶层 latest 与版本目录不符时自检如实报错" ;;
   *) bad "latest 不符没有被报出来：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
 esac
+# stamp 对账：把"这一份字节在真 Linux 上验过"变成可核对的证据（发版前必须能答"验过没"）
+python3 - "$FAKE/rel/v9.9.9" "$FAKE/rel/.linux-verified.json" <<'PYS'
+import hashlib, json, os, sys
+vdir, stamp = sys.argv[1], sys.argv[2]
+data = {"version": "9.9.9", "verified": {}}
+for arch in ("amd64", "arm64"):
+    p = os.path.join(vdir, "zizvideo_9.9.9_linux_" + arch)
+    with open(p, "rb") as f:
+        data["verified"][arch] = {"sha256": hashlib.sha256(f.read()).hexdigest(), "at": "2026-01-01T00:00:00Z"}
+json.dump(data, open(stamp, "w"))
+PYS
+crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
+case "$crstamp" in
+  *"这一份字节**在真 Linux 上验过"*|*"在真 Linux 上验过"*) ok "stamp 相符时自检报「这一份字节在真 Linux 上验过」" ;;
+  *) bad "stamp 相符时没报验过：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
+esac
+python3 - "$FAKE/rel/.linux-verified.json" <<'PYS2'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["verified"]["arm64"]["sha256"] = "0" * 64
+json.dump(d, open(p, "w"))
+PYS2
+crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
+case "$crstamp" in
+  *"与当前产物不符"*) ok "stamp 与产物不同源时提示「产物换过」（最危险的漂移）" ;;
+  *) bad "stamp 不符时没提示：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
+esac
+rm -f "$FAKE/rel/.linux-verified.json"
+crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
+case "$crstamp" in
+  *"从没在真 Linux 上跑过"*) ok "没有 stamp 时明确说「从没在真 Linux 上跑过」" ;;
+  *) bad "没有 stamp 时的提示不清：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
+esac
 rm -rf "$FAKE"
 # 真实 dist（存在就顺手验一遍；不存在不阻塞）
 if [ -d "$ROOT/dist/apps/zizvideo/$RELVER" ]; then

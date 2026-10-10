@@ -125,6 +125,34 @@ else
   bad "缺 $PARENT/linux.json（Linux/飞牛安装器靠它挑包）"
 fi
 
+hdr "Linux 产物是否**真在 Linux 上跑过**（stamp 对账）"
+# 放在**版本目录的上一级**（真实布局 = dist/apps/zizvideo/.linux-verified.json；门禁的假布局同理）
+STAMP="$(dirname "$DIR")/.linux-verified.json"
+if [ -f "$STAMP" ]; then
+  mismatched=""
+  for pair in "amd64" "arm64"; do
+    set -- $pair
+    f="$DIR/zizvideo_${VER}_linux_$1"
+    [ -f "$f" ] || continue
+    got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$f")"
+    want="$(python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(""); raise SystemExit
+print(((d.get("verified") or {}).get(sys.argv[2]) or {}).get("sha256") or "")' "$STAMP" "$1")"
+    if [ -n "$want" ] && [ "$want" = "$got" ]; then
+      ok "linux/$1 的**这一份字节**在真 Linux 上验过（sha256 ${got:0:12}…）"
+    else
+      mismatched="$mismatched linux/$1"
+      printf '  ⚠️ linux/%s 没在真 Linux 上验过（stamp 里%s）—— 发之前跑 `make linux-verify`\n' \
+        "$1" "$([ -n "$want" ] && echo "的 sha256 与当前产物不符（产物换过）" || echo "没有记录")"
+    fi
+  done
+else
+  printf '  ⚠️ 没有 %s —— Linux 产物**从没在真 Linux 上跑过**（有 docker 的机器上跑 `make linux-verify`）\n' "$(basename "$STAMP")"
+fi
+
 hdr "安卓产物"
 APK="$(ls -1 "$DIR"/zizvideo-android-*.apk 2>/dev/null | head -1 || true)"
 if [ -n "$APK" ] && [ -f "$PARENT/android.json" ]; then
