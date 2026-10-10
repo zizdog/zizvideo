@@ -129,6 +129,22 @@ PYI
 )"
   [ "$dim" = "$2" ] && ok "$1 是 ${2}x${2}" || bad "$1 是 ${dim}，应为 $2"
 done
+# 入口引用的图标必须在包里、且尺寸对（入口写的是 images/icon_{0}.png，fnOS 用 64/256 替换 {0}）
+for spec in "64 64" "256 256"; do
+  set -- $spec
+  icon="$APPROOT/$uidir/images/icon_$1.png"
+  if [ -f "$icon" ]; then
+    dim="$(python3 - "$icon" <<'PYI2'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+print(struct.unpack(">II", data[16:24])[0] if data[:8] == b"\x89PNG\r\n\x1a\n" else "notpng")
+PYI2
+)"
+    [ "$dim" = "$2" ] && ok "入口图标 icon_${1}.png 是 ${2}x${2}" || bad "入口图标 icon_$1.png 是 ${dim}，应为 $2"
+  else
+    bad "入口引用的图标不在包里：$uidir/images/icon_$1.png"
+  fi
+done
 if grep -q '"run-as"[[:space:]]*:[[:space:]]*"package"' "$WORK/config/privilege"; then
   ok "config/privilege 是 run-as=package（最小权限）"
 else

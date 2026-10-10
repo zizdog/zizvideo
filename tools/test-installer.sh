@@ -571,6 +571,53 @@ good="$(cat "$T5/etc/config.json")"
 t5_run upgrade_callback >/dev/null 2>&1
 [ "$good" = "$(cat "$T5/etc/config.json")" ] && ok "upgrade_callback 不覆盖正常配置" || bad "upgrade_callback 改动了正常配置"
 rm -rf "$T5"
+# 升级的安全网：upgrade_init 停服务；upgrade_callback 备份数据库（同版本不重复、只留最近 2 份、
+# 非 SQLite 不备）。官方要求"升级前备份或验证可回滚数据"——没有这条，坏升级就没法回退。
+T6="$(mktemp -d)"; mkdir -p "$T6/var" "$T6/app/bin"
+printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$T6/app/bin/zizvideo"; chmod 0755 "$T6/app/bin/zizvideo"
+python3 - "$T6/var/zizvideo.db" <<'PYD'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1]); c.execute("create table t(x)"); c.commit(); c.close()
+PYD
+orig_sha="$(shasum -a 256 "$T6/var/zizvideo.db" | awk '{print $1}')"
+t6_run() { TRIM_APPDEST="$T6/app" TRIM_PKGETC="$T6/etc" TRIM_PKGVAR="$T6/var" TRIM_SERVICE_PORT=7799 \
+  TRIM_APPVER="$1" sh "$FNOS/cmd/main" "$2" 2>&1; }
+# ① upgrade_init 要把正在跑的服务停掉
+t6_run "" start >/dev/null 2>&1 || true
+t6_run "" upgrade_init >/dev/null 2>&1 || true
+if [ -f "$T6/var/zizvideo.pid" ] && kill -0 "$(cat "$T6/var/zizvideo.pid" 2>/dev/null)" 2>/dev/null; then
+  bad "upgrade_init 之后服务还在跑（换二进制时旧进程还在）"
+else
+  ok "upgrade_init 停掉了服务（数据库静止，备份才可信）"
+fi
+# ② upgrade_callback 备份数据库，内容与原库逐字节一致
+t6_run 1.0.0 upgrade_callback >/dev/null 2>&1
+bk="$T6/var/zizvideo.db.pre-upgrade.1.0.0"
+if [ -f "$bk" ] && [ "$(shasum -a 256 "$bk" | awk '{print $1}')" = "$orig_sha" ]; then
+  ok "upgrade_callback 备份的数据库与原库逐字节一致"
+else
+  bad "升级备份缺失或内容不符：$bk"
+fi
+# ③ 同版本重复升级不重复备（幂等），且不动原库
+t6_run 1.0.0 upgrade_callback >/dev/null 2>&1
+cnt1="$(ls -1 "$T6/var"/zizvideo.db.pre-upgrade.1.0.0 2>/dev/null | wc -l | tr -d ' ')"
+[ "$cnt1" = "1" ] && ok "同版本重复升级不重复备份（幂等）" || bad "同版本产生了 $cnt1 份备份"
+# ④ 只保留最近 2 份（老 NAS 卷小，别把数据目录撑爆）
+for v in 1.0.1 1.0.2 1.0.3; do t6_run "$v" upgrade_callback >/dev/null 2>&1; done
+left="$(ls -1 "$T6/var"/zizvideo.db.pre-upgrade.* 2>/dev/null | wc -l | tr -d ' ')"
+[ "$left" = "2" ] && ok "升级备份只保留最近 2 份（旧份自动清理）" || bad "备份剩了 $left 份（应为 2）"
+# ⑤ 不是 SQLite 的东西不许当备份（也不许因此让升级失败）
+printf 'not a db\n' >"$T6/var/zizvideo.db"
+if t6_run 2.0.0 upgrade_callback >/dev/null 2>&1; then
+  if [ -f "$T6/var/zizvideo.db.pre-upgrade.2.0.0" ]; then
+    bad "非 SQLite 文件被当成数据库备份了"
+  else
+    ok "非 SQLite 文件不备份且升级不失败（不把不确定的东西当库）"
+  fi
+else
+  bad "遇到非 SQLite 的库时 upgrade_callback 失败了（应当跳过备份但继续）"
+fi
+rm -rf "$T6"
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then

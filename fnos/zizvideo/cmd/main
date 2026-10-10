@@ -234,6 +234,41 @@ PYEOF
   return 0
 }
 
+# 升级前把数据库备份成可回滚的一份（官方要求"升级前备份或验证可回滚数据"）。
+#   · 只在库看起来是 SQLite（有 magic 头）时才备 —— 不是库的东西不要往备份目录里塞；
+#   · 同一版本重复升级**不重复备**（幂等，也省空间）；
+#   · 只保留最近 2 份（老 NAS 的卷可能很小，别把数据目录撑爆）；
+#   · 备份失败**不算升级失败**（升级本身可能没问题），但必须如实说 —— 不许静默。
+backup_database() {
+  DB="$TRIM_PKGVAR/zizvideo.db"
+  [ -f "$DB" ] || return 0
+  if [ ! -s "$DB" ]; then
+    printf '数据库是 0 字节，跳过备份：%s\n' "$DB"
+    return 0
+  fi
+  head_bytes="$(dd if="$DB" bs=16 count=1 2>/dev/null | tr -d '\0')"
+  case "$head_bytes" in
+    "SQLite format 3") : ;;
+    *) printf '数据库头不像 SQLite，跳过备份（不把不确定的东西当库）：%s\n' "$DB"; return 0 ;;
+  esac
+  dest="$TRIM_PKGVAR/zizvideo.db.pre-upgrade.${TRIM_APPVER:-unknown}"
+  if [ -f "$dest" ]; then
+    printf '这一版的升级备份已经存在，跳过：%s\n' "$dest"
+    return 0
+  fi
+  if cp -p "$DB" "$dest" 2>/dev/null && [ -s "$dest" ]; then
+    printf '已备份数据库：%s（升级出问题可以拿它回滚；原库没动）\n' "$dest"
+  else
+    printf '备份数据库失败：%s（升级继续，但请自己留意数据）\n' "$dest" >&2
+    rm -f "$dest" 2>/dev/null || true
+  fi
+  # 只保留最近 2 份（按修改时间）
+  ls -1t "$TRIM_PKGVAR"/zizvideo.db.pre-upgrade.* 2>/dev/null | tail -n +3 | while read -r old; do
+    rm -f "$old" && printf '已清理更早的升级备份：%s\n' "$old"
+  done
+  return 0
+}
+
 # 安装/升级/卸载钩子（官方要求幂等；卸载**不擅自删用户数据**）
 case "${1:-}" in
   install_callback)
@@ -243,6 +278,11 @@ case "${1:-}" in
       fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
     write_config_if_missing
     merge_media_roots
+    exit 0 ;;
+  upgrade_init)
+    # 升级前先停服务：① 避免"二进制换了但旧进程还在跑"；② 让数据库处于静止状态，
+    # upgrade_callback 才敢做"可回滚的备份"（正在写的时候拷出来的库是不可信的）。
+    "$0" stop >/dev/null 2>&1 || true
     exit 0 ;;
   upgrade_callback)
     # 升级：**不覆盖用户配置**，只做兼容检查与幂等迁移；配置坏了先备份再重建（可回滚）。
@@ -258,6 +298,7 @@ case "${1:-}" in
       write_config_if_missing
     fi
     merge_media_roots
+    backup_database       # 升级前把数据库备份成可回滚的一份（官方要求）
     exit 0 ;;
   uninstall_init)
     "$0" stop >/dev/null 2>&1 || true
