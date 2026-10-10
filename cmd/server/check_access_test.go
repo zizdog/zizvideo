@@ -107,3 +107,45 @@ func TestCheckAccessCLI(t *testing.T) {
 		}
 	}
 }
+
+// probeFDA 必须**诚实**：哨兵读得到时也不能断言"已授予"（本机实测过假阳性风险：
+// 系统 TCC.db 在没有 FDA 的普通进程里也可能读得到），读不到时要明说"很可能未授予"，
+// 哨兵都不存在时要如实说"无法判定"而不是猜。
+func TestProbeFDAIsHonest(t *testing.T) {
+	dir := t.TempDir()
+	readable := filepath.Join(dir, "canary-readable")
+	if err := os.WriteFile(readable, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	denied := filepath.Join(dir, "canary-denied")
+	if err := os.WriteFile(denied, []byte("x"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		canaries []string
+		want     bool
+		wantIn   string
+	}{
+		{"读得到也不说死", []string{readable}, true, "通常说明"},
+		{"读不到要明说", []string{denied}, false, "很可能未授予"},
+		{"哨兵不存在就说无法判定", []string{filepath.Join(dir, "nope")}, false, "无法判定"},
+	}
+	for _, c := range cases {
+		got := probeFDA(c.canaries)
+		if got.Readable != c.want {
+			t.Fatalf("%s: readable=%v 期望 %v（%+v）", c.name, got.Readable, c.want, got)
+		}
+		if !strings.Contains(got.Reason, c.wantIn) {
+			t.Fatalf("%s: 说明里应含 %q，实际 %q", c.name, c.wantIn, got.Reason)
+		}
+		if got.Mode != "fda" {
+			t.Fatalf("%s: mode 应为 fda，实际 %q", c.name, got.Mode)
+		}
+	}
+	// 多个哨兵里有一个读得到就算通过（顺序无关）
+	multi := probeFDA([]string{denied, readable})
+	if !multi.Readable || multi.Path != readable {
+		t.Fatalf("应取到能读的那个哨兵：%+v", multi)
+	}
+}

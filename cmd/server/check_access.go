@@ -26,23 +26,47 @@ type accessOut struct {
 	Path     string `json:"path"`
 	Readable bool   `json:"readable"`
 	Reason   string `json:"reason,omitempty"`
+	// Mode 只在"探测完全磁盘访问权限"时有值（"fda"）。面板/脚本读的仍是 readable，
+	// 多出来的字段对老解析器无害（它只找 readable 那行）。
+	Mode string `json:"mode,omitempty"`
 }
 
-// runCheckAccess handles `zizvideo check-access <绝对路径> [--config <file>]`:
-// 面板「权限」页的自检口 —— 让**面板的弹窗由 zizvideo 自己的签名身份触发**，
-// 回答"以当前用户身份到底读不读得到这个目录"（TCC 保护目录只有真去读才知道）。
+// fdaCanaries 是"通常只有拿到完全磁盘访问（TCC / Full Disk Access）才读得到"的哨兵路径。
 //
-// 不需要配置文件：面板调用时只传 `check-access <路径>`（`--config` 只是为了和 roots
-// 子命令同一副样子；给了也不读盘）。
+// ⚠️ 它只能当**启发式**用，绝不能当成判决（2026-10-11 实测踩到）：本机上
+// `~/Library/Application Support/com.apple.TCC/` 干脆不存在，而
+// `/Library/Application Support/com.apple.TCC/TCC.db` 在**没有 FDA 的普通进程里也可能读得到** ——
+// 于是"我读得到 ⇒ 你有权限"会是**假阳性**（比不探测更糟：安装器会以为万事大吉、跳过引导）。
+// 所以：
+//
+//	① 真正可信的判据是**去读用户关心的那个路径**（媒体根）—— 安装器就是这么用的；
+//	② 这个哨兵只用于"还没配任何媒体根"时给个**倾向性**提示，reasson 里明确写"通常说明"，
+//	   不写"已授予"。
+var fdaCanaries = []string{
+	"~/Library/Application Support/com.apple.TCC/TCC.db",
+	"~/Library/Safari/History.db",
+	"~/Library/Messages/chat.db",
+	"~/Library/Mail",
+	"/Library/Application Support/com.apple.TCC/TCC.db",
+}
+
+// runCheckAccess handles `zizvideo check-access <绝对路径>` 与 `--fda`：
+//
+//	· 带路径 = 面板「权限」页的自检口（契约见 accessOut 的说明）；
+//	· `--fda` = 给**独立部署安装器**用的"你到底有没有完全磁盘访问"探测（启发式，见 fdaCanaries）。
 func runCheckAccess(args []string) error {
 	fs := flag.NewFlagSet("check-access", flag.ContinueOnError)
 	configPath := fs.String("config", "", "配置文件路径 (JSON，可选)")
+	fda := fs.Bool("fda", false, "探测是否具备完全磁盘访问权限（TCC），而不是探测某个路径")
 	if err := fs.Parse(stripFlag(args, "--config", configPath)); err != nil {
 		return printAccess(accessOut{Reason: "参数不对：" + err.Error()})
 	}
+	if *fda {
+		return printAccess(probeFDA(defaultFDACanaries()))
+	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return printAccess(accessOut{Reason: "用法: zizvideo check-access <绝对路径>"})
+		return printAccess(accessOut{Reason: "用法: zizvideo check-access <绝对路径> 或 --fda"})
 	}
 	target := config.ResolvePath(rest[0])
 	if target == "" || !filepath.IsAbs(target) {
@@ -50,6 +74,44 @@ func runCheckAccess(args []string) error {
 	}
 	readable, reason := probeReadable(target)
 	return printAccess(accessOut{Path: target, Readable: readable, Reason: reason})
+}
+
+// defaultFDACanaries 把哨兵路径展开成绝对路径（~ 走 config.ResolvePath，与项目其它地方一致）。
+func defaultFDACanaries() []string {
+	out := make([]string, 0, len(fdaCanaries))
+	for _, p := range fdaCanaries {
+		out = append(out, config.ResolvePath(p))
+	}
+	return out
+}
+
+// probeFDA 挨个真读哨兵路径：**任意一个读得到**就算拿到了完全磁盘访问；
+// 全都存在但都读不到 ⇒ 明确说"没授权"；一个都不存在 ⇒ 如实说"无法判定"（不猜）。
+// 返回的 path 是这次实际用来判定的那个哨兵（面板/脚本会显示给用户看是哪一个）。
+func probeFDA(canaries []string) accessOut {
+	var denied string
+	for _, p := range canaries {
+		st, err := os.Stat(p)
+		if err != nil {
+			// stat 被拒（EPERM）本身就是"没权限"的证据；ENOENT 才是"用不了这个哨兵"。
+			if os.IsPermission(err) {
+				denied = p
+			}
+			continue
+		}
+		_ = st
+		if ok, _ := probeReadable(p); ok {
+			return accessOut{Path: p, Readable: true, Mode: "fda",
+				Reason: "能读受保护位置（通常说明已授予完全磁盘访问；最可靠的判据是去读你的媒体根目录）"}
+		}
+		denied = p
+	}
+	if denied != "" {
+		return accessOut{Path: denied, Readable: false, Mode: "fda",
+			Reason: "读不到受保护位置（很可能未授予完全磁盘访问）"}
+	}
+	return accessOut{Path: "", Readable: false, Mode: "fda",
+		Reason: "无法判定：可用于探测的受保护位置都不存在 —— 请在系统设置→隐私与安全性→完全磁盘访问里确认"}
 }
 
 // probeReadable 真去读一次：目录要列得出来、文件要打得开。
