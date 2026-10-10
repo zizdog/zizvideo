@@ -508,6 +508,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Makefile 目标名不许与仓库里的**目录**同名（否则 make 判定"目标已存在"直接跳过配方 ——
+# 这坑我踩了两次：`fnos` 与 `docker`。与其记着，不如让门禁盯住。）
+printf '==> Makefile 目标名 vs 同名目录\n'
+clash="$(cd "$ROOT" && awk -F: '/^[a-zA-Z][a-zA-Z0-9_-]*:/{print $1}' Makefile | sort -u | while read -r t; do
+  [ -d "$ROOT/$t" ] && printf '%s ' "$t"
+done)"
+if [ -z "$clash" ]; then
+  ok "没有目标名与同名目录冲突"
+else
+  bad "这些目标名与仓库里的目录同名（make 会跳过配方）：$clash"
+fi
+
+# ---------------------------------------------------------------------------
 # 容器部署路径（docker/）：结构 + 入口脚本 + 没有 daemon 时必须如实失败
 printf '==> 容器部署（Dockerfile / compose / 入口脚本）\n'
 if [ -f "$ROOT/docker/Dockerfile" ]; then

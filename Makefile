@@ -144,7 +144,8 @@ DEEP ?= 0
 export VERIFY_DEEP = $(DEEP)
 
 # ⚠️ 目标名不能叫 `fnos`：仓库里有个**目录** fnos/，make 会认为目标已存在而跳过配方。
-docker: ## 打容器镜像（先把静态 Linux 二进制放进构建上下文；没有 docker daemon 会如实失败）
+# ⚠️ 目标名不能叫 docker：仓库里有同名**目录** docker/，make 会认为目标已存在而跳过配方（踩过两次了）。
+docker-image: ## 打容器镜像（先把静态 Linux 二进制放进构建上下文；没有 docker daemon 会如实失败）
 	@bash tools/make-docker-image.sh --arch $(DOCKER_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 
 fpk: ## 打飞牛（fnOS）应用包：准备待打包目录 + 有 fnpack 就出 .fpk（FPK_ARCH=amd64|arm64）
