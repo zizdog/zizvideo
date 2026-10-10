@@ -90,6 +90,84 @@ func (db *DB) SeriesByTitle(title string) (*domain.Series, error) {
 	return out, err
 }
 
+// SeriesByDirPath returns the live 剧场 whose dir_path is exactly dirPath（末尾斜杠不计），
+// preferring one already bound to libraryID：上传/目录导入落下的剧可能还没记库
+// （library_id 为空），扫描器不能因此给它再建一部重名的。
+//
+// 目录改名后这里按新路径匹配不到旧剧 ⇒ 扫描器据此走"改名"那条路（设计 §3）。
+func (db *DB) SeriesByDirPath(libraryID, dirPath string) (*domain.Series, error) {
+	row := db.QueryRow(`SELECT `+seriesCols+` FROM series s
+		WHERE s.deleted_at IS NULL AND COALESCE(s.dir_path,'') <> ''
+		  AND rtrim(s.dir_path, '/') = rtrim(?, '/')
+		  AND (COALESCE(s.library_id,'') = '' OR s.library_id = ?)
+		ORDER BY CASE WHEN s.library_id = ? THEN 0 ELSE 1 END, s.created_at ASC, s.id ASC
+		LIMIT 1`, dirPath, libraryID, libraryID)
+	out, err := scanSeries(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return out, err
+}
+
+// SeriesByTitleInLibrary lists live 剧场 with an exact title that are either bound
+// to libraryID or not bound to any library yet（目录导入建的剧没记 library_id）。
+// 扫描器用它"认领"目录导入阶段建的剧，而不是新建一部重名的。
+func (db *DB) SeriesByTitleInLibrary(libraryID, title string) ([]domain.Series, error) {
+	rows, err := db.Query(`SELECT `+seriesCols+` FROM series s
+		WHERE s.deleted_at IS NULL AND s.title = ?
+		  AND (COALESCE(s.library_id,'') = '' OR s.library_id = ?)
+		ORDER BY s.created_at ASC, s.id ASC`, title, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Series{}
+	for rows.Next() {
+		s, err := scanSeries(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// LiveSeriesMemberIDs returns the live member media ids of one 剧场（软删的不算）。
+// 扫描器用它判"这批媒体是不是就是那部剧的全部成员"（目录改名识别，设计 §3）。
+func (db *DB) LiveSeriesMemberIDs(seriesID string) ([]string, error) {
+	rows, err := db.Query(`SELECT sm.media_id FROM series_media sm
+		JOIN media m ON m.id = sm.media_id AND m.deleted_at IS NULL
+		WHERE sm.series_id = ?`, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// RenameSeriesDir 把"剧目录改名"落到剧上：dir_path 指到新目录、标题换成目录名
+// （剧名 = 目录名，设计 §3）。**只动这两个字段**：id / 成员 / position / 封面全不变，
+// 所以观看进度、收藏、稍后再看都跟着保留。
+func (db *DB) RenameSeriesDir(id, dirPath, title string) error {
+	res, err := db.Exec(`UPDATE series SET dir_path = ?, title = ?, updated_at = ?
+		WHERE id = ? AND deleted_at IS NULL`, dirPath, title, domain.NowString(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // CreateSeries inserts a 剧场 row.
 func (db *DB) CreateSeries(s *domain.Series) error {
 	now := domain.NowString()
@@ -428,6 +506,45 @@ func (db *DB) RemoveSeriesMedia(seriesID, mediaID string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// RemoveSeriesMediaIDs drops several episodes in one transaction and keeps
+// positions contiguous (same rule as the single-item RemoveSeriesMedia).
+// 返回真正删掉的成员数；一个都没删（本来就不在）不算错误 —— 扫描器换剧是幂等的。
+func (db *DB) RemoveSeriesMediaIDs(seriesID string, mediaIDs []string) (int, error) {
+	if len(mediaIDs) == 0 {
+		return 0, nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	args := make([]any, 0, len(mediaIDs)+1)
+	args = append(args, seriesID)
+	ph := make([]string, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
+		ph = append(ph, "?")
+		args = append(args, id)
+	}
+	res, err := tx.Exec(`DELETE FROM series_media WHERE series_id = ? AND media_id IN (`+
+		strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	deleted, _ := res.RowsAffected()
+	if deleted == 0 {
+		_ = tx.Rollback()
+		return 0, nil
+	}
+	if err := renumberSeries(tx, seriesID); err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(deleted), nil
 }
 
 // ReorderSeries rewrites the episode order and marks every listed row as manual

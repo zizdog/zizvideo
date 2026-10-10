@@ -60,7 +60,9 @@ func (s *Scanner) Run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	}
 	s.Log.Info("扫描结束", "task_id", task.ID, "library_id", lib.ID, "status", status,
 		"total", res.total, "scanned", res.scanned, "failed", res.failed,
-		"missing", res.missing, "suspected", res.suspected, "renamed", res.renamed)
+		"missing", res.missing, "suspected", res.suspected, "renamed", res.renamed,
+		"series_created", res.series.created, "series_renamed", res.series.renamed,
+		"episodes_added", res.series.added, "episodes_moved", res.series.moved)
 }
 
 type scanResult struct {
@@ -78,6 +80,8 @@ type scanResult struct {
 	// 不标记缺失、不软删，只把看得见的入库（否则第二次扫描会软删真实记录）。
 	partial bool
 	errMsg  string
+	// series：drama 库这一轮的归剧统计（short 库恒为零值）。
+	series seriesGroupStats
 }
 
 func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Library) scanResult {
@@ -194,6 +198,12 @@ func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	if rerr != nil {
 		res.taskFailed = true
 		res.errMsg = "对账失败：" + rerr.Error() + "（本轮未完成，未做任何删除）"
+	}
+	// 归剧（设计 §3）必须在对账之后：只拿 live media 归组，软删的绝不进剧。
+	// short 库（含 kind 为空的旧数据）不跑这一步 —— 行为与今天完全一样。
+	// 对账失败时也不跑：那说明这一轮的库状态不可信，先别写归属。
+	if rerr == nil && lib.Kind == domain.KindDrama && ctx.Err() == nil {
+		res.series = s.groupSeries(ctx, lib)
 	}
 	return res
 }
