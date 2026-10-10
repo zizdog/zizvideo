@@ -125,5 +125,8 @@ publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini
 DEEP ?= 0
 export VERIFY_DEEP = $(DEEP)
 
+smoke: ## 端到端冒烟：真二进制 + 真 ffmpeg + 临时数据目录，跑一遍短视频/短剧全链路
+	@python3 tools/smoke-e2e.py
+
 verify: ## 复验线上镜像（DEEP=1 整包下载复算 sha256；不加只做快验）
 	@bash tools/publish-mirror.sh --verify-only $(if $(filter 1,$(DEEP)),--deep,)
