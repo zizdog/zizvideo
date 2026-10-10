@@ -5,13 +5,16 @@
 # 两种模式都与面板托管（cn.zizpanel.zizvideo）互斥，见 check_conflicts。
 set -euo pipefail
 
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.1.1"
 DEFAULT_MIRROR="https://mirror.zizdog.com:8888"
 DEFAULT_LABEL="com.zizvideo.server"
-# ⚠️ 面板托管的 label 只在这里出现一次，互斥检查就靠它（见 check_conflicts）：
-# **面板若改托管 label，这里必须同步**，否则两条作业会同时抢 7766（面板侧文档
-# `../zizpanel/docs/zizvideo-接入契约.md` §6.1-2 / §6.2 / §8⑨）。
+# ⚠️ 面板托管的 label：互斥检查就靠它（见 check_conflicts）。**面板改一次名，这里就要跟一次**，
+# 否则两条作业会同时抢 7766（面板侧文档 `../zizpanel/docs/zizvideo-接入契约.md` §6.1-2/§6.2/§8⑨）：
+#   · cn.zizpanel.zizvideo —— 现在的专用托管入口；
+#   · com.zizdog.zizvideo  —— 面板正在做的"声明驱动通用轨"硬编码 com.zizdog.<id>（同上前提 §6.1-2）。
+# 两个都认；将来再加新名字，往这个数组里加一项即可。
 PANEL_LABEL="cn.zizpanel.zizvideo"
+PANEL_LABELS=("$PANEL_LABEL" "com.zizdog.zizvideo")
 APP_ID="zizvideo"
 HEALTH_PATH="/healthz"
 DEFAULT_LISTEN="127.0.0.1:7766"
@@ -199,9 +202,17 @@ port_in_use() {
   fi
 }
 
+# 面板托管检测：**认一串 label**（专用入口 + 通用轨 com.zizdog.<id>），命中哪个说出来。
+# 判据两条：plist 在不在、launchctl 里跑不跑得起来（作业崩了但 plist 还在也要拦）。
+PANEL_LABEL_FOUND=""
 panel_managed() {
-  if [ -f "$SYSTEM_DAEMON_DIR/$PANEL_LABEL.plist" ]; then return 0; fi
-  if lc print "system/$PANEL_LABEL" >/dev/null 2>&1; then return 0; fi
+  local l
+  for l in "${PANEL_LABELS[@]}"; do
+    if [ -f "$SYSTEM_DAEMON_DIR/$l.plist" ] || lc print "system/$l" >/dev/null 2>&1; then
+      PANEL_LABEL_FOUND="$l"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -216,11 +227,12 @@ own_user_installed() {
 }
 
 refuse_panel() {
-  say "拒绝安装：检测到面板托管的 zizvideo（系统域 $PANEL_LABEL 正在运行）。"
+  say "拒绝安装：检测到面板托管的 zizvideo（系统域 ${PANEL_LABEL_FOUND:-$PANEL_LABEL} 正在运行）。"
   say "独立部署与面板托管互斥：两者会争同一个端口与数据目录，绝不能同时跑。"
   say "两条出路："
   say "  ① 用面板托管：在面板「应用市场 → zizvideo」里安装/使用，本脚本不参与。"
-  say "  ② 先独立装：先在面板里卸载 zizvideo，确认 \`launchctl print system/$PANEL_LABEL\` 失败后，再重跑本脚本。"
+  say "  ② 先独立装：先在面板里卸载 zizvideo，确认 \`launchctl print system/${PANEL_LABEL_FOUND:-$PANEL_LABEL}\` 失败后，再重跑本脚本。"
+  say "（面板改成通用轨后 label 可能是 ${PANEL_LABELS[*]} 里的任一个，本脚本两个都认。）"
 }
 
 refuse_other_mode() {
@@ -239,7 +251,7 @@ check_conflicts_install() {
     refuse_panel
     exit 1
   fi
-  say "互斥检查通过：系统域没有面板托管的 $PANEL_LABEL"
+  say "互斥检查通过：系统域没有面板托管的 zizvideo（认这几个 label：${PANEL_LABELS[*]}）"
   if [ "$MODE" = "system" ]; then
     if own_user_installed; then
       refuse_other_mode "--user 模式的 LaunchAgent $OTHER_PLIST"
@@ -735,7 +747,9 @@ do_install_or_upgrade() {
     if [ "$UPGRADING" = "1" ]; then
       say "端口 $port 被占用，按本作业重启处理（将在 bootout 后释放）"
     else
-      die "端口 $port 已被别的进程占用（lsof -nP -iTCP:$port -sTCP:LISTEN）；先用 --listen 换端口，或先停掉占用者"
+      die "端口 $port 已被别的进程占用（lsof -nP -iTCP:$port -sTCP:LISTEN）；先用 --listen 换端口，或先停掉占用者。
+      如果占用者是面板托管的 zizvideo（面板改成通用轨后 label 可能是 com.zizdog.zizvideo，本脚本的 label 检测未必认得出），
+      请在面板里卸载它，或确认不需要面板托管后再继续。"
     fi
   fi
 

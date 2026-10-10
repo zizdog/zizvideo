@@ -27,6 +27,36 @@ import shutil
 import sys
 import time
 
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate(rows, ver: str):
+    """写出前的自校验：**面板与独立安装器读的就是这几个字段**（改字段=破坏兼容）。
+
+    宁可让 `make release` 当场红，也不许把"装不上/校验不过"的索引发出去
+    （面板侧文档 §4.2/§4.3：`latest` 空 ⇒ 拒绝安装；`sha256` 不是 64 位小写 hex ⇒
+    拒绝装"无法校验的二进制"；独立安装器还要 `size` 做磁盘前置检查）。
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    if not ver.strip():
+        problems.append("版本号是空的（面板发现 latest 为空会拒绝安装）")
+    for row in rows:
+        name = row.get("name", "?")
+        if row.get("version") != ver:
+            problems.append("%s 的 version=%r ≠ latest=%r（面板要求两者相等）"
+                            % (name, row.get("version"), ver))
+        if row.get("arch") not in ("arm64", "amd64"):
+            problems.append("%s 的 arch=%r 不认识（面板只认 arm64/amd64 或 name 里的 darwin_<arch>）"
+                            % (name, row.get("arch")))
+        if not SHA256_RE.match(str(row.get("sha256", ""))):
+            problems.append("%s 的 sha256 不是 64 位小写 hex（面板会拒绝装这个包）" % name)
+        if int(row.get("size", 0)) <= 0:
+            problems.append("%s 的 size=%r（独立安装器拿它做磁盘前置检查，必须 >0）"
+                            % (name, row.get("size")))
+    return problems
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
@@ -49,6 +79,13 @@ def main() -> int:
         })
     if not rows:
         print("!! %s 下没有 zizvideo_%s_darwin_<arch> 产物" % (vdir, ver), file=sys.stderr)
+        return 1
+    # 自校验放在**写盘之前**：坏索引一旦发出去，面板/安装器那边报的错跟这里毫无关系（难查）
+    problems = validate(rows, ver)
+    if problems:
+        print("!! 索引自校验不通过，未写任何文件：", file=sys.stderr)
+        for p in problems:
+            print("   - " + p, file=sys.stderr)
         return 1
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     per_version = dict(rows[0])
@@ -79,6 +116,20 @@ def main() -> int:
         src = os.path.join(vdir, name)
         with open(src, "rb") as handle:
             digest = hashlib.sha256(handle.read()).hexdigest()
+        # APK 那条也自校验（App 自己读它自动更新）：版本空/sha 形状不对/0 字节都不许写出去
+        size = os.path.getsize(src)
+        apk_problems = []
+        if not appver.strip():
+            apk_problems.append("APK 版本号解析为空：" + name)
+        if not SHA256_RE.match(digest):
+            apk_problems.append("%s 的 sha256 形状不对" % name)
+        if size <= 0:
+            apk_problems.append("%s 是 0 字节" % name)
+        if apk_problems:
+            print("!! 安卓更新清单自校验不通过：", file=sys.stderr)
+            for p in apk_problems:
+                print("   - " + p, file=sys.stderr)
+            return 1
         parent = os.path.dirname(vdir)
         android_dir = os.path.join(parent, "android")
         os.makedirs(android_dir, exist_ok=True)
@@ -91,11 +142,11 @@ def main() -> int:
         with open(android_index, "w", encoding="utf-8") as handle:
             json.dump({"app": "zizvideo", "platform": "android", "version": appver,
                        "server_version": ver, "file": "android/" + name,
-                       "sha256": digest, "size": os.path.getsize(src), "published_at": stamp},
+                       "sha256": digest, "size": size, "published_at": stamp},
                       handle, ensure_ascii=False, indent=2)
             handle.write("\n")
         print("   安卓更新清单：%s（app %s，%s，%d B）" % (
-            android_index, appver, digest[:16] + "…", os.path.getsize(src)))
+            android_index, appver, digest[:16] + "…", size))
     return 0
 
 if __name__ == "__main__":

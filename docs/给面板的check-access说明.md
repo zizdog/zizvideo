@@ -82,14 +82,44 @@ sudo -n -u <真实用户> <execPath> check-access <路径>
 
 - `roots` 动词不变：`zizvideo roots list|add <绝对路径>|remove <绝对路径> [--config <file>]`，
   一行 JSON；面板的 `RootsArgs`（`registry.go:138`）照传即可。
-- `--version` 仍是 `zizvideo <版本>`；`/healthz` 返回 `ok`；`/readyz` 返回真就绪 JSON
-  （面板建议把 `/readyz` 当 `verify`、`/healthz` 只作 `health`）。
-- 注册表里 zizvideo 条目那两个**与事实不符**的常量（不属本次改动，但会影响泛化改造）：
-  `ZizvideoLabel` / `ZizvideoSigningID` 现在写的是 `cn.zizvideo.serve`，
-  而独立部署的 launchd label 与签名 identifier 都是 **`com.zizvideo.server`**、
-  面板托管 label 是 **`cn.zizpanel.zizvideo`**。条目 `Enabled=false`，无运行时影响。
+- `--version` 仍是 `zizvideo <版本>`；`/healthz` 返回 `ok`。
+
+### 6.1 建议的 `verify` / `health` 声明（照抄；字段名是你们 spec 的）
+
+`/readyz` **本来就在做正确的事**（不是需要你们改的地方）：真就绪时 **200**，任一检查不过时 **503**，
+响应体是你们的信封形状（`internal/api/api.go:182` 的 `envelope`）：
+
+```json
+{"data":{"status":"ready","checks":{"db":{"ok":true},"ffmpeg":{…},"ffprobe":{…},
+         "media_roots":{"/Users/…/Movies":"ok"},"disk":{"ok":true,"free_bytes":…}}},"meta":{},"error":null}
+```
+
+按你们的 `Probe`（`internal/plugins/spec.go:286-317`：`json` 支持点分 `json_path` + `expect`）：
+
+```json
+"verify": { "any_of": [
+  { "kind": "json", "path": "/readyz", "json_path": "data.status", "expect": "ready", "timeout": "60s" }
+]},
+"health": { "kind": "http", "path": "/healthz", "expect": "ok", "interval": "30s" }
+```
+
+- 未就绪时 `data.status == "not_ready"` 且 HTTP 503 ⇒ 探针如实失败，不是"端口在听就算好"。
+- `checks` 里 `db` / `ffmpeg` / `ffprobe` / `media_roots` / `disk` 都是 `{"ok":bool,…}`，
+  要更细就再取 `data.checks.ffmpeg.ok` 之类当 `json_path`。
+
+### 6.2 泛化轨的 label：本仓库安装器**两个都认**
+
+通用轨硬编码 `com.zizdog.<id>`（你们文档 §6.1-2）⇒ 迁移后 label 会是 **`com.zizdog.zizvideo`**。
+zizvideo 侧已经跟上：`install-zizvideo.sh` 的 `PANEL_LABELS` 同时认 `cn.zizpanel.zizvideo`
+与 `com.zizdog.zizvideo`（plist 在、或 `launchctl print` 起得来都算命中 ⇒ 拒绝独立安装）。
+另有一道**与 label 无关的兜底**：独立安装时若 7766 已被占用，直接拒绝并提示"占用者可能是
+面板托管的新 label" —— 所以即便将来又改一次名，也不会两边同时抢端口。
+（注册表里 `ZizvideoLabel`/`ZizvideoSigningID` 那组 `cn.zizvideo.serve` 仍是错的，属你们侧待改。）
 
 ## 7. 手工验证（照抄即可，两边都能跑）
+
+> 还没发版时用本仓库现编的二进制：`make build` ⇒ `./dist/zizvideo check-access <路径>`
+> （镜像上带这个动词要等 zizvideo ≥0.6.2-mvp；用旧版会踩 §5 那个坑）。
 
 ```
 # 1) 可读 / 不可读 / 不存在 —— 三行都必须是 exit 0 + 一行 JSON

@@ -14,7 +14,9 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
 无论怎么重构，下面这些都不许丢。
 
 ## 前置：二进制的真实接口（两种模式共用）
-- `cmd/server/main.go` 只认两个参数：`--config <config.json>` 和 `--version`。
+- `cmd/server/main.go` 认的参数/子命令：`--config <config.json>`、`--version`、
+  `roots list|add <绝对路径>|remove <绝对路径>`（读写同一份 config.json）、
+  `check-access <绝对路径>`（面板「权限」页的自检口，2026-10-10 加）。
   **没有** `--supervise` / `--user` / `--listen`（历史上文档写过，属于错误；`--listen` 是
   安装器的参数、也是面板 supervisor 的参数，都不是 zizvideo 的参数）。
 - **监听地址只由 config.json 的 `listen` 字段决定**（env `ZV_LISTEN` 覆盖它，
@@ -22,9 +24,15 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   zizvideo 自身**不限制回环**（`cmd/server/main.go:103` 直接把 `cfg.Listen` 交给
   `http.Server.Addr`）⇒ 想要局域网直连就写 `"listen": "0.0.0.0:7766"`。
 - `--version` 打印 `zizvideo <版本>`；`GET /healthz` 返回 ok（`internal/web/router.go:23`）。
-- `GET /readyz` 是真就绪（JSON：db/ffmpeg/ffprobe/roots/disk，`internal/api/handlers_system.go:23-45`）：
-  面板侧建议把它当 `verify` 探针、`/healthz` 只作周期 `health` —— 只证明"HTTP 活着"证明不了服务可用
-  （面板侧文档 §2.5）。
+- `GET /readyz` 是真就绪（200 = 就绪；**任一检查不过就 503**；JSON 在信封的
+  `data.status` / `data.checks`：db/ffmpeg/ffprobe/media_roots/disk）—— 面板侧建议把它当
+  `verify` 探针、`/healthz` 只作周期 `health`（面板侧文档 §2.5；声明照抄
+  `docs/给面板的check-access说明.md` §6.1）。
+- `check-access <绝对路径>`（`cmd/server/check_access.go`）：**一行紧凑 JSON**
+  `{"path","readable","reason"}`、**永远 exit 0**、不读配置/不启服务/不写盘。面板以
+  `sudo -n -u <真实用户> <二进制> check-access <路径>` 调用并逐行解析 stdout（必须是真实用户身份：
+  root 会绕过 TCC 答出不实的 true）。判据是**真读一次**（文件 open、目录 open+Readdirnames(1)），
+  不是 `os.Stat`。形状/退出码变了就是破坏面板的「权限」页 —— 门禁 `cmd/server/check_access_test.go`。
 
 ## ① 面板托管入口（走面板的 TCC 授权）
 - launchd 启动的是**面板二进制**（`/opt/zizpanel/bin/zizpanel`）：
@@ -59,11 +67,13 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   升级/卸载**默认保留**，只有 `--purge`（二次确认）才删。
 - install 的 `--listen <host:port>`（默认 `127.0.0.1:7766`）就是**写 config.json 的 `listen`**；
   `0.0.0.0:7766` = 局域网直连（首次绑非回环时 macOS 防火墙要放行）。
-- **label 是两侧共同的判据**：面板托管的作业叫 `cn.zizpanel.zizvideo`，本仓库独立部署的叫
-  `com.zizvideo.server`（plist label 与签名 identifier 都是它，`install-zizvideo.sh:9-11`）。
-  `install-zizvideo.sh` 顶部的 `PANEL_LABEL="cn.zizpanel.zizvideo"` 就是拿来判互斥的 ⇒
-  **面板若改托管 label，这里必须同步**，否则独立安装器的互斥检查失效（两条作业会抢 7766，
-  面板侧文档 §6.1-2/§6.2/§8⑨）。面板侧注册表里另有一组过时常量
+- **label 是两侧共同的判据**：面板托管的作业叫 `cn.zizpanel.zizvideo`（泛化通用轨会变成
+  `com.zizdog.zizvideo`，见面板侧文档 §6.1-2），本仓库独立部署的叫 `com.zizvideo.server`
+  （plist label 与签名 identifier 都是它，`install-zizvideo.sh:9-11`）。
+  `install-zizvideo.sh` 的 `PANEL_LABELS` 数组**把面板的两个 label 都认**（plist 在、或
+  `launchctl print` 起得来都算命中 ⇒ 拒绝独立安装），并且独立安装时还有一道与 label 无关的
+  兜底："7766 已被占用就拒绝"。**面板再改 label，往那个数组里加一项**，否则两条作业会抢 7766
+  （面板侧文档 §6.1-2/§6.2/§8⑨）。面板侧注册表里另有一组过时常量
   （`internal/permissions/registry.go` 的 `cn.zizvideo.serve`，条目 `Enabled=false`、无运行时影响），
   那是面板侧要收拾的，本仓库不用跟。
 - 版本真源在镜像：`apps/zizvideo/manifest.json`
