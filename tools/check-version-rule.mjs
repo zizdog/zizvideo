@@ -63,6 +63,13 @@ for (const t of targets) {
   }
   console.log(`   ok：${t.name} = ${t.version}`);
 }
+// 服务端两处必须是同一个版本号（原来是 Makefile:43-47 的 shell 检查，2026-10-10 并进这里：
+// 门禁只减不增 —— 同一个文件里顺手比一下，就不必在 check-run 里再多一条）。
+if (targets[0].version && targets[1].version && targets[0].version !== targets[1].version) {
+  console.error(`✗ 服务端版本号不一致：Makefile=${targets[0].version}，` +
+    `internal/api/api.go=${targets[1].version}（两处必须写成同一个）`);
+  bad++;
+}
 if (bad === 0) {
   console.log('✓ 版本号守规矩（末段 0～10，数到 10 就进前一段）');
   process.exit(0);

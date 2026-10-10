@@ -21,6 +21,15 @@ DEFAULT_LISTEN="127.0.0.1:7766"
 CRT_NAME="zizvideo-codesign.crt"
 SIGN_IDENTIFIER="$DEFAULT_LABEL"
 SYSTEM_KEYCHAIN="/Library/Keychains/System.keychain"
+# 🚨 硬编码的证书指纹（sha256 of DER）：镜像里的 .crt 必须先对上这一行，才允许导入系统信任根。
+# 为什么必须硬编码：索引 sha256 与产物同源，能写镜像的人可以同时换掉"包 + 索引 + crt"，
+#   于是无条件导入 crt = 给每台新机塞任意受信任根 CA。指纹在脚本里，镜像方改不动。
+# ⚠️ 改了证书（重签 / 换名字）必须同步改这里，否则所有新机都会拒绝导入 —— 这是有意的硬失败。
+# 取值来源（2026-10-10 本机复核）：当前发布件 dist/apps/zizvideo/0.6.3-mvp/zizvideo_0.6.3-mvp_darwin_arm64
+#   里嵌的叶证书（codesign -d --extract-certificates=cert <bin> → cert0），
+#   与 .release-key/codesign/zp-codesign.crt（CN=ZizPanel Release）同一张：
+#   openssl x509 -in zp-codesign.crt -outform der | shasum -a 256 → fd5f485a…
+EXPECTED_CRT_SHA256="fd5f485a1a7269efa65c120b02cba92576a8c176ff8a84281eda590f2e034bec"
 
 # ---------------------------------------------------------------------------
 #  仅测试用的覆盖口（生产环境一律不要设置）
@@ -31,6 +40,8 @@ SYSTEM_KEYCHAIN="/Library/Keychains/System.keychain"
 #    ZV_FAKE_SUDO=1        特权命令直接执行、不调 sudo（沙箱专用）
 #    ZV_TEST_KEYCHAIN      覆盖证书导入的钥匙串路径，默认系统钥匙串（沙箱专用）
 #    ZV_ASSUME_YES=1       非交互确认（只给 --purge 用）
+#    ZV_ALLOW_PURGE_ROOT   额外允许 --purge 删除的根（默认只允许 $HOME/Library/Application Support）
+#    ZV_LIB_ONLY=1         只定义函数、不跑 main（必须 source 本脚本；tools/test-installer.sh 用）
 # ---------------------------------------------------------------------------
 
 MIRROR="$DEFAULT_MIRROR"
@@ -43,7 +54,10 @@ MODE="system"
 ACTION="install"
 DRY_RUN=0
 LISTEN_GIVEN=0
+# ZV_FAKE_SUDO 在**加载时**就生效（不只是 main 里）：tools/test-installer.sh source 本脚本后
+# 直接调函数，若这里不认，run_priv 会退回真 sudo（铁律 1 禁止）。
 FAKE_SUDO=0
+if [ "${ZV_FAKE_SUDO:-}" = "1" ]; then FAKE_SUDO=1; fi
 TARGET_USER=""
 
 # 运行期状态（回滚用）。
@@ -64,6 +78,8 @@ EFFECTIVE_LISTEN=""
 HAVE_CRT=0
 INSTALL_STARTED=0
 INSTALL_DONE=0
+# --purge 用：**过了守门**的数据目录（print_will_delete/confirm_purge/实际删除都只认它）。
+PURGE_TARGET=""
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '警告：%s\n' "$*" >&2; }
@@ -91,6 +107,7 @@ zizvideo 独立部署安装器
   数据目录 ~/Library/Application Support/zizvideo，卸载默认保留，--purge 才删（需二次确认）。
   与面板托管互斥：系统域有 cn.zizpanel.zizvideo 时拒绝独立安装。
   签名：镜像同目录有 zizvideo-codesign.crt 时导入系统钥匙串并复核签名，外置盘完全磁盘访问授权一次跨升级有效；
+        证书指纹写死在本脚本里，对不上直接拒绝（不把来路不明的根证书装进系统）；
         镜像没有 crt 则降级为未签名部署，每次升级都要重新授权。
 EOF
 }
@@ -344,6 +361,23 @@ fetch_cert() {
   return 1
 }
 
+# 证书真实性：只认脚本内置的指纹（下载后立刻比对，不匹配直接致命）。
+# 没有 openssl 就**拒绝继续**：读不出指纹 = 无法判断来路，宁可降级为未签名部署也不导入未知根。
+verify_cert_pin() {
+  crt="$1"
+  command -v openssl >/dev/null 2>&1 || die "找不到 openssl，读不出证书指纹 ⇒ 拒绝把来路不明的证书导入系统信任根（请装 Xcode 命令行工具后重试）"
+  got=$(openssl x509 -in "$crt" -outform der 2>/dev/null | shasum -a 256 | awk '{print $1}')
+  if [ -z "$got" ]; then
+    die "读不出证书指纹（$CRT_NAME 不是合法的 x509 证书）⇒ 拒绝导入系统信任根，已中止"
+  fi
+  if [ "$got" != "$EXPECTED_CRT_SHA256" ]; then
+    die "证书指纹不匹配：镜像 $CRT_NAME 的 sha256=${got}，脚本内置的是 ${EXPECTED_CRT_SHA256}
+      这可能是镜像被换过，或者维护者换证书后忘了同步 install-zizvideo.sh 的 EXPECTED_CRT_SHA256。
+      已中止，什么都没装（绝不导入来路不明的系统信任根）。"
+  fi
+  say "证书指纹核对通过：${got}（= 脚本内置指纹）"
+}
+
 cert_keychain() {
   if [ -n "${ZV_TEST_KEYCHAIN:-}" ]; then printf '%s' "$ZV_TEST_KEYCHAIN"; return 0; fi
   printf '%s' "$SYSTEM_KEYCHAIN"
@@ -410,27 +444,32 @@ verify_signature() {
   return 0
 }
 
-# 有 crt：导入 + 复核；没 crt：如实说"未签名"，绝不假装成功。
-report_signature() {
+# 签名分两段（有 crt 时两段都不能被吞掉）：
+#   prepare_signature —— 写二进制**之前**跑：核指纹 + 导入系统信任根。
+#     证书必须先被信任，二进制才有稳定的 TCC 判据；导入不过就致命，绝不带着"没被信任的证书"往下装。
+#   report_signature —— 服务起来之后跑：复核二进制签名与证书一致；有 crt 却复核不过就**致命**
+#     （identifier/证书链对不上 = 可能是镜像被换过），绝不继续打印"安装成功"。
+prepare_signature() {
   if [ "$HAVE_CRT" != "1" ]; then
-    warn "镜像上没有 $CRT_NAME ⇒ 本次是**未签名独立部署**"
+    warn "镜像上没有 $CRT_NAME ⇒ 本次是**未签名独立部署**（降级模式，不是安装失败）"
     warn "后果：读 /Volumes/* 外置盘需要的完全磁盘访问权限，每次升级都要重新授权"
-    return 1
+    return 0
   fi
-  kept="$DATA_DIR/$CRT_NAME"
-  if ! import_trust_cert "$kept"; then
-    warn "证书导入系统钥匙串失败（sudo 被拒或无权限）"
-    warn "手动导入：sudo security add-trusted-cert -d -r trustRoot -k $SYSTEM_KEYCHAIN $kept"
-    warn "未成功导入并信任前，读 /Volumes/* 的完全磁盘访问权限每次升级都要重新授权"
-    return 1
+  verify_cert_pin "$crt_tmp"
+  if ! import_trust_cert "$crt_tmp"; then
+    die "证书导入系统钥匙串失败（sudo 被拒或无权限）：拒绝在证书没被信任的情况下继续安装。
+      手动导入：sudo security add-trusted-cert -d -r trustRoot -k $SYSTEM_KEYCHAIN <解压出来的 $CRT_NAME>"
   fi
-  if verify_signature "$BIN" "$kept"; then
-    say "签名复核通过：identifier=${SIGN_IDENTIFIER}，证书链来自 $CRT_NAME"
+}
+
+report_signature() {
+  if [ "$HAVE_CRT" != "1" ]; then return 0; fi
+  if verify_signature "$BIN" "$crt_tmp"; then
+    say "签名复核通过：identifier=${SIGN_IDENTIFIER}，证书链来自 ${CRT_NAME}（指纹 ${EXPECTED_CRT_SHA256}）"
     say "完全磁盘访问授权一次跨升级有效"
     return 0
   fi
-  warn "签名复核不过（原因见上）"
-  warn "外置盘授权仍可用，但每次升级都要重新授权（完全磁盘访问）"
+  warn "签名复核未通过：这可能是镜像被换过，请联系维护者。"
   return 1
 }
 
@@ -461,14 +500,41 @@ EOF
     return 0
   fi
   if [ "$LISTEN_GIVEN" = "1" ]; then
-    tmp="$CONFIG_PATH.zv-tmp"
+    # 这里必须用 awk：GNU 独有地址 `sed -e '0,/{/s|{|...'` 在 macOS BSD sed 上**静默不生效**，
+    # 老实现照样打印"已把 listen 改为 …"（谎报）。改完一律回读确认，没写进去就 die。
+    tmp="$CONFIG_PATH.zv-tmp.$$"
     if grep -q '"listen"' "$CONFIG_PATH"; then
-      sed -e 's|"listen"[[:space:]]*:[[:space:]]*"[^"]*"|"listen": "'"$LISTEN"'"|' "$CONFIG_PATH" >"$tmp"
+      awk -v l="$LISTEN" '
+        {
+          if (match($0, /"listen"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+            print substr($0, 1, RSTART - 1) "\"listen\": \"" l "\"" substr($0, RSTART + RLENGTH)
+          } else { print }
+        }' "$CONFIG_PATH" >"$tmp"
     else
-      sed -e '0,/{/s|{|{\n  "listen": "'"$LISTEN"'",|' "$CONFIG_PATH" >"$tmp"
+      awk -v l="$LISTEN" '
+        BEGIN { done = 0 }
+        {
+          if (!done && index($0, "{") > 0) {
+            p = index($0, "{")
+            print substr($0, 1, p)
+            printf "  \"listen\": \"%s\",\n", l
+            if (p < length($0)) { print substr($0, p + 1) }
+            done = 1
+          } else { print }
+        }' "$CONFIG_PATH" >"$tmp"
+    fi
+    # 先在临时文件上回读：不对就连原配置都不动（$CONFIG_PATH 原样），确认了再 mv 上去。
+    got=$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n1)
+    if [ "$got" != "$LISTEN" ]; then
+      rm -f "$tmp"
+      die "改 $CONFIG_PATH 的 listen 失败：试写的回读是 \"$got\"，期望 \"$LISTEN\"（${CONFIG_PATH} 原样未动，请手动编辑该文件）"
     fi
     mv "$tmp" "$CONFIG_PATH"
-    say "已把配置里的 listen 改为 $LISTEN"
+    got=$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_PATH" | head -n1)
+    if [ "$got" != "$LISTEN" ]; then
+      die "写 $CONFIG_PATH 后回读不一致（得到 \"$got\"，期望 \"$LISTEN\"）：请手动编辑该文件"
+    fi
+    say "已把配置里的 listen 改为 ${LISTEN}（回读确认：${got}）"
   fi
 }
 
@@ -649,31 +715,45 @@ remove_file() {
   fi
 }
 
+# 回滚里"恢复一个文件"：绝不自己中断（调用方只看返回码并如实打印）。
+restore_file() {
+  src="$1"; dst="$2"
+  if [ "$MODE" = "system" ]; then
+    if [ "$FAKE_SUDO" = "1" ]; then
+      install -m 0644 "$src" "$dst" >/dev/null 2>&1
+    else
+      run_priv install -m 0644 -o root -g wheel "$src" "$dst" >/dev/null 2>&1
+    fi
+  else
+    mv "$src" "$dst" >/dev/null 2>&1
+  fi
+}
+
+# 回滚必须"绝不失败"：首行 set +e（原来在 set -e 下 user 分支的 mv/rm 会中途夭折，
+# 于是既没恢复文件、也没重新拉起旧服务）。每条改动都打印成败，末尾 best-effort
+# 重新 bootstrap 恢复出来的 plist —— 失败的 --upgrade 不该把原本在跑的老用户丢在"服务停着"。
 rollback() {
+  set +e
   say "开始回滚本次改动……"
   if [ "$BOOTED" = "1" ]; then
     bootout_service
     say "  - 已 bootout $DOMAIN/$LABEL"
   fi
   if [ "$PLIST_NEW" = "1" ] && [ -f "$PLIST" ]; then
-    remove_file "$PLIST"; say "  - 已删除 $PLIST"
+    remove_file "$PLIST"
+    if [ -e "$PLIST" ]; then warn "  - 删除 $PLIST 失败（还在）"; else say "  - 已删除 $PLIST"; fi
   elif [ -n "$PLIST_BACKUP" ] && [ -f "$PLIST_BACKUP" ]; then
-    if [ "$MODE" = "system" ]; then
-      if [ "$FAKE_SUDO" = "1" ]; then
-        install -m 0644 "$PLIST_BACKUP" "$PLIST" >/dev/null 2>&1 || true
-      else
-        run_priv install -m 0644 -o root -g wheel "$PLIST_BACKUP" "$PLIST" >/dev/null 2>&1 || true
-      fi
+    if restore_file "$PLIST_BACKUP" "$PLIST"; then
+      say "  - 已恢复旧 plist $PLIST"
     else
-      mv "$PLIST_BACKUP" "$PLIST"
+      warn "  - 恢复旧 plist $PLIST 失败（备份还在 ${PLIST_BACKUP}，可手动装回）"
     fi
-    say "  - 已恢复旧 plist $PLIST"
   fi
   if [ "$BIN_NEW" = "1" ]; then
     if [ -n "$BIN_BACKUP" ] && [ -f "$BIN_BACKUP" ]; then
-      mv "$BIN_BACKUP" "$BIN"; say "  - 已恢复旧二进制 $BIN"
+      if mv "$BIN_BACKUP" "$BIN"; then say "  - 已恢复旧二进制 $BIN"; else warn "  - 恢复旧二进制 $BIN 失败（备份还在 ${BIN_BACKUP}）"; fi
     else
-      rm -f "$BIN"; say "  - 已删除 $BIN"
+      if rm -f "$BIN"; then say "  - 已删除 $BIN"; else warn "  - 删除 $BIN 失败（还在）"; fi
     fi
   fi
   if [ -n "$BIN_BACKUP" ] && [ -f "$BIN_BACKUP" ]; then rm -f "$BIN_BACKUP"; fi
@@ -684,7 +764,27 @@ rollback() {
   if [ "$DATA_DIR_NEW" = "1" ] && [ -d "$DATA_DIR" ]; then
     rm -rf "$DATA_DIR"; say "  - 已删除本次新建的数据目录 $DATA_DIR"
   fi
-  say "回滚完成：没有留下半截安装。"
+  # best-effort 把恢复出来的 plist 重新 bootstrap：老实现只 bootout、从不 bootstrap，
+  # 于是失败的 --upgrade 会让原本在跑的老用户变成"服务停着"。成败都如实打印。
+  if [ -f "$PLIST" ]; then
+    if [ "$MODE" = "system" ]; then
+      if run_priv "$LAUNCHCTL_BIN" bootstrap system "$PLIST" >/dev/null 2>&1; then
+        say "  - 已重新 bootstrap 系统域：${PLIST}（旧版服务已拉起）"
+      else
+        warn "  - 重新 bootstrap $PLIST 失败：旧版服务现在**没有在跑**，请手动执行 sudo launchctl bootstrap system $PLIST"
+      fi
+    else
+      if lc bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1; then
+        say "  - 已重新 bootstrap ${DOMAIN}：${PLIST}（旧版服务已拉起）"
+      else
+        warn "  - 重新 bootstrap $PLIST 失败：旧版服务现在**没有在跑**，请手动执行 launchctl bootstrap $DOMAIN $PLIST"
+      fi
+    fi
+  else
+    say "  - 没有可恢复的 plist，跳过重新 bootstrap"
+  fi
+  say "回滚结束：文件已按上表复原；服务状态见上（bootstrap 失败的那条会写明没在跑）。"
+  return 0
 }
 
 # 走到这里已经有文件改动：任何退出（含 die/set -e）都经 EXIT trap 回滚，不留半截。
@@ -774,14 +874,17 @@ do_install_or_upgrade() {
       say "[dry-run] 会写 $PLIST 并 launchctl bootstrap ${DOMAIN}（只在有人登录后运行）"
     fi
     say "[dry-run] 日志：$LOG_DIR/zizvideo.out.log / zizvideo.err.log；数据：$DATA_DIR"
-    say "[dry-run] 会尝试取同目录 ${CRT_NAME}：有则导入系统钥匙串并复核签名（${SIGN_IDENTIFIER}），没有则降级为未签名部署"
+    say "[dry-run] 会尝试取同目录 ${CRT_NAME}：有则先核脚本内置指纹（${EXPECTED_CRT_SHA256}）再导入系统钥匙串并复核签名（${SIGN_IDENTIFIER}），没有则降级为未签名部署"
     trap - EXIT; rm -f "$bin_tmp" "$crt_tmp"
     exit 0
   fi
 
   download_verify "$bin_tmp"
-  # 证书和产物同目录；没有（老镜像/离线）不算失败，走未签名模式（见 report_signature）。
+  # 证书和产物同目录；没有（老镜像/离线）不算失败，走未签名模式（见 prepare_signature）。
   if fetch_cert "$crt_tmp"; then HAVE_CRT=1; fi
+  # 核指纹 + 导入信任根必须在**写二进制之前**：证书没被信任就往下装，等于先装后用不了的半截状态。
+  # 这一步失败是致命的（die），此时还没动任何安装文件。
+  prepare_signature
 
   # 从这里开始会动文件：任何失败都回滚（见 fail_with_rollback 与 EXIT trap）。
   INSTALL_STARTED=1
@@ -822,8 +925,11 @@ do_install_or_upgrade() {
     fail_with_rollback "安装验收未通过（上面写明是第几步、为什么）"
   fi
 
-  # 签名复核只是告警口径：复核不过时服务照常可用，但外置盘授权每次升级要重授。
-  report_signature || true
+  # 有 crt 时签名复核是**硬门禁**：复核不过 = 可能是镜像被换过，回滚并退出，
+  # 绝不打印"安装成功"（老实现 `report_signature || true` 把它吞成一句提示）。
+  if ! report_signature; then
+    fail_with_rollback "签名复核未通过：这可能是镜像被换过，请联系维护者。已回滚本次改动（服务与二进制恢复为改动前）。"
+  fi
 
   INSTALL_DONE=1
   trap - EXIT
@@ -831,7 +937,12 @@ do_install_or_upgrade() {
   if [ -n "$BIN_BACKUP" ] && [ -f "$BIN_BACKUP" ]; then rm -f "$BIN_BACKUP"; fi
   if [ -n "$PLIST_BACKUP" ] && [ -f "$PLIST_BACKUP" ]; then remove_file "$PLIST_BACKUP"; fi
   say ""
-  say "安装完成（$MODE 模式）：$BIN"
+  if [ "$HAVE_CRT" = "1" ]; then
+    say "安装完成（$MODE 模式，已签名并复核）：$BIN"
+  else
+    warn "本次是**未签名部署**（镜像上没有 ${CRT_NAME}）：外置盘完全磁盘访问授权每次升级都要重新授权"
+    say "安装完成（$MODE 模式，未签名部署）：$BIN"
+  fi
   case ":$PATH:" in
     *":$INSTALL_ROOT/bin:"*) ;;
     *) say "提示：把 $INSTALL_ROOT/bin 加进 PATH：echo 'export PATH=\"$INSTALL_ROOT/bin:\$PATH\"' >> ~/.zshrc" ;;
@@ -854,6 +965,67 @@ data_dir_from_config() {
   printf '%s' "$DATA_DIR"
 }
 
+# --purge 的删除前守门（铁律 5：删文件必须"允许根内 + 删后回读"）。
+# 老实现 `target=$(data_dir_from_config); rm -rf "$target"` 只认"绝对路径"，
+# 配置里一条 "data_dir": "/Users/xxx" 或外置盘卷根就能把用户不可恢复地删光。
+# 允许根：默认只有 $HOME/Library/Application Support/，外加显式 ZV_ALLOW_PURGE_ROOT（都要绝对路径）。
+# ⚠️ 允许根里含空格（"Application Support"），只能按行读/数组，绝不能 `for r in $(...)`（词会被拆开）。
+purge_allow_roots() {
+  printf '%s\n' "$HOME_DIR/Library/Application Support"
+  if [ -n "${ZV_ALLOW_PURGE_ROOT:-}" ]; then printf '%s\n' "${ZV_ALLOW_PURGE_ROOT%/}"; fi
+}
+
+# 通过则返回 0（并把归一化后的路径打到 stdout 供调用方使用）；不过一律 die（什么都没删）。
+validate_purge_target() {
+  t="$1"
+  orig="$t"   # 报错只报用户/配置里原本那一串，别报归一化后的样子
+  case "$t" in
+    /*) ;;
+    *) die "拒绝清除：data_dir=\"$orig\" 不是绝对路径；本脚本只删允许根之下的绝对路径（什么都没删）" ;;
+  esac
+  case "/$t/" in
+    */../*) die "拒绝清除：data_dir=\"$orig\" 含 .. 段，落点无法安全判定（什么都没删）" ;;
+  esac
+  while [ "${t%/}" != "$t" ]; do t="${t%/}"; done
+  case "$t" in
+    ""|"/") die "拒绝清除：data_dir=\"$orig\" 是文件系统根，不可能是 zizvideo 的数据目录（什么都没删）" ;;
+    "$HOME_DIR") die "拒绝清除：data_dir=\"$orig\" 就是用户主目录本身，删了等于毁掉整个家目录（什么都没删）" ;;
+  esac
+  case "$t" in
+    /Volumes) die "拒绝清除：data_dir=\"$orig\" 是卷根（什么都没删）" ;;
+    /Volumes/*)
+      rest="${t#/Volumes/}"
+      case "$rest" in
+        */*) ;;
+        *) die "拒绝清除：data_dir=\"$orig\" 落在外置盘卷根上，一删就整卷没了（什么都没删）" ;;
+      esac
+      ;;
+  esac
+  ok=0
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$t" in
+      "$root") die "拒绝清除：data_dir=\"$orig\" 就是允许根本身，不是某个应用的数据目录（什么都没删）" ;;
+      "$root"/*) ok=1 ;;
+    esac
+  done <<EOF
+$(purge_allow_roots)
+EOF
+  [ "$ok" = "1" ] || die "拒绝清除：data_dir=\"$orig\" 不在允许根内。只允许删 $HOME_DIR/Library/Application Support/ 之下${ZV_ALLOW_PURGE_ROOT:+，或 ZV_ALLOW_PURGE_ROOT=$ZV_ALLOW_PURGE_ROOT 之下}。
+      数据放在别处时请把 ZV_ALLOW_PURGE_ROOT 指到它的父目录后重跑（什么都没删）"
+  if [ -L "$t" ]; then die "拒绝清除：data_dir=\"$orig\" 是符号链接，拒绝沿链接删除（什么都没删；要清就指到真实路径）" ; fi
+  base="${t##*/}"
+  case "$base" in
+    *zizvideo*) ;;
+    *)
+      if [ -f "$t/config.json" ] || [ -n "$(find "$t" -maxdepth 1 -name '*.db' -print -quit 2>/dev/null)" ]; then :; else
+        die "拒绝清除：data_dir=\"$orig\" 既不是 zizvideo 目录、里面也没有 config.json / *.db，不像数据目录（什么都没删）"
+      fi
+      ;;
+  esac
+  printf '%s' "$t"
+}
+
 print_will_delete() {
   say "将删除（$MODE 模式）："
   if [ -f "$PLIST" ]; then
@@ -865,7 +1037,7 @@ print_will_delete() {
   fi
   if [ -f "$BIN" ]; then say "  - 二进制 $BIN"; fi
   if [ "$1" = "purge" ]; then
-    say "  - 数据目录 $(data_dir_from_config)（含数据库、封面、配置）—— 不可恢复"
+    say "  - 数据目录 ${PURGE_TARGET}（含数据库、封面、配置）—— 不可恢复"
   else
     say "数据目录默认保留：$(data_dir_from_config)"
   fi
@@ -877,7 +1049,7 @@ confirm_purge() {
   if ! { true >/dev/tty; } 2>/dev/null; then
     die "--purge 需要二次确认，但当前没有终端；非交互请显式设 ZV_ASSUME_YES=1（表示你确认删数据）"
   fi
-  printf '这会删除数据目录 %s 且不可恢复。输入 yes 确认：' "$(data_dir_from_config)" >/dev/tty
+  printf '这会删除数据目录 %s 且不可恢复。输入 yes 确认：' "$PURGE_TARGET" >/dev/tty
   read -r ans </dev/tty || true
   if [ "$ans" != "yes" ]; then die "未输入 yes，已取消，什么都没删"; fi
 }
@@ -909,6 +1081,10 @@ do_uninstall() {
   if [ "$MODE" = "user" ] && own_system_installed; then
     warn "检测到 --system 模式也装过（${OTHER_PLIST}）；本脚本只卸 user，另一个请用 --system --uninstall"
   fi
+  # 守门必须在打印"将要删除什么"**之前**完成（铁律 5）：不过就 die，连计划都不打印。
+  if [ "$1" = "purge" ]; then
+    PURGE_TARGET=$(validate_purge_target "$(data_dir_from_config)")
+  fi
   print_will_delete "$1"
   if [ "$DRY_RUN" = "1" ]; then say "[dry-run] 以上为预演，未做任何改动。"; exit 0; fi
   if [ "$1" = "purge" ]; then confirm_purge; fi
@@ -922,9 +1098,15 @@ do_uninstall() {
   fi
   if [ -f "$BIN" ]; then rm -f "$BIN"; say "已删除 $BIN"; fi
   if [ "$1" = "purge" ]; then
-    target=$(data_dir_from_config)
-    rm -rf "$target"
-    say "已删除数据目录 $target"
+    target="$PURGE_TARGET"
+    rm -rf "$target" || true
+    # 删后回读：还活着就报错（很可能有文件删不掉），绝不打印"已删除"。
+    if [ -e "$target" ]; then
+      say "错误：删后回读，$target 仍然存在（有文件删不掉，可能被占用或权限不足）。"
+      say "请手动检查：ls -ld \"$target\""
+      exit 1
+    fi
+    say "已删除数据目录 ${target}（回读确认：不存在）"
   else
     say "数据目录已保留：$(data_dir_from_config)"
   fi
@@ -933,8 +1115,7 @@ do_uninstall() {
 
 main() {
   parse_args "$@"
-  if [ "${ZV_FAKE_SUDO:-}" = "1" ]; then FAKE_SUDO=1; fi
-  derive_paths
+  derive_paths                      # FAKE_SUDO 已在加载时按 ZV_FAKE_SUDO 定好（见文件头变量区）
   case "$ACTION" in
     install|upgrade) do_install_or_upgrade ;;
     uninstall) do_uninstall keep-data ;;
@@ -942,5 +1123,11 @@ main() {
     *) die "未知动作：$ACTION" ;;
   esac
 }
+
+# 测试接缝：source 本脚本 + ZV_LIB_ONLY=1 时只定义函数、不跑 main（tools/test-installer.sh 用）。
+# 必须 source（直接 `bash install-zizvideo.sh` 时 return 会报错，所以兜底 exit 0）。
+if [ "${ZV_LIB_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 main "$@"

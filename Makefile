@@ -40,13 +40,10 @@ check: ## 日常门禁：版本一致 + 前端 JS 真解析 + go vet + 单测（
 	 fi
 
 check-run: ## 真正跑一遍门禁（不做指纹跳过）
-	@echo "==> 版本号一致（Makefile vs internal/api/api.go）"
-	@src=$$(sed -n 's/.*var Version = "\(.*\)".*/\1/p' internal/api/api.go | head -1); \
-	 if [ "$$src" != "$(VERSION)" ]; then \
-	   echo "!! internal/api/api.go 的 Version=$$src 与 Makefile 的 $(VERSION) 不一致"; exit 1; fi; \
-	 echo "   ok：$(VERSION)"
-	@echo "==> 版本号守规矩（末段 0～10：0.1.10 之后是 0.2.0，绝不许 0.1.11）"
+	@echo "==> 版本号：Makefile 与 internal/api/api.go 一致 + 守规矩（末段 0～10：0.1.10 之后是 0.2.0）"
 	@node tools/check-version-rule.mjs .
+	@echo "==> 独立部署安装器（语法 + --purge 删除前守门 + listen 写入 + 回滚 + 证书指纹；全程沙箱）"
+	@bash tools/test-installer.sh
 	@echo "==> 前端 JS 语法（真 ES 解析器；缺 acorn 直接失败，不静默跳过）"
 	@[ -d node_modules/acorn ] || { echo "!! 缺 node_modules/acorn —— 先 npm install（白屏级错误只有它能抓）"; exit 1; }
 	@node tools/check-js-syntax.mjs internal/web/assets
