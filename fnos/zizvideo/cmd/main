@@ -237,11 +237,27 @@ PYEOF
 # 安装/升级/卸载钩子（官方要求幂等；卸载**不擅自删用户数据**）
 case "${1:-}" in
   install_callback)
-    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP"
+    # 装完应用文件后：把数据/配置目录建好、按系统给的端口与目录写一份配置（没有才写），
+    # 并把飞牛给的共享/授权目录并进媒体根。**幂等**：重复安装/升级都安全。
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP" || {
+      fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
+    write_config_if_missing
+    merge_media_roots
     exit 0 ;;
   upgrade_callback)
-    # 只做兼容检查/迁移，不覆盖用户配置：配置不存在时才会由 start 生成
-    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR"
+    # 升级：**不覆盖用户配置**，只做兼容检查与幂等迁移；配置坏了先备份再重建（可回滚）。
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" || { fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
+    if [ -f "$CONFIG" ]; then
+      if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$CONFIG" >/dev/null 2>&1; then
+        backup="$CONFIG.broken.$(date +%Y%m%d%H%M%S)"
+        mv -f "$CONFIG" "$backup" || { fail "配置损坏且备份失败：$CONFIG"; exit 1; }
+        fail "配置损坏，已备份到 ${backup}，并按默认值重建（旧文件可回滚）"
+        write_config_if_missing
+      fi
+    else
+      write_config_if_missing
+    fi
+    merge_media_roots
     exit 0 ;;
   uninstall_init)
     "$0" stop >/dev/null 2>&1 || true

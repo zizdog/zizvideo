@@ -148,6 +148,9 @@ export VERIFY_DEEP = $(DEEP)
 docker-image: ## 打容器镜像（先把静态 Linux 二进制放进构建上下文；没有 docker daemon 会如实失败）
 	@bash tools/make-docker-image.sh --arch $(DOCKER_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 
+fpk-check: ## 自检一个已打好的 .fpk（解开核对 manifest↔架构↔钩子↔入口端口）
+	@bash tools/check-fnos-fpk.sh $(FPK_FILE)
+
 fpk: ## 打飞牛（fnOS）应用包：准备待打包目录 + 有 fnpack 就出 .fpk（FPK_ARCH=amd64|arm64）
 	@bash tools/make-fnos-pkg.sh --arch $(FPK_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 

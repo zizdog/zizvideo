@@ -376,6 +376,30 @@ else
 fi
 grep -qE '"run-as"[[:space:]]*:[[:space:]]*"root"' "$FNOS/config/privilege" && bad "不该用 root 常驻" || ok "没有用 root 常驻"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/privilege" && ok "privilege 是合法 JSON" || bad "privilege 不是合法 JSON"
+# 按官方模板保持最小：只有 defaults.run-as（多了 username/groupname 没有用，还可能指到不存在的组）
+python3 - "$FNOS/config/privilege" <<'PYV' && ok "privilege 只有 defaults.run-as（官方模板的最小形态）" || bad "privilege 多了字段"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert set(d.keys()) == {"defaults"}, d.keys()
+assert set(d["defaults"].keys()) == {"run-as"}, d["defaults"].keys()
+PYV
+# 桌面入口的端口必须与 manifest 的 service_port 一致（两份真源不能漂移；fnpack 实测**不**替换 {port}）
+python3 - "$FNOS/manifest" "$FNOS/app/ui/config" <<'PYP' && ok "桌面入口端口与 manifest.service_port 一致" || bad "桌面入口端口与 service_port 不一致"
+import json, re, sys
+mf = open(sys.argv[1]).read()
+m = re.search(r"^\s*service_port\s*=\s*(\d+)", mf, re.M)
+assert m, "manifest 里没有 service_port"
+port = m.group(1)
+cfg = json.load(open(sys.argv[2]))
+entries = cfg.get(".url") or {}
+assert entries, "入口配置里没有 .url"
+for eid, e in entries.items():
+    got = str(e.get("port") or "")
+    assert got == port, "%s 的 port=%r ≠ service_port=%s" % (eid, got, port)
+# desktop_applaunchname 必须真的存在
+launch = re.search(r"^\s*desktop_applaunchname\s*=\s*(\S+)", mf, re.M)
+assert launch and launch.group(1) in entries, "desktop_applaunchname 在入口配置里找不到"
+PYP
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/resource" && ok "resource 是合法 JSON" || bad "resource 不是合法 JSON"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/app/ui/config" && ok "app/ui/config 是合法 JSON" || bad "app/ui/config 不是合法 JSON"
 for w in install config; do
@@ -513,6 +537,40 @@ else
 fi
 TRIM_APPDEST="$T4/app" TRIM_PKGETC="$T4/etc" TRIM_PKGVAR="$T4/var" sh "$FNOS/cmd/main" stop >/dev/null 2>&1 || true
 rm -rf "$T4"
+# install_callback：装完就把目录与配置准备好（幂等）；upgrade_callback：配置坏了先备份再重建
+T5="$(mktemp -d)"
+t5_run() { TRIM_APPDEST="$T5/app" TRIM_PKGETC="$T5/etc" TRIM_PKGVAR="$T5/var" TRIM_SERVICE_PORT=7799 \
+  TRIM_DATA_ACCESSIBLE_PATHS="/vol1/1000/电影" sh "$FNOS/cmd/main" "$@" 2>&1; }
+t5_run install_callback >/dev/null 2>&1
+if [ -f "$T5/etc/config.json" ] && [ -d "$T5/var" ]; then
+  python3 -c 'import json,sys
+cfg = json.load(open(sys.argv[1]))
+assert cfg["listen"] == "0.0.0.0:7799", cfg["listen"]
+assert "/vol1/1000/电影" in cfg["media_allow_roots"], cfg["media_allow_roots"]' "$T5/etc/config.json" \
+    && ok "install_callback 建好目录与配置（并含飞牛授权目录）" || bad "install_callback 写的配置不对"
+else
+  bad "install_callback 没有建目录/写配置"
+fi
+# 幂等：再跑一次不能把配置改坏
+before="$(cat "$T5/etc/config.json")"
+t5_run install_callback >/dev/null 2>&1
+[ "$before" = "$(cat "$T5/etc/config.json")" ] && ok "install_callback 幂等（重复执行不改配置）" || bad "install_callback 不幂等"
+# 配置损坏：必须备份 + 重建（可回滚），且重建后可解析
+printf '{坏\n' >"$T5/etc/config.json"
+t5_run upgrade_callback >/dev/null 2>&1
+broken="$(ls -1 "$T5/etc"/config.json.broken.* 2>/dev/null | head -1 || true)"
+if [ -n "$broken" ]; then
+  ok "upgrade_callback 把损坏配置备份成 $(basename "$broken")"
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$T5/etc/config.json" \
+    && ok "损坏配置被重建为合法 JSON（旧文件留着可回滚）" || bad "重建后的配置仍不合法"
+else
+  bad "配置损坏时 upgrade_callback 没有备份（用户改过的配置不能悄悄丢）"
+fi
+# 配置正常时：不许改动它
+good="$(cat "$T5/etc/config.json")"
+t5_run upgrade_callback >/dev/null 2>&1
+[ "$good" = "$(cat "$T5/etc/config.json")" ] && ok "upgrade_callback 不覆盖正常配置" || bad "upgrade_callback 改动了正常配置"
+rm -rf "$T5"
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then
@@ -589,6 +647,12 @@ if [ -n "$FN" ]; then
         ok "包内含 cmd/main 与 app/bin/zizvideo"
       else
         bad ".fpk 里没找到 cmd/main 或 app/bin/zizvideo"
+      fi
+      # 再用**独立的自检脚本**把这一个包解开逐项核对（manifest↔架构↔钩子↔入口端口）
+      if fpkout="$(bash "$ROOT/tools/check-fnos-fpk.sh" "$fpk" 2>&1)"; then
+        ok "包自检通过（$(printf '%s' "$fpkout" | grep '结论' | head -1)）"
+      else
+        bad "包自检没过：$(printf '%s' "$fpkout" | grep '✗' | head -3)"
       fi
     else
       bad "fnpack 说成功但没有像样的 .fpk：$fpk"
