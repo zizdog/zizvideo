@@ -21,9 +21,10 @@ import (
 // 扫了也能拉起 App（兜底）。
 //
 // 时序（三段式，和主流电视扫码登录一致）：
-//   ① 电视 POST /auth/qr/start（匿名）→ 拿到 id/secret + 二维码图；电视开始轮询
-//   ② 手机（已登录）POST /auth/qr/claim（要 cookie + CSRF）→ 把这个挑战绑到自己账号上
-//   ③ 电视 GET /auth/qr/poll?id&s → claimed 时**响应里直接下发会话 cookie**，电视就登录好了
+//
+//	① 电视 POST /auth/qr/start（匿名）→ 拿到 id/secret + 二维码图；电视开始轮询
+//	② 手机（已登录）POST /auth/qr/claim（要 cookie + CSRF）→ 把这个挑战绑到自己账号上
+//	③ 电视 GET /auth/qr/poll?id&s → claimed 时**响应里直接下发会话 cookie**，电视就登录好了
 //
 // 安全：secret 是 128 位随机、只出现在二维码里、2 分钟过期、一次性；
 // 领码必须已登录且带 CSRF（不然攻击者能让受害者浏览器替他领码 = 会话固定攻击）；
@@ -160,6 +161,22 @@ func qrBaseFrom(r *http.Request) string {
 	return scheme + "://" + host
 }
 
+// qrScale = 每个模块多少像素。**必须写成负数**传给 go-qrcode：`size` 为负数时它按
+// `|size| × 符号边长` 出图（整数倍 ⇒ 每个模块正好 qrScale 像素）；写正数（老代码写 512）时
+// 库做的是 `realSize/size` 的**非整数**映射，模块在 ⌊512/边长⌋ 与 ⌈…⌉ 像素之间不均，
+// 解码器的网格估计在这种不均匀网格上更容易飘出图像边界。
+//
+// 2026-10-11 的由来：`make check` 分片跑时二维码单测偶发
+// `NotFoundException: (w,h)=(512,512), (x,y)=(529,18)`（x 越界 ⇒ 定位点估计飘了）。
+// **如实说明**：那次抽风的具体内容形态没能复现，所以这里不声称"已证明修好那次抽风"，
+// 而是按"消除非整数映射这一整类风险"来改，并用门禁把"整数倍模块"钉死（TestQrImageIsCrispIntegerModules）。
+const qrScale = 8
+
+// qrPNG 出二维码 PNG（唯一编码入口：测试直接调它，保证与线上同一份参数）。
+func qrPNG(link string) ([]byte, error) {
+	return qrcode.Encode(link, qrcode.Medium, -qrScale)
+}
+
 // HandleQrImage 出二维码 PNG（匿名，但要 secret）。
 func (s *Server) HandleQrImage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -176,7 +193,7 @@ func (s *Server) HandleQrImage(w http.ResponseWriter, r *http.Request) {
 	s.QR.mu.Unlock()
 	if png == nil && !imageErr {
 		// 编码一次就缓存：轮询期间电视只请求一次图，但刷新/多标签会重复要
-		data, err := qrcode.Encode(sess.link, qrcode.Medium, 512)
+		data, err := qrPNG(sess.link)
 		s.QR.mu.Lock()
 		if err != nil {
 			sess.imageErr = true
