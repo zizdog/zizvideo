@@ -101,11 +101,15 @@ export function createSettingsPanel(ctx) {
     const common = el("div", { class: "sheet-group" });
     if (playlist) {
       // 剧场：选集（原来在边栏，边栏只留 4 个后搬到这里）
+      // ⚠️ 第 5 个参数 `false` = **点完不要替我把面板收起来**：
+      // actionRow 默认会在 onClick 之后再调一次 closePanels()，而这一行要打开的正是另一个面板
+      // ⇒ 不收手的话选集面板刚显示就被立刻藏掉（2026-10-11 拆分复核时发现：剧场的选集从这里打不开，
+      // 而 TV 上又没有别的入口）。这里的顺序是"先关设置面板、再显示选集面板"。
       common.append(actionRow("theater", "选集", () => {
         closePanels();
         if (!entry.epsPanel) entry.layer.append(buildEpisodePanel(entry));
         entry.epsPanel.classList.remove("hidden");
-      }, state.items.length + " 集"));
+      }, state.items.length + " 集", false));
     }
     // 清屏播放图标 = 用户给的图1（一把刷子，2026-09-25）
     const cleanRow = actionRow("clean", "清屏播放", () => { toggleClean(); paintCommon(); });

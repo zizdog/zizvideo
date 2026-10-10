@@ -445,6 +445,9 @@ export function mountFeed(view, options = {}) {
     // 或右键（网页）开面板（用户 2026-09-24 定稿），挂上反而会落在画面左上角、**正好压住顶栏的菜单键**
     // （用户 2026-10-01 报障："web 端和手机 app 端这里 2 个按钮重叠：一个三条横线、一个设置轮子"，坑 67）。
     const railKids = [entry.like, entry.fav];
+    // 剧场的「选集」按钮：以前只创建、从没挂进 DOM（从审计基线就这样），于是 TV 上除了 ⚙ 面板里那行
+    // 没有别的入口 —— 而那行当时又被 closePanels 立刻收起，等于选集打不开。这里把它真正挂上。
+    if (entry.eps) railKids.push(entry.eps);
     if (!tvLayout) railKids.push(soundButton(entry), (entry.fullscreen = fullscreenButton()));
     entry.rail = el("div", { class: "ov-rail" }, railKids);
     entry.ops = el("div", { class: "tv-ops" }, entry.rail);

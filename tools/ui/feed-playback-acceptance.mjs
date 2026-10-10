@@ -136,6 +136,61 @@ try {
   const seriesText = await page.textContent("body");
   expect(seriesText.length > 0 && !/加载失败/.test(seriesText), "剧场页打开了（没有「加载失败」）", seriesText.slice(0, 200));
 
+  // ── 剧场：选集面板（2026-10-11 修的真 bug：点「选集」行会被 actionRow 的 closePanels 立刻收起，
+  //    而且 ☰ 按钮只创建、从没挂进 DOM ⇒ 剧场的选集实际上打不开）。这里把修复钉住。
+  const seriesWithEps = await page.evaluate(async () => {
+    const list = await (await fetch("/api/v1/series", { credentials: "same-origin" })).json();
+    for (const s of (list.data && list.data.list) || []) {
+      const one = await (await fetch("/api/v1/series/" + s.id, { credentials: "same-origin" })).json();
+      const n = (one.data && one.data.list) ? one.data.list.length : 0;
+      if (n >= 2) return { id: s.id, title: s.title, n };
+    }
+    return null;
+  });
+  expect(!!seriesWithEps, "存在 ≥2 集的剧（扫描自动建的那部）");
+  if (seriesWithEps) {
+    await page.goto(BASE + "/#/series/" + encodeURIComponent(seriesWithEps.id), { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("video", { timeout: 20000 });
+    await page.waitForTimeout(1200);
+    const railEps = await page.$('.ov-rail button[title="选集"], .tv-ops button[title="选集"]');
+    expect(!!railEps, "剧场播放页的图标栏里真的有「选集」按钮（以前只创建、从不挂进 DOM）");
+
+    await page.mouse.click(640, 400, { button: "right" });
+    await page.waitForTimeout(700);
+    const epsRow = page.locator('.sheet-row, label.set-row').filter({ hasText: '选集' }).first();
+    expect((await epsRow.count()) > 0, "设置面板里有「选集」行");
+    await epsRow.click();
+    await page.waitForTimeout(600);
+    const epsShown = await page.evaluate(() => {
+      const p = document.querySelector(".set-panel.eps");
+      return !!p && !p.classList.contains("hidden");
+    });
+    expect(epsShown, "点「选集」后选集面板留着（以前刚显示就被 closePanels 收起）");
+
+    const trackBefore = await page.evaluate(() => {
+      const t = document.querySelector(".track");
+      return t ? getComputedStyle(t).transform : "";
+    });
+    const epsItems = await page.$$(".set-panel.eps .ep-item");
+    expect(epsItems.length >= 2, "选集面板列出的集数与剧集数一致（" + epsItems.length + " ≥ 2）");
+    if (epsItems.length >= 2) {
+      await epsItems[1].click();
+      await page.waitForTimeout(1200);
+      const trackAfter = await page.evaluate(() => {
+        const t = document.querySelector(".track");
+        return t ? getComputedStyle(t).transform : "";
+      });
+      expect(trackAfter !== trackBefore, "点第 2 集真的切过去了（轨道 " + trackBefore + " → " + trackAfter + "）");
+      // 选完就收起面板是**有意**的（buildEpisodePanel 里 `panel.classList.add("hidden"); goTo(i)`），
+      // 所以这里断言的是"收起"而不是"留着" —— 别把有意的行为当成 bug。
+      const epsHidden = await page.evaluate(() => {
+        const p = document.querySelector(".set-panel.eps");
+        return !p || p.classList.contains("hidden");
+      });
+      expect(epsHidden, "选完一集后选集面板按设计收起");
+    }
+  }
+
   expect(problems.length === 0, "没有 JS 报错 / 意外非 2xx", problems.slice(0, 5).join("\n"));
 } catch (err) {
   bad("脚本异常：" + (err && err.message), err && err.stack);
