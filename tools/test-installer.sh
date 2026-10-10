@@ -380,7 +380,7 @@ python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/resourc
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/app/ui/config" && ok "app/ui/config 是合法 JSON" || bad "app/ui/config 不是合法 JSON"
 for w in install config; do
   if [ -f "$FNOS/wizard/$w" ]; then
-    python3 - "$FNOS/wizard/$w" <<'PYW' && ok "wizard/${w} 是合法 JSON 且形状正确" || bad "wizard/${w} 不是合法 JSON / 形状不对"
+    python3 - "$FNOS/wizard/$w" "$w" <<'PYW' && ok "wizard/${w} 是合法 JSON 且形状正确" || bad "wizard/${w} 不是合法 JSON / 形状不对"
 import json, sys
 steps = json.load(open(sys.argv[1]))
 assert isinstance(steps, list) and steps, "向导必须是**步骤数组**"
@@ -390,6 +390,11 @@ for st in steps:
         assert it.get("type") in ("text", "password", "radio", "checkbox", "select", "switch", "tips"), "字段类型不认识：%r" % it.get("type")
         if it["type"] != "tips":
             assert it.get("field"), "非 tips 的项必须有 field"
+# 端口只能由 manifest 的 service_port + 桌面入口的 port 声明一次；向导里**不许**再出现端口字段，
+# 否则用户一改，桌面入口还指着老端口（两份真源必然漂移）。
+if sys.argv[2] == "config":
+    assert not any(i.get("field") == "wizard_port" for st in steps for i in st["items"]), \
+        "wizard/config 不该带端口字段（端口由 manifest/桌面入口声明）"
 PYW
   else
     bad "缺 wizard/$w"
@@ -482,6 +487,29 @@ else
   ok "不像本应用数据的目录被拒（不删未明确拥有的数据）"
 fi
 rm -rf "$T3"
+# PID 文件过期/被系统复用：不能误报"在运行"（官方排错清单点名这条）
+T4="$(mktemp -d)"; mkdir -p "$T4/var" "$T4/app/bin"
+printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$T4/app/bin/zizvideo"; chmod 0755 "$T4/app/bin/zizvideo"
+sleep 60 & other_pid=$!
+printf '%s' "$other_pid" >"$T4/var/zizvideo.pid"
+if TRIM_APPDEST="$T4/app" TRIM_PKGETC="$T4/etc" TRIM_PKGVAR="$T4/var" \
+   sh "$FNOS/cmd/main" status >/dev/null 2>&1; then
+  bad "pidfile 里是别人的进程（sleep）时 status 竟然报「在运行」"
+else
+  rc=$?
+  [ "$rc" = "3" ] && ok "pidfile 指向无关进程时 status 返回 3（不误报）" || bad "status 返回 ${rc}，应为 3"
+fi
+kill "$other_pid" 2>/dev/null || true
+# 真启动后 status 必须是 0（上面刚验了身份核对不会把真进程也否掉）
+TRIM_APPDEST="$T4/app" TRIM_PKGETC="$T4/etc" TRIM_PKGVAR="$T4/var" TRIM_SERVICE_PORT=7799 \
+  sh "$FNOS/cmd/main" start >/dev/null 2>&1 || true
+if TRIM_APPDEST="$T4/app" TRIM_PKGETC="$T4/etc" TRIM_PKGVAR="$T4/var" sh "$FNOS/cmd/main" status >/dev/null 2>&1; then
+  ok "真在跑时 status 返回 0（身份核对没把自家进程否掉）"
+else
+  bad "真在跑时 status 却不是 0"
+fi
+TRIM_APPDEST="$T4/app" TRIM_PKGETC="$T4/etc" TRIM_PKGVAR="$T4/var" sh "$FNOS/cmd/main" stop >/dev/null 2>&1 || true
+rm -rf "$T4"
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then

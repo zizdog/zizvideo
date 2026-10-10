@@ -48,7 +48,13 @@ running_pid() {
   pid="$(cat "$PIDFILE" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  printf '%s' "$pid"
+  # ⚠️ PID 会被系统复用：光看"这个 pid 活着"会把别人的进程当成自己（官方排错清单点名这条：
+  # "status 是否只检查了过期 PID 文件"）。再核对一次这个进程的命令行确实是我们的二进制。
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  case "$cmd" in
+    *"$BIN"*|*zizvideo*) printf '%s' "$pid" ;;
+    *) return 1 ;;
+  esac
 }
 
 # 把飞牛系统给的目录并进 media_allow_roots：
