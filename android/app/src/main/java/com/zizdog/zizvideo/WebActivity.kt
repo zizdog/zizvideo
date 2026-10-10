@@ -53,7 +53,7 @@ class WebActivity : AppCompatActivity() {
         /** 强制按电视端启动（自测/模拟器用：`--ez tv true`）；真机电视自动判定，不用传。 */
         const val EXTRA_TV = "tv"
 
-        /** 覆盖更新源（自测/模拟器用：`--es update_base http://10.0.2.2:17802/apps/zizvideo`）。 */
+        /** 覆盖更新源（**只有可调试包**才认：`--es update_base http://10.0.2.2:17802/apps/zizvideo`）。 */
         const val EXTRA_UPDATE_BASE = "update_base"
 
         /** 把用户交回原生登录页时带上"为什么"（用户 2026-09-27："闪一下又回来，还不说原因"）。 */
@@ -88,9 +88,12 @@ class WebActivity : AppCompatActivity() {
     private val webErrorsShown = mutableSetOf<String>()
     private var loginRetried = false
 
-    /** 更新源地址（默认镜像站；自测可覆盖）与"这个进程里已经提示过一次更新"的标记。 */
-    private var updateBase: String = Updater.DEFAULT_BASE
+    /** 更新源：**只认常量**（Intent 里的 update_base 只有可调试包才被采纳，见 Updater.resolveBase）。 */
+    private var updateHint: String? = null
     private var updatePrompted = false
+
+    /** 正在显示的下载进度框（Activity 销毁时要收掉，否则漏一个窗口）。 */
+    private var updateProgress: android.app.ProgressDialog? = null
 
     /**
      * 记住最近一次搜索词：网页里点搜索结果会跳到 #/play/search/<id>，这个地址**不带关键词**，
@@ -466,9 +469,10 @@ class WebActivity : AppCompatActivity() {
         ).buildAsync()
         val path = intent.getStringExtra(EXTRA_PATH)?.takeIf { it.startsWith("/") } ?: "/#/feed"
         pickOnLoad = intent.getBooleanExtra(EXTRA_PICK, false)
-        // 更新源：默认镜像站，自测可用 update_base 覆盖（真机上没有这个参数）
-        updateBase = intent.getStringExtra(EXTRA_UPDATE_BASE)?.takeIf { it.startsWith("http") }
-            ?: Updater.DEFAULT_BASE
+        // 更新源：常量 Updater.DEFAULT_BASE；只有**可调试包**才认 Intent 里的 update_base（自测/模拟器）。
+        // ⚠️ LoginActivity 是 exported（launcher）：release 包里这个 extra 必须整个不认，
+        //    否则本机任何 App 都能把更新链换成自己的服务器（清单连带 sha256 也归它写 = 装任意 APK）。
+        updateHint = intent.getStringExtra(EXTRA_UPDATE_BASE)
         // 带 ?zv=app：告诉前端"原生已经垫过系统栏"，别再叠加 safe-area（见 Ui.padSystemBars）
         // 电视端再多带 ?tv=1：前端走遥控器导航（js/tv.js，方向键落焦 + 播放页按键语义）
         val tv = intent.getBooleanExtra(EXTRA_TV, false) || isTv(this)
@@ -581,6 +585,10 @@ class WebActivity : AppCompatActivity() {
 
             override fun onReceivedSslError(v: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
                 // 局域网自签证书很常见：不静默放行，也不直接掐死，让用户自己决定。
+                if (!canShowUi()) { // 页面正在收尾：弹不出来就当"不允许"（安全的那一边）
+                    handler.cancel()
+                    return
+                }
                 AlertDialog.Builder(this@WebActivity)
                     .setTitle("证书不受信任")
                     .setMessage("${error.url}\n\n继续可能被中间人窃听。只有你自己的服务器才该继续。")
@@ -668,7 +676,7 @@ class WebActivity : AppCompatActivity() {
             // /auth/me 没成（WebView 刚起第一个请求、网络刚醒、偶发超时）⇒ 前端把用户当"没登录" ⇒
             // 路由到 #/login ⇒ 老代码**直接静默退回原生登录页**，用户看到的就是"闪一下又回到登录页"。
             // 所以这里先自己救一次：cookie 在就重载一次首屏 URL（真没登录时它还会再退回来，走下面那支）。
-            val sessionInWebView = (CookieManager.getInstance().getCookie(base) ?: "").contains("zv_session=")
+            val sessionInWebView = Cookies.sessionVisible(CookieManager.getInstance().getCookie(base))
             if (sessionInWebView && !loginRetried) {
                 loginRetried = true
                 android.util.Log.w("zv-login", "web 说未登录但 cookie 在 → 重载一次自愈")
@@ -785,18 +793,28 @@ class WebActivity : AppCompatActivity() {
 
     // ---------- 自动检查更新（用户 2026-09-25："不想再一次次手动下载安装了"）----------
 
+    /**
+     * 弹窗 / 碰 UI 前的守卫。线程回调回来时用户可能早就退出去了：这时候 `Dialog.show()`
+     * 会抛 BadTokenException 直接崩（LoginActivity 那边早就有这个判断了，这里补齐）。
+     * 判断必须在**主线程**上做（回调里做，而不是起线程前做一次就算）。
+     */
+    private fun canShowUi(): Boolean = !isFinishing && !isDestroyed
+
     /** 查一次更新。interactive=true（用户点「检查更新」）时，没新版本也说一句。 */
     fun checkUpdate(interactive: Boolean) {
+        if (!canShowUi()) return
+        val base = Updater.resolveBase(updateHint, BuildFlags.isDebuggable(this))
         Thread {
             var info: Updater.Update? = null
             var err: String? = null
             try {
-                info = Updater.check(this, updateBase)
+                info = Updater.check(this, updateHint)
             } catch (e: Exception) {
                 err = e.message ?: e.javaClass.simpleName
-                android.util.Log.w("zv-update", "检查更新失败：" + err + "（base=" + updateBase + "）")
+                android.util.Log.w("zv-update", "检查更新失败：" + err + "（base=" + base + "）")
             }
             runOnUiThread {
+                if (!canShowUi()) return@runOnUiThread // 页面没了就别弹了
                 val found = info
                 when {
                     found != null && !updatePrompted -> showUpdateDialog(found)
@@ -810,6 +828,7 @@ class WebActivity : AppCompatActivity() {
     }
 
     private fun showUpdateDialog(info: Updater.Update) {
+        if (!canShowUi()) return
         updatePrompted = true
         android.util.Log.i("zv-update", "发现新版本 " + info.version + "（当前 " + Updater.appVersion(this) + "）")
         AlertDialog.Builder(this)
@@ -822,6 +841,7 @@ class WebActivity : AppCompatActivity() {
     }
 
     private fun startUpdate(info: Updater.Update) {
+        if (!canShowUi()) return
         if (!Updater.canInstall(this)) {
             android.util.Log.w("zv-update", "缺少「安装未知应用」权限，先引导用户去设置")
             AlertDialog.Builder(this)
@@ -846,19 +866,29 @@ class WebActivity : AppCompatActivity() {
         progress.setMessage("0%")
         progress.setCancelable(false)
         progress.show()
+        updateProgress = progress
         Thread {
             try {
-                val file = Updater.download(this, updateBase, info) { pct ->
-                    runOnUiThread { progress.setMessage(pct.toString() + "%") }
+                val file = Updater.download(this, info) { pct ->
+                    runOnUiThread {
+                        if (!canShowUi()) return@runOnUiThread
+                        try { progress.setMessage(pct.toString() + "%") } catch (e: Exception) { /* 收掉了就算了 */ }
+                    }
                 }
                 runOnUiThread {
-                    progress.dismiss()
-                    installApk(file)
+                    dismissProgress()
+                    if (!canShowUi()) {
+                        // 页面已经没了：包已经校验并存好，下次进来再装（别在死掉的 Activity 上起安装器）
+                        android.util.Log.i("zv-update", "下载完成但页面已关闭，留着下次安装：" + file.absolutePath)
+                        return@runOnUiThread
+                    }
+                    installApk(file, info.sha256)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("zv-update", "下载失败：" + (e.message ?: ""))
                 runOnUiThread {
-                    progress.dismiss()
+                    dismissProgress()
+                    if (!canShowUi()) return@runOnUiThread
                     AlertDialog.Builder(this)
                         .setTitle("更新失败")
                         .setMessage(e.message ?: "未知原因")
@@ -869,7 +899,23 @@ class WebActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun installApk(apk: java.io.File) {
+    /** 收掉进度框（页面正在销毁时也要收，否则窗口泄漏）。 */
+    private fun dismissProgress() {
+        val p = updateProgress ?: return
+        updateProgress = null
+        try { p.dismiss() } catch (e: Exception) { /* 已经收掉了 */ }
+    }
+
+    /**
+     * 交给系统安装器之前**再核一次文件 sha256**：下载目录在 App 外部存储，别的进程能改它，
+     * 不能只信"下载那一刻验过"。核不过就如实报错、绝不拉安装器。
+     */
+    private fun installApk(apk: java.io.File, expectedSha256: String) {
+        if (!Updater.verifyFile(apk, expectedSha256)) {
+            android.util.Log.w("zv-update", "安装包 sha256 再核对不过，拒绝安装：" + apk.absolutePath)
+            toast("安装包校验不过（sha256 不符），已拒绝安装，请重新检查更新")
+            return
+        }
         try {
             val intent = Updater.install(this, apk)
             startActivity(intent)
@@ -881,7 +927,12 @@ class WebActivity : AppCompatActivity() {
     }
 
     private fun toast(text: String) {
-        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
+        if (!canShowUi()) return
+        try {
+            android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            /* 窗口没了就算了 */
+        }
     }
 
     /**
@@ -890,6 +941,7 @@ class WebActivity : AppCompatActivity() {
      * 而且切完当场就能告诉用户"回桌面看看"（启动器刷新有延迟，不能默默换完就算）。
      */
     private fun showIconChooser() {
+        if (!canShowUi()) return
         val keys = AppIcon.KEYS
         val labels = keys.map { AppIcon.label(it) + if (AppIcon.current(this) == it) "（当前）" else "" }.toTypedArray()
         AlertDialog.Builder(this)
@@ -906,6 +958,7 @@ class WebActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        dismissProgress() // 下载中退出：进度框要收掉（不然漏窗口 + 线程回调还会碰 UI）
         mediaFuture?.let { MediaController.releaseFuture(it) }
         // 全屏视频要先收干净，否则会漏一个 SurfaceView
         customView?.let { fullscreen.removeView(it) }

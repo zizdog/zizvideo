@@ -39,6 +39,16 @@ class PlaybackService : MediaSessionService() {
         @Volatile
         var instance: PlaybackService? = null
             private set
+
+        /**
+         * 播放错误 → 人话。服务与播放页共用这一份（映射本体是纯函数 PlaybackErrors，可单测）。
+         * HTTP 码不在 PlaybackException 上，得从 cause 里取（media3 1.4 的 API 就是这样）。
+         */
+        fun friendlyErrorMessage(error: androidx.media3.common.PlaybackException): String {
+            val http =
+                (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode ?: 0
+            return PlaybackErrors.friendly(error.errorCode, http, error.errorCodeName)
+        }
     }
 
     /** 当前在播的媒体 id 与位置（回前台时用来把播放收回网页）。 */
@@ -59,33 +69,8 @@ class PlaybackService : MediaSessionService() {
     var lastError: String? = null
         private set
 
-    /** 播放页注册这个来显示错误（服务在后台时没人听，所以只存最近一条）。 */
-    var onError: ((String) -> Unit)? = null
-
-    private fun friendlyError(error: androidx.media3.common.PlaybackException): String {
-        // HTTP 码不在 PlaybackException 上，得从 cause 里取（media3 1.4 的 API 就是这样）
-        val http = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode ?: 0
-        return friendlyError(error, http)
-    }
-
-    private fun friendlyError(error: androidx.media3.common.PlaybackException, httpCode: Int): String = when (error.errorCode) {
-        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-        -> "网络断了，连不上服务器"
-        // HTTP 码要分细：404 其实是"文件不在了"，笼统说成"登录过期"是错的（实测踩过）
-        androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> when (httpCode) {
-            404 -> "文件不在了（可能已改名或移动）"
-            401, 403 -> "登录过期了，请重新登录"
-            416 -> "这个视频的数据不完整"
-            0 -> "服务器拒绝了请求"
-            else -> "服务器出错（HTTP " + httpCode + "）"
-        }
-        androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不在了（可能已改名或移动）"
-        androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
-        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
-        -> "这台手机解不了这个视频"
-        else -> "播放出错：" + (error.errorCodeName)
-    }
+    private fun friendlyError(error: androidx.media3.common.PlaybackException): String =
+        friendlyErrorMessage(error)
     private lateinit var player: ExoPlayer
     private val handler = Handler(Looper.getMainLooper())
     // 进度回写必须**离开主线程**：安卓禁止主线程做网络，上一版就是在这儿把 service 崩掉的。
@@ -151,9 +136,10 @@ class PlaybackService : MediaSessionService() {
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                // 别静默：界面要能说"放不了/网络断了"，否则用户只看到黑屏卡住（坑）
+                // 别静默：界面要能说"放不了/网络断了"，否则用户只看到黑屏卡住（坑）。
+                // ⚠️ **不往 Activity 塞回调**：播放页自己订阅 MediaController 的 onPlayerError
+                //    （media3 会把 playerError 转给控制器监听器），服务里只留最近一条文本。
                 lastError = friendlyError(error)
-                onError?.invoke(lastError ?: "播放出错")
             }
 
             override fun onPlayerErrorChanged(error: androidx.media3.common.PlaybackException?) {

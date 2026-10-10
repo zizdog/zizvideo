@@ -32,7 +32,10 @@ import java.security.MessageDigest
  */
 object Updater {
 
-    /** 默认更新源（镜像站）。可用启动参数 update_base 覆盖（自测/模拟器用）。 */
+    /**
+     * 默认更新源（镜像站）。这是**唯一**的更新源：Intent / 网页传进来的 base 一律不认
+     * （只有可调试包才认自测口，见 resolveBase）。
+     */
     const val DEFAULT_BASE = "https://mirror.zizdog.com:8888/apps/zizvideo"
 
     private const val TAG = "zv-update"
@@ -54,22 +57,99 @@ object Updater {
     }
 
     /**
-     * 版本号比大小。本项目的规矩是"末段是 0～10 的计数器"（0.2.9 → 0.2.10 → 0.3.0），
-     * 所以逐段按数字比就对：0.2.10 > 0.2.9（字符串比会错），0.3.0 > 0.2.10。
+     * 更新源**只能**是代码内常量 `DEFAULT_BASE`。`hint` 只有可调试包（allowOverride=true）才被采纳，
+     * 而且是给自测/模拟器用的（`--es update_base http://10.0.2.2:17802/apps/zizvideo`）。
+     *
+     * 为什么外面的 base 一个都不能认：LoginActivity 是 `exported`，本机任何 App 都能塞一个
+     * `update_base` 进来把更新链换成自己的服务器 —— 清单（含 sha256）也归它写，等于装任意 APK。
+     */
+    fun resolveBase(hint: String?, allowOverride: Boolean): String {
+        val h = hint?.trim().orEmpty()
+        if (allowOverride && isHttpUrl(h)) return h.trimEnd('/')
+        return DEFAULT_BASE
+    }
+
+    /** 是不是 http(s) 地址（判自测口时用，避免把 "httpfoo" 这种当地址）。 */
+    fun isHttpUrl(value: String?): Boolean {
+        val v = value?.trim().orEmpty()
+        if (!v.startsWith("https://") && !v.startsWith("http://")) return false
+        return v.substringAfter("://").substringBefore('/').isNotBlank()
+    }
+
+    /**
+     * 版本号比大小。本项目的规矩是"末段是 0～10 的计数器"（0.4.9 → 0.4.10 → 0.5.0），
+     * 所以逐段按**数字**比就对：0.4.10 > 0.4.9（字符串比会反），0.5.0 > 0.4.10。
      */
     fun isNewer(remote: String, local: String): Boolean {
-        val a = remote.split(".")
-        val b = local.split(".")
+        val a = versionParts(remote)
+        val b = versionParts(local)
         for (i in 0 until maxOf(a.size, b.size)) {
-            val x = a.getOrNull(i)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
-            val y = b.getOrNull(i)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
             if (x != y) return x > y
         }
         return false
     }
 
-    /** 拉更新清单；没有新版本返回 null。任何网络/解析问题都抛异常，交给调用方决定怎么说话。 */
-    fun check(context: Context, base: String): Update? {
+    /** "0.4.10" → [0,4,10]；段里带后缀（0.6.3-mvp）只取开头的数字，取不到的段算 0。 */
+    private fun versionParts(v: String): List<Int> =
+        v.trim().split('.').map { it.takeWhile { c -> c.isDigit() }.toIntOrNull() ?: 0 }
+
+    /**
+     * sha256 必须是 **64 位小写 hex**（发布侧 tools/make-app-index.py 就是这么写的）。
+     * 缺失、大写、短了、带别的字符 —— 一律算格式不对。
+     */
+    fun isValidSha256(value: String?): Boolean {
+        val v = value?.trim().orEmpty()
+        if (v.length != 64) return false
+        return v.all { it in '0'..'9' || it in 'a'..'f' }
+    }
+
+    /**
+     * 期望的 sha256 与实测值是否相符。**fail-closed**：期望值缺失或格式不对 ⇒ false。
+     * 原来写的是 `sha256.isNotBlank() && equals(ignoreCase)` —— 清单里没写 sha256 就等于
+     * **完全不校验**（更新链可被换成任意 APK），这正是要堵的洞。
+     */
+    fun verifyDigest(expected: String?, actual: String?): Boolean {
+        val e = expected?.trim().orEmpty()
+        if (!isValidSha256(e)) return false
+        return e == actual?.trim().orEmpty()
+    }
+
+    /**
+     * 安装前再核一次**文件本身**：下载目录在 App 外部存储（`Android/data/.../update`），
+     * 别的进程能改它；交给系统安装器之前必须确认手里这份就是清单说的那份。
+     */
+    fun verifyFile(file: File, expected: String?): Boolean =
+        file.isFile && verifyDigest(expected, sha256(file))
+
+    /**
+     * 清单里的 `file` 只允许**同源相对路径**（`android/zizvideo-android-0.4.4.apk`）。
+     * 出现 `http(s)://`、协议相对 `//host/...`、绝对路径、`..`、空白一律拒绝（返回 null）——
+     * 否则清单自己就能把下载引到别人的服务器上（清单也来自更新源）。
+     */
+    fun resolveDownloadUrl(base: String, file: String?): String? {
+        val f = file?.trim().orEmpty()
+        if (f.isEmpty()) return null
+        if (f.contains("://")) return null
+        if (f.startsWith("/") || f.startsWith("\\")) return null
+        if (f.contains("..") || f.contains('\\')) return null
+        if (f.any { it.isWhitespace() }) return null
+        return base.trimEnd('/') + "/" + f
+    }
+
+    /**
+     * 拉更新清单；没有新版本返回 null。任何网络/解析问题、以及**清单本身不可信**
+     * （file 不是同源相对路径 / sha256 缺失或格式不对）都抛异常，交给调用方如实说。
+     *
+     * 更新源由 resolveBase 定：release 包里 `hint` 会被整个忽略。
+     */
+    fun check(context: Context, hint: String? = null): Update? {
+        val debug = BuildFlags.isDebuggable(context)
+        val base = resolveBase(hint, debug)
+        if (!hint.isNullOrBlank() && !debug) {
+            Log.w(TAG, "忽略外部传入的更新源（只有可调试包才认自测口）")
+        }
         val indexUrl = base.trimEnd('/') + "/android.json"
         val text = httpGet(indexUrl)
         val obj = JSONObject(text)
@@ -80,17 +160,24 @@ object Updater {
             Log.w(TAG, "清单字段不全：version=$version file=$file")
             return null
         }
-        val url = if (file.startsWith("http")) file else base.trimEnd('/') + "/" + file.trimStart('/')
+        // 先验清单、再比版本：清单不可信时"已是最新"也是谎话
+        val url = resolveDownloadUrl(base, file)
+            ?: throw IllegalStateException("更新清单的 file 不是同源相对路径，已拒绝")
+        val sha = obj.optString("sha256").trim()
+        if (!isValidSha256(sha)) {
+            throw IllegalStateException("更新清单缺少有效的 sha256（64 位小写 hex），已拒绝更新")
+        }
         Log.i(TAG, "更新清单：最新=$version 当前=$local file=$file")
         if (!isNewer(version, local)) return null
-        return Update(version, url, obj.optString("sha256"), obj.optLong("size"))
+        return Update(version, url, sha, obj.optLong("size"))
     }
 
     /**
      * 下载 APK 到 App 私有外部目录（不用存储权限），边下边报进度；下完**核对 sha256**，
      * 不一致直接删掉并报错（宁可让用户重试，也不许装一个坏包）。
+     * sha256 缺失/格式不对同样拒绝（fail-closed，见 verifyDigest）。
      */
-    fun download(context: Context, base: String, update: Update, onProgress: (Int) -> Unit): File {
+    fun download(context: Context, update: Update, onProgress: (Int) -> Unit): File {
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "update")
         dir.mkdirs()
         val name = update.url.substringAfterLast('/').ifBlank { "zizvideo-android-${update.version}.apk" }
@@ -129,9 +216,9 @@ object Updater {
             conn.disconnect()
         }
         val digest = sha256(tmp)
-        if (update.sha256.isNotBlank() && !digest.equals(update.sha256, ignoreCase = true)) {
+        if (!verifyDigest(update.sha256, digest)) {
             tmp.delete()
-            throw IllegalStateException("下载的安装包校验不符（可能被截断），已丢弃，请重试")
+            throw IllegalStateException("安装包校验不过（sha256 缺失、格式不对或与文件不符），已丢弃，请重试")
         }
         if (update.size > 0 && tmp.length() != update.size) {
             val got = tmp.length()

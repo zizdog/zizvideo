@@ -48,6 +48,9 @@ class PlayerActivity : AppCompatActivity() {
     private var currentId = ""
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
+
+    /** 本页自己订阅的播放监听（MediaController 上的）；onDestroy 里必须退订（页面死了不该再被回调）。 */
+    private var playerListener: androidx.media3.common.Player.Listener? = null
     private var resumed = false // 本条是从上次位置接着放的（标题上要标出来，与网页端同义）
 
     // B5：倍速 / 长按快进 / 双击点赞（与网页同一套语义，倍速设置也共用服务端那份）
@@ -179,10 +182,11 @@ class PlayerActivity : AppCompatActivity() {
             }
             controller = c
             view.player = c
-            PlaybackService.instance?.let { svc ->
-                svc.onError = { msg -> runOnUiThread { nowPlaying.text = msg } }
-                svc.lastError?.let { nowPlaying.text = it } // 进页面前就错了的，也别漏
-            }
+            // 错误由**页面自己订阅**（MediaController 会收到 PlayerInfo.playerError 并回调
+            // onPlayerError）：绝不把 Activity/View 的回调挂到长生命周期的服务上 ——
+            // 那样 onDestroy 之后服务还攥着 Activity（泄漏），第二次进页面又会把它覆盖掉，
+            // 错误就显示到一个看不见的页面上了。
+            PlaybackService.instance?.lastError?.let { nowPlaying.text = it } // 进页面前就错了的，也别漏
             c.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onMediaMetadataChanged(metadata: MediaMetadata) = paint(c.currentMediaItem)
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -190,7 +194,12 @@ class PlayerActivity : AppCompatActivity() {
                     paintOffline()
                     refreshState(item?.mediaId ?: "")
                 }
-            })
+
+                /** 播放出错要说到脸上（黑屏 + 没提示用户只会以为卡住了）。 */
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    nowPlaying.text = PlaybackService.friendlyErrorMessage(error)
+                }
+            }.also { playerListener = it })
             refreshState(c.currentMediaItem?.mediaId ?: "") // 监听器挂上前就设好的条目也要对齐
             loadSpeed() // 服务端存着的倍速（网页改过也跟着）
             c.setPlaybackSpeed(speed)
@@ -596,7 +605,12 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopOfflineTicker()
-        // 只放掉控制器，**不**停服务：退到后台/锁屏继续放。
+        // 先退订本页的监听（服务/控制器不许再回调一个正在销毁的页面），再放掉控制器；
+        // 只放掉控制器、**不**停服务：退到后台/锁屏继续放。
+        playerListener?.let { l ->
+            try { controller?.removeListener(l) } catch (e: Exception) { /* 忽略：退订失败也不影响 */ }
+        }
+        playerListener = null
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null
         super.onDestroy()

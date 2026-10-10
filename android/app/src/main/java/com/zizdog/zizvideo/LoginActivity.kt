@@ -509,14 +509,16 @@ class LoginActivity : AppCompatActivity() {
             // "登录请求成功"不等于"网页也登录上了"：cookie 带 Secure 而地址是 http 时，
             // WebView 会**拒收**这个 cookie（原生这边发的是裸 Cookie 头，所以看着一切正常），
             // 然后网页发现没会话就退到 #/login，用户看到的就是"闪一下又回到登录页、还没提示"。
-            // 这里提前把这种情况挑明（用户 2026-09-27 报障）。
+            // Android R+ 的 strict secure cookie 策略就是这样（Chromium MaybeFixUpSchemeForSecureCookie），
+            // 所以这里按属性先判一次（用户 2026-09-27 报障）。
+            val rejected = reply.cookies.any { Cookies.droppedBySecureOverHttp(it, base) }
             val webCookie = CookieManager.getInstance().getCookie(base) ?: ""
             android.util.Log.i(
                 "zv-login",
                 "login ok version=$version cookies=" + reply.cookies.size +
-                    " webviewHasSession=" + webCookie.contains("zv_session="),
+                    " webviewHasSession=" + Cookies.sessionVisible(webCookie) + " secureRejected=" + rejected,
             )
-            if (!webCookie.contains("zv_session=")) {
+            if (rejected || !Cookies.sessionVisible(webCookie)) {
                 fail(getString(R.string.err_cookie_rejected))
                 return@Thread
             }
@@ -525,14 +527,25 @@ class LoginActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** 把登录响应的 Set-Cookie 灌进 WebView 的 cookie 存储；不灌的话网页那一侧还是未登录。 */
+    /**
+     * 把登录响应的 Set-Cookie 灌进 WebView 的 cookie 存储；不灌的话网页那一侧还是未登录。
+     * **整串原样写**（见 Cookies.forCookieManager）：自己重拼成 `name=value; path=/` 会把服务端
+     * 刻意设的 HttpOnly / SameSite=Strict / Secure / Max-Age 丢光（服务端 authz_test 就在盯 HttpOnly）。
+     */
     private fun pushCookies(base: String, cookies: List<String>) {
         val manager = CookieManager.getInstance()
         manager.setAcceptCookie(true)
         for (raw in cookies) {
-            val pair = raw.substringBefore(';').trim()
-            if (pair.isEmpty()) continue
-            manager.setCookie(base, "$pair; path=/")
+            val value = Cookies.forCookieManager(raw)
+            if (value == null) {
+                android.util.Log.w("zv-login", "跳过不是 cookie 的 Set-Cookie：" + raw.take(60))
+                continue
+            }
+            if (Cookies.droppedBySecureOverHttp(raw, base)) {
+                // 照灌（让下面那段统一判失败），但要留一条能查的日志
+                android.util.Log.w("zv-login", "cookie 带 Secure 而地址是 http，WebView 会拒收")
+            }
+            manager.setCookie(base, value)
         }
         manager.flush()
     }
@@ -581,9 +594,13 @@ class LoginActivity : AppCompatActivity() {
             intent.putExtra(WebActivity.EXTRA_PATH, explicitPath)
         }
         // 自测用的两个"外部开关"也要**透传**：启动参数落在 LoginActivity 上（launcher），
-        // 不转发的话它们永远到不了 WebActivity（实测：更新源覆盖失效、检查跑去了默认镜像）。
-        this.intent.getStringExtra(WebActivity.EXTRA_UPDATE_BASE)?.let {
-            intent.putExtra(WebActivity.EXTRA_UPDATE_BASE, it)
+        // 不转发的话它们永远到不了 WebActivity（实测：更新源覆盖失效）。
+        // ⚠️ `update_base` 只在**可调试包**里透传：LoginActivity 是 exported，本机任何 App 都能
+        //    塞这个 extra 进来；release 包里连传都不传（WebActivity/Updater 那边还有第二道门）。
+        if (BuildFlags.isDebuggable(this)) {
+            this.intent.getStringExtra(WebActivity.EXTRA_UPDATE_BASE)?.let {
+                intent.putExtra(WebActivity.EXTRA_UPDATE_BASE, it)
+            }
         }
         if (this.intent.hasExtra(WebActivity.EXTRA_TV)) {
             intent.putExtra(WebActivity.EXTRA_TV, this.intent.getBooleanExtra(WebActivity.EXTRA_TV, false))
