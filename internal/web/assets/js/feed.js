@@ -1,13 +1,19 @@
 // 竖向全屏短视频流：transform 位移 + 手势锁 + seed 随机游标 + 拖动进度
 
 import { api, patchProgressKeepalive } from "./api.js";
-import { icon, setIcon } from "./icons.js";
+import { icon } from "./icons.js";
 import { el, clear, asArray, fmtDuration } from "./dom.js";
 import { mountNav } from "./nav.js";
 import { session } from "./auth.js";
 import { choiceDialog } from "./confirm.js";
-import { createFeedSettingsForm, normalizeFeedSettings, seekSecondsOf, loopEffective } from "./play-settings.js";
-import { setFeedKeys, tvMode, focusFirst, focusSelector, moveFocusIn } from "./tv.js";
+import { normalizeFeedSettings, seekSecondsOf, loopEffective } from "./play-settings.js";
+import { tvMode, focusFirst, focusSelector, setFeedKeys } from "./tv.js";
+import { createFeedRuntime } from "./feed-state.js";
+import { createSoundModule } from "./feed-sound.js";
+import { createFullscreenModule } from "./feed-fullscreen.js";
+import { createNativeModule } from "./feed-native.js";
+import { createSettingsPanel } from "./feed-settings-panel.js";
+import { createTvModule } from "./feed-tv.js";
 
 const WHEEL_STEP = 40;
 const TOUCH_STEP = 50;
@@ -17,7 +23,6 @@ const PROGRESS_EVERY_MS = 5000;
 const COMPLETE_TAIL_MS = 1500;
 const BATCH = 10;
 const WINDOW = 1;
-const SOUND_KEY = "zv_sound";
 
 // 手势锁：一次手势只允许前进一条（短内容一次跳两条是回归 bug）
 export function createGestureGate({ quietMs = GESTURE_QUIET } = {}) {
@@ -53,40 +58,6 @@ function isPlayable(item) {
   return true;
 }
 
-function readSoundPref() {
-  // 没存过 = **默认开声**（用户 2026-09-27："默认视频应该是打开声音的，我测试时默认静音"）。
-  // 只有用户自己按过喇叭（存了 "off"）才静音。浏览器不许"有声自动播放"时，
-  // 下面的 tryPlay() 会退回静音自动播 + 提示去哪里开声，这条路不变。
-  // ⚠️ 电视端不适用：用户 2026-09-28 明确"任何情况下都不要静音" ⇒ TV 上偏好恒为"开"。
-  if (tvMode()) return true;
-  try {
-    const saved = localStorage.getItem(SOUND_KEY);
-    return saved === null ? true : saved === "on";
-  } catch (err) {
-    return true;
-  }
-}
-
-function writeSoundPref(on) {
-  try { localStorage.setItem(SOUND_KEY, on ? "on" : "off"); } catch (err) { /* 隐私模式忽略 */ }
-}
-
-// B4：画中画 / 投屏的能力探测 —— 浏览器支持才画按钮，绝不画个点了没反应的图标。
-// 安卓 App 的画中画是"整个 App 缩成小窗"（WebView 里的视频继续放），由原生桥 enterPip 接管。
-function nativePipAvailable() {
-  return typeof window !== "undefined" && !!window.ZvAndroid
-    && typeof window.ZvAndroid.enterPip === "function";
-}
-function pipAvailable() {
-  if (nativePipAvailable()) return true;
-  return typeof document !== "undefined" && document.pictureInPictureEnabled === true
-    && typeof document.exitPictureInPicture === "function";
-}
-// Remote Playback 是标准的"投到电视/盒子"接口（Chrome 的 Cast、Safari 的 AirPlay 都走它）。
-function castAvailable() {
-  return typeof HTMLVideoElement !== "undefined"
-    && !!HTMLVideoElement.prototype && "remote" in HTMLVideoElement.prototype;
-}
 
 // inOverlay：事件来自设置面板/遮罩/选集面板 ⇒ 手势不归播放器管（面板要能自己滚）
 function inOverlay(target) {
@@ -206,25 +177,68 @@ export function mountFeed(view, options = {}) {
   // 还挂载着吗？只给"与当前库无关"的响应当判据（见 loadLibraries）：这类数据不属于任何世代，
   // 拿世代去卡它反而会把**有效**的响应丢掉（比如首屏视频比库列表先到、用户点了卡片上的「来自 X」）。
   let alive = true;
-  const state = {
-    // ⚠️ items 必须**从空开始**：数据统一由 appendItems 追加（它按 state.items.length 决定下标与
-    // 外壳 top）。播放列表模式若在这里预填，appendItems 会再加一遍 ⇒ 外壳下标/位置错位，
-    // 卡片被推到 top:100% 的视口外 —— 观感就是"点开一片黑"（用户 2026-09-22 报障）。
-    items: [],
-    shells: [], built: new Map(),
-    active: -1,
-    // 首页靠游标无限翻页；播放列表模式一次给全，没有"更多页"（goTo 到末尾就 clamp）
-    hasMore: !playlist, loading: false,
-    soundOn: readSoundPref(), // 与首页共用同一个偏好（localStorage 同一个键）
-    // 浏览器把"有声自动播放"摁掉过一次（没有用户手势时一定会被摁）⇒ 这一页实际是静音的。
-    // 图标必须跟着它走，否则就是用户报障的"图标显示有声、其实没声，要点两下"（2026-09-25）。
-    soundBlocked: false,
-    scope: "", scopeName: "", nextCursor: "",
-    libraries: [], librariesLoaded: !!playlist,
-    // 剧场：自动连播写死开启、循环写死关闭（用户："自动连播且无法设置"）
-    settings: normalizeFeedSettings(playlist ? { autoplay_next: true, loop_play: false } : undefined),
-    infoCard: null, emptyCard: null, errorCard: null,
+
+  /* ---------- 模块装配 ---------- */
+  // 拆出去的几块（feed-state / feed-sound / feed-fullscreen / feed-native /
+  // feed-settings-panel / feed-tv）在这里接线：共享状态是同一份对象，互调走显式 ctx
+  // （函数声明会提升，建 ctx 时下面这些函数已经在了）。
+  const runtime = createFeedRuntime({ playlist });
+  const state = runtime.state;
+  const rt = runtime.rt;
+  const ctx = {
+    state, rt, playlist, tvLayout,
+    feed, picker,
+    tvList, tvStage, tvLibs, tvLibsBody, tvLibsStrip, tvNav, tvHintMain, tvHintSub,
   };
+  ctx.core = {
+    showToast, isAdmin, toggleWatchLater, askDelete, goTo, ensureEntry, tryPlay, togglePlay,
+    maybeLoadMore, switchScope, isPlayable, titleOf, paintPanel, loopEnabled, saveSettings,
+    centerMessage,
+  };
+  ctx.sound = createSoundModule(ctx);
+  ctx.fs = createFullscreenModule(ctx);
+  ctx.native = createNativeModule(ctx);
+  ctx.panels = createSettingsPanel(ctx);
+  ctx.tv = createTvModule(ctx);
+  // 老调用点一行不改：模块函数在本文件里按原名挂成局部别名。
+  const effectiveSoundOn = ctx.sound.effectiveSoundOn;
+  const refreshGain = ctx.sound.refreshGain;
+  const markSoundBlocked = ctx.sound.markSoundBlocked;
+  const clearSoundBlocked = ctx.sound.clearSoundBlocked;
+  const soundButton = ctx.sound.soundButton;
+  const showSoundHint = ctx.sound.showSoundHint;
+  const immersiveOn = ctx.fs.immersiveOn;
+  const paintImmersive = ctx.fs.paintImmersive;
+  const exitFullscreen = ctx.fs.exitFullscreen;
+  const releaseFullscreen = ctx.fs.releaseFullscreen;
+  const immersiveBack = ctx.fs.immersiveBack;
+  const centerPlayPause = ctx.fs.centerPlayPause;
+  const fullscreenButton = ctx.fs.fullscreenButton;
+  const paintPip = ctx.native.paintPip;
+  const onPipMode = ctx.native.onPipMode;
+  const tvNeedsNative = ctx.native.tvNeedsNative;
+  const brokenCard = ctx.native.brokenCard;
+  const openPanel = ctx.panels.openPanel;
+  const closePanels = ctx.panels.closePanels;
+  const panelVisible = ctx.panels.panelVisible;
+  const anyPanelOpen = ctx.panels.anyPanelOpen;
+  const buildEpisodePanel = ctx.panels.buildEpisodePanel;
+  const holdCurrent = ctx.panels.holdCurrent;
+  const tvRow = ctx.tv.tvRow;
+  const paintTvList = ctx.tv.paintTvList;
+  const tvStageSet = ctx.tv.tvStageSet;
+  const tvPaintLayers = ctx.tv.tvPaintLayers;
+  const tvPaint = ctx.tv.tvPaint;
+  const tvPaintHint = ctx.tv.tvPaintHint;
+  const tvFocusSurface = ctx.tv.tvFocusSurface;
+  const tvFocusLibs = ctx.tv.tvFocusLibs;
+  const renderTvLibs = ctx.tv.renderTvLibs;
+  const renderTvNav = ctx.tv.renderTvNav;
+  const tvSetOps = ctx.tv.tvSetOps;
+  const tvSetFull = ctx.tv.tvSetFull;
+  const onTvFocusIn = ctx.tv.onTvFocusIn;
+  const onTvKeyDown = ctx.tv.onTvKeyDown;
+
   let toastTimer = 0;
   let settleTimer = 0;
 
@@ -279,164 +293,8 @@ export function mountFeed(view, options = {}) {
     tvStageSet();
     tvPaintLayers();
     if (tvLayout) tvPaint();
-    if (tvSurface) tvFocusSurface();
+    if (rt.tvSurface) tvFocusSurface();
     if (prevFocusInList) focusSelector(".tv-row.on");
-  }
-
-  /**
-   * 电视端：左侧列表点亮当前这条 + 滚到看得见的地方（不做整屏位移 —— 那是手机端的翻页）。
-   * 列表行是"索引"，不是焦点：焦点始终在右侧画面上（用户 2026-09-28 的范式：上下键翻页）。
-   */
-  function paintTvList() {
-    if (!tvLayout) return;
-    state.shells.forEach((row, i) => {
-      if (row && row.classList) row.classList.toggle("on", i === state.active);
-    });
-    const cur = state.shells[state.active];
-    if (cur && cur.scrollIntoView) {
-      try { cur.scrollIntoView({ block: "nearest" }); } catch (err) { /* 老 WebView 忽略 */ }
-    }
-  }
-
-  /** 电视端：右侧播放区里只放"当前这条"的 layer；其余收回列表行（行内的 layer 是隐藏的）。 */
-  function tvStageSet() {
-    if (!tvLayout) return;
-    for (const [index, entry] of state.built) {
-      if (!entry.layer) continue;
-      if (index === state.active) {
-        if (entry.layer.parentNode !== tvStage) tvStage.append(entry.layer);
-      } else if (entry.layer.parentNode === tvStage) {
-        const row = state.shells[index];
-        if (row) row.append(entry.layer);
-        else entry.layer.remove();
-      }
-    }
-  }
-
-  /**
-   * 电视端左栏列表的一行：封面 + 时长 + 标题 + 一行元信息。
-   * 行**可以聚焦**：焦点走到哪条就切到哪条（右边跟着播）；按确定 = 进全屏播放。
-   * 元信息做减法：没有播放量就写"看到 x% / 已看完"，播放列表就写"第 N 集"。
-   */
-  function tvRow(item, index) {
-    const dur = fmtDuration(item.duration_ms);
-    const prog = item.progress || {};
-    let meta = "";
-    if (prog.completed) meta = "已看完";
-    else if (prog.position_ms > 0 && item.duration_ms > 0) {
-      meta = "看到 " + Math.min(99, Math.round((prog.position_ms / item.duration_ms) * 100)) + "%";
-    } else if (playlist) meta = "第 " + (index + 1) + " 集";
-    else if (item.library_name) meta = item.library_name;
-    // 非 H.264 的编码在电视端要走原生播放器 —— 标出来，用户一眼知道为什么
-    const vcodec = String((item.codecs && item.codecs.video) || "").toLowerCase();
-    if (vcodec && vcodec !== "h264" && vcodec !== "avc1") {
-      meta = (meta ? meta + " · " : "") + vcodec.toUpperCase();
-    }
-    const row = el("div", { class: "tv-row", tabindex: "0", dataset: { index: String(index), id: String(item.id) } },
-      el("span", { class: "tv-thumb" },
-        item.cover_url ? el("img", { src: item.cover_url, alt: "", loading: "lazy" }) : null,
-        dur ? el("span", { class: "tv-dur", text: dur }) : null),
-      el("span", { class: "tv-row-body" },
-        el("span", { class: "tv-row-title", text: titleOf(item, index) }),
-        el("span", { class: "tv-row-meta", text: meta || "未看" })));
-    // ⚠️ 只移动焦点、**不切播放**（用户 2026-09-29："视频列表上下切换时不播放！切换到对应焦点，
-    // 点击确定再播放，期间正在播放的视频不停止"）。焦点框由 tv.js 的 .tv-focus 画，
-    // "正在播的那条"由 .on 画 —— 两者可以不是同一条。
-    row.addEventListener("click", () => tvPlayFromList(index));
-    return row;
-  }
-
-  /** 从左栏列表播放某一条：如果是全屏就用它，否则切过去并进全屏（用户 2026-09-28："确定进入全屏播放"）。 */
-  function tvPlayFromList(index) {
-    closePanels();
-    const item = state.items[index];
-    // WebView 解不了的编码（HEVC/AV1）先交原生 —— 别让它去 <video> 里黑屏
-    if (tvNeedsNative(item)) return tvNativePlay(item);
-    // 这一条服务端说放不了（别的编码/状态）：也交给原生播放器，别停在"放不了"那张卡上
-    if (item && !isPlayable(item) && !item.missing) return tvNativePlay(item);
-    // 用户 2026-09-30："视频列表点击时只播放，不全屏，再次点击才全屏"
-    // 第一次确定 = 切过去播（焦点留在列表里，方便接着挑下一条）；**同一条**再按确定才进全屏。
-    if (index !== state.active) {
-      goTo(index);
-      return true;
-    }
-    if (tvFull) { tvFocusSurface(); return true; }
-    return tvSetFull(true);
-  }
-
-  /** 右栏库列表的数据：第一个永远是"全部库"，后面是这台账号能访问的媒体库（顺序按后端）。 */
-  function tvTabs() {
-    return [{ id: "", name: "全部库" }].concat(
-      state.libraries.map((lib) => ({ id: lib.id, name: lib.name || lib.id })));
-  }
-
-  /**
-   * 电视端**右栏**：该用户可访问的媒体库（竖排；用户 2026-09-28 最新版把原来顶部那排挪到右边）。
-   * 剧场（播放列表）没有"库"的概念，右栏整块藏起来。
-   */
-  function renderTvLibs() {
-    if (!tvLayout || !tvLibs) return;
-    clear(tvLibsBody);
-    if (playlist) {
-      tvLibs.classList.add("hidden");
-      return;
-    }
-    tvLibs.classList.remove("hidden");
-    for (const it of tvTabs()) {
-      const on = String(state.scope || "") === String(it.id || "");
-      const tab = el("button", {
-        class: "tv-tab" + (on ? " on" : ""), type: "button",
-        dataset: { role: "tv-tab", lib: it.id || "" }, text: it.name,
-      });
-      tab.addEventListener("click", () => switchScope(it.id, it.name));
-      tvLibsBody.append(tab);
-    }
-    const cur = tvLibsBody.querySelector(".tv-tab.on");
-    if (cur && cur.scrollIntoView) {
-      try { cur.scrollIntoView({ block: "nearest" }); } catch (err) { /* 忽略 */ }
-    }
-  }
-
-  /** 媒体库那一栏：展开 / 折叠（折叠时只留左边那条可聚焦的窄条）。 */
-  function tvLibsExpand(on) {
-    if (!tvLayout || !tvLibs) return;
-    tvLibs.classList.toggle("collapsed", !on);
-    tvLibs.classList.toggle("expanded", !!on);
-  }
-  /** 焦点进媒体库：先展开，再落到当前那个库上。 */
-  function tvFocusLibs() {
-    tvLibsExpand(true);
-    void tvLibs.offsetHeight;
-    if (focusSelector(".tv-libs-body .tv-tab.on")) return true;
-    return focusSelector(".tv-libs-body .tv-tab");
-  }
-
-  /**
-   * 右栏再往右露出来的那一列：**剧场 / 收藏 / 我的**（用户 2026-09-28："光标在库列表中时继续按右键，
-   * 显示剧场、收藏、我的列表（竖向），按左键焦点回库列表并隐藏它"）。
-   * 复用 mountNav 的那份导航（同一份实现），只把「首页」和上传「+」摘掉 —— 人已经在首页了。
-   */
-  function renderTvNav() {
-    if (!tvLayout || !tvNav) return;
-    tvNav.classList.add("hidden");
-    for (const item of Array.from(tvNav.querySelectorAll(".nav-item"))) {
-      const key = item.dataset ? item.dataset.key : "";
-      if (key === "feed" || key === "upload" || item.classList.contains("upload")) item.remove();
-    }
-    for (const item of Array.from(tvNav.querySelectorAll(".nav-item"))) {
-      item.addEventListener("click", () => tvHideNav());
-    }
-  }
-
-  /** 电视端：只有**当前这条**画面能当焦点落点 / 默认落点（data-tv-default 给 tv.js 的 focusFirst 用）。 */
-  function tvPaintLayers() {    if (!tvMode()) return;
-    for (const [index, entry] of state.built) {
-      if (!entry.layer) continue;
-      const on = index === state.active;
-      entry.layer.tabIndex = on ? 0 : -1;
-      if (on) entry.layer.setAttribute("data-tv-default", "1");
-      else entry.layer.removeAttribute("data-tv-default");
-    }
   }
 
   /**
@@ -646,7 +504,7 @@ export function mountFeed(view, options = {}) {
       if (tvLayout) tvPaint();   // 暂停 ⇒ 全屏里把进度条露出来
       // 全屏里**当前这条**暂停要让中间的播放键看得见（收起状态下先展开控件）。
       // ⚠️ 必须是活跃条目：连播切走时上一条会 pause，那时展开控件会莫名其妙弹出来（实测踩到）。
-      if (immersiveOn() && entry.index === state.active) { full.uiHidden = false; paintImmersive(); }
+      if (immersiveOn() && entry.index === state.active) { rt.full.uiHidden = false; paintImmersive(); }
       if (!entry.video.ended && !immersiveOn()) showPlayButton(entry);
     });
     video.addEventListener("ended", () => onEnded(entry));
@@ -664,7 +522,7 @@ export function mountFeed(view, options = {}) {
       }
       tapTimer = setTimeout(() => {
         tapTimer = 0;
-        if (immersiveOn()) { full.uiHidden = !full.uiHidden; paintImmersive(); return; }
+        if (immersiveOn()) { rt.full.uiHidden = !rt.full.uiHidden; paintImmersive(); return; }
         togglePlay(entry);
       }, 260); // 双击判定窗：安卓系统的双击超时是 300ms，取 260 兼顾"单击不拖沓"与"双击抓得住"
     });
@@ -678,62 +536,6 @@ export function mountFeed(view, options = {}) {
       el("div", { class: "center-inner" },
         el("div", { class: "center-title", text: title }),
         el("div", { class: "center-sub", text: sub })));
-  }
-
-  /** 交给原生播放器前，先把网页这边的声音关掉：两边同时放就是"两个声音"（用户 2026-09-30 反馈过）。 */
-  function pauseWebPlayback() {
-    for (const entry of state.built.values()) {
-      if (entry.video && !entry.video.paused) {
-        try { entry.video.pause(); } catch (err) { /* ignore */ }
-      }
-    }
-  }
-
-  /**
-   * 电视端：让**原生播放器**播这一条（ExoPlayer 走平台 MediaCodec —— 小米电视这类机器有硬件 HEVC 解码器）。
-   * 用户 2026-09-29："播放不了 hevc！我的小米电视硬件是支持的"：WebView 的 <video> 放不了的编码，
-   * 由原生播放页接手。
-   * ⚠️ 优先走原生桥（App 0.4.3+）：**不改 hash**。改 hash 会被前端路由器当成一次真跳转
-   * （首页整个重挂、列表重新拉一遍 ⇒ 用户返回时"列表都变了"），再叠加 App 那边的 web.goBack()
-   * 就把用户正在看的列表冲掉了（用户 2026-10-01 报障）。老 App 没有这个桥，退回 hash 深链兜底。
-   */
-  function tvNativePlay(item) {
-    if (!item || !item.id) return false;
-    closePanels();
-    pauseWebPlayback();
-    const bridge = typeof window !== "undefined" ? window.ZvAndroid : null;
-    if (bridge && typeof bridge.playNative === "function") {
-      try {
-        if (bridge.playNative(String(item.id), "single")) return true;
-      } catch (err) { /* 桥出错就退回 hash 深链 */ }
-    }
-    location.hash = "#/play/single/" + encodeURIComponent(item.id);
-    return true;
-  }
-
-  /**
-   * 这条**必须**交给原生播放器吗？电视端 + 原生桥在 + 编码是 WebView 解不出的（HEVC/AV1）——
-   * 用户 2026-09-30 实测："hevc 视频还是提示'这台浏览器解不出 hevc 画面'"：服务端已经不拦了，
-   * 但 WebView 自己解不出来（Android WebView 的 <video> 走的是 Chromium 的解码路径，
-   * 跟设备有没有硬件 HEVC 解码器不是一回事）。所以这类编码**别喂给 <video>**，直接原生硬解。
-   */
-  function tvNeedsNative(item) {
-    if (!tvLayout || !item) return false;
-    if (typeof window === "undefined" || !window.ZvAndroid) return false;
-    const codec = String((item.codecs && item.codecs.video) || "").toLowerCase();
-    return codec === "hevc" || codec === "h265" || codec === "av1";
-  }
-
-  /** 放不了的卡片：电视端多一个"用原生播放器打开"的按钮（WebView 解不了的编码走原生硬解）。 */
-  function brokenCard(item, title, sub) {
-    const card = centerMessage(title, sub);
-    if (!tvLayout || !item || !item.id) return card;
-    const btn = el("button", { class: "btn primary center-action", type: "button", text: "用原生播放器打开",
-      dataset: { role: "tv-native-play" } });
-    btn.addEventListener("click", (event) => { event.stopPropagation(); tvNativePlay(item); });
-    const inner = card.querySelector ? card.querySelector(".center-inner") : null;
-    if (inner) inner.append(btn);
-    return card;
   }
 
   function libraryCorner(item) {
@@ -821,112 +623,6 @@ export function mountFeed(view, options = {}) {
         }
       });
     }
-  }
-
-  /* ---------- 声音（角落按钮，不再是单击画面） ---------- */
-
-  // 唯一的判据：**这一刻实际听不听得到**。偏好（localStorage）说"开"、但浏览器把有声自动播放
-  // 摁掉了（soundBlocked）时，实际是静音 —— 图标/提示/元素三者都必须按这个来。
-  // 原来只有"用户点喇叭"那一处会同步元素，被策略摁静音那次不同步 ⇒ 图标显示有声、实际没声，
-  // 用户得点两下（先静音、再开声）才有声音（用户 2026-09-25 报障）。
-  function effectiveSoundOn() {
-    // 电视端恒定有声（用户 2026-09-28："任何情况下都不要静音"）——
-    // 偏好、"被策略摁掉"这两条路都不许把 TV 弄静音。
-    if (tvMode()) return true;
-    return state.soundOn && !state.soundBlocked;
-  }
-
-  /**
-   * 音量均一化补一次：列表是**打开页面时**取的，那时这条可能还没量过响度（gain_db=0），
-   * 而服务端是"第一次播它"时才开始在后台量（量完才写库）⇒ 本次会话里这条拿不到增益。
-   * 所以开播后过几秒回查一次这一条：量到了就把音量落下去（用户 2026-09-26："不同视频音量不同"）。
-   * 只查一次、只查没量过的那些，避免每条都多打一个请求。
-   */
-  function refreshGain(index) {
-    const item = state.items[index];
-    if (!item || Number(item.gain_db) < 0 || item.__gainChecked) return;
-    item.__gainChecked = true;
-    setTimeout(() => {
-      api.media(String(item.id)).then((m) => {
-        const gain = m && Number(m.gain_db);
-        if (!(gain < 0)) return;
-        item.gain_db = gain;
-        const entry = state.built.get(index);
-        // 同一下标可能已经换成别的视频了（切库/换挂载，同类竞态）：只认"还在这个位置上的那一条"
-        if (entry && entry.item === item && entry.video) {
-          entry.video.volume = Math.max(0, Math.min(1, Math.pow(10, gain / 20)));
-        }
-      }).catch(() => { /* 查不到就算了，下次打开页面还有机会 */ });
-    }, 6000);
-  }
-
-  /** 把"实际该不该有声"落到**所有**已建条目上，并同步图标/提示（只此一处改 audio 状态）。 */
-  function applySound() {
-    const on = effectiveSoundOn();
-    for (const entry of state.built.values()) {
-      if (entry.video) entry.video.muted = !on;
-      paintSound(entry);
-      if (on) hideSoundHint(entry);
-    }
-  }
-
-  function paintSound(entry) {
-    if (!entry || !entry.sound) return;
-    const on = effectiveSoundOn();
-    setIcon(entry.sound, on ? "volume" : "mute");
-    entry.sound.dataset.sound = on ? "on" : "off"; // 给验收脚本一个稳的判据（不是文案）
-  }
-
-  /** 浏览器不许"有声自动播放"：标记 + 图标与元素一起变静音（偏好不动，等用户点一下）。 */
-  function markSoundBlocked() {
-    if (state.soundBlocked) return;
-    state.soundBlocked = true;
-    applySound();
-  }
-
-  /** 有手势之后浏览器放行了：解除标记，按用户偏好恢复（图标与元素同时回到"有声"）。 */
-  function clearSoundBlocked() {
-    if (!state.soundBlocked) return;
-    state.soundBlocked = false;
-    applySound();
-  }
-
-  let soundToastReady = false
-  function setSound(on) {
-    const before = effectiveSoundOn();
-    // 这个调用只来自"用户点了喇叭/按了确定"⇒ 已经是手势，策略不再拦
-    state.soundBlocked = false;
-    state.soundOn = !!on;
-    writeSoundPref(state.soundOn);
-    applySound();
-    const after = effectiveSoundOn();
-    if (soundToastReady && before !== after) showToast(after ? "声音已开" : "已静音");
-    soundToastReady = true;
-  }
-
-  function soundButton(entry) {
-    entry.sound = el("button", { class: "icon-btn", type: "button", title: "声音" });
-    paintSound(entry);
-    entry.sound.addEventListener("click", (event) => {
-      event.stopPropagation();
-      // 按"实际听不听得到"决定下一次 —— 被策略摁成静音时，点一下就该有声（不是先静音再开声）
-      setSound(!effectiveSoundOn());
-    });
-    return entry.sound;
-  }
-
-  function showSoundHint(entry) {
-    if (tvMode()) return; // 电视端没有喇叭键、也永远不静音 —— 这条提示在 TV 上没有意义（用户 2026-09-28）
-    if (entry.destroyed || !entry.layer) return;
-    if (!entry.soundHint) {
-      entry.soundHint = el("div", { class: "hint low", text: "点右下角的喇叭开启声音" });
-      entry.layer.append(entry.soundHint);
-    }
-    entry.soundHint.classList.remove("hidden");
-  }
-
-  function hideSoundHint(entry) {
-    if (entry.soundHint) entry.soundHint.classList.add("hidden");
   }
 
   function showHint(entry, text) {
@@ -1200,252 +896,6 @@ export function mountFeed(view, options = {}) {
     if (entry.settingsForm) entry.settingsForm.paint(state.settings);
   }
 
-  // 面板外的遮罩：**吞掉点击**（点外面只关面板，不触发播放/暂停等外部操作 —— 用户明确要求）。
-  let sheetScrim = null;
-  function ensureScrim() {
-    if (sheetScrim) return sheetScrim;
-    sheetScrim = el("div", { class: "sheet-scrim hidden", dataset: { role: "sheet-scrim" } });
-    sheetScrim.addEventListener("pointerdown", (event) => event.stopPropagation(), true);
-    sheetScrim.addEventListener("click", (event) => {
-      event.stopPropagation();
-      closePanels();
-    });
-    return sheetScrim;
-  }
-
-  function toolButton(label, onClick, extra) {
-    const btn = el("button", {
-      class: "sheet-tool" + (extra ? " " + extra : ""), type: "button", text: label,
-    });
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      onClick();
-    });
-    return btn;
-  }
-
-  // 底部设置面板（用户 2026-09-24：参考抖音 —— 分组卡片 + 每行"图标+文字+右侧值/开关"）
-  function buildPanel(entry) {
-    entry.settingsForm = createFeedSettingsForm({
-      settings: state.settings,
-      onChange: saveSettings,
-      // 剧场：自动连播写死开启且**不可设置**（用户要求），只留"跳转秒数"。
-      lockAutoplay: !!playlist,
-      variant: "sheet",
-      // 左右键跳转只在 web 有意义，App 里不显示这一行（用户 2026-09-24）
-      hideSeek: inAppWebView(),
-    });
-
-    // 第 1 组：投屏 / 小窗播放 / 缓存视频（能做才显示）
-    const tools = el("div", { class: "sheet-group" });
-    if (castAvailable()) tools.append(actionRow("cast", "投屏", () => { closePanels(); toggleCast(entry); }));
-    if (pipAvailable()) tools.append(actionRow("pip", "小窗播放", () => { closePanels(); togglePip(entry); }));
-    if (nativeCacheAvailable()) {
-      tools.append(actionRow("download", "缓存视频", () => {
-        // 元数据跟着文件一起落盘（标题/封面/时长/原始 id）⇒「我的 → 已缓存」离线也能显示
-        // 标题和封面，不再是一串 med_xxxx（用户 2026-09-25 报障）。
-        const meta = JSON.stringify({
-          id: String(entry.item.id),
-          title: entry.item.title || "",
-          cover: entry.item.cover_url || "",
-          duration_ms: Number(entry.item.duration_ms) || 0,
-        });
-        try {
-          if (typeof window.ZvAndroid.cacheVideo2 === "function") window.ZvAndroid.cacheVideo2(String(entry.item.id), meta);
-          else window.ZvAndroid.cacheVideo(String(entry.item.id), entry.item.title || "");
-          showToast("开始缓存，看通知栏进度");
-          closePanels();
-        } catch (err) { showToast("这台设备缓存不了"); }
-      }));
-    }
-
-    // 电视端（遥控器）够不着右侧栏（没有触摸）⇒ 把侧栏那 4 个动作原样搬一份到这里
-    // （用户 2026-09-25 选了"复用网页界面 + 方向键"，手机上/网页上这一组不显示）。
-    // 只是"换个地方放"，不新增任何功能。
-    const tvQuick = tvMode() ? el("div", { class: "sheet-group" }) : null;
-    if (tvQuick) {
-      tvQuick.append(
-        actionRow("thumb", "点赞", () => { entry.like.click(); }),
-        actionRow("heart", "收藏", () => { entry.fav.click(); }),
-        // 声音/全屏两行**电视端不放**（用户 2026-09-28："不要在 tv 端显示全屏按钮！不要显示静音！"）；
-        // 这两个按钮在 TV 上压根没建（entry.sound / entry.fullscreen 为空），点了也会是空指针。
-        // ⚠️ 电视端**不放搜索**（用户 2026-09-28："不要全屏、和搜索按钮…直接隐藏掉"）—— 这里也不再补。
-      );
-    }
-
-    // 第 2 组：常用（清屏/稍后再看 + 播放设置那一堆行，同一张卡片里）
-    const common = el("div", { class: "sheet-group" });
-    if (playlist) {
-      // 剧场：选集（原来在边栏，边栏只留 4 个后搬到这里）
-      common.append(actionRow("theater", "选集", () => {
-        closePanels();
-        if (!entry.epsPanel) entry.layer.append(buildEpisodePanel(entry));
-        entry.epsPanel.classList.remove("hidden");
-      }, state.items.length + " 集"));
-    }
-    // 清屏播放图标 = 用户给的图1（一把刷子，2026-09-25）
-    const cleanRow = actionRow("clean", "清屏播放", () => { toggleClean(); paintCommon(); });
-    cleanRow.dataset.role = "sheet-clean";
-    common.append(cleanRow);
-    const laterRow = actionRow("clock", "稍后再看", () => { toggleWatchLater(entry); paintCommon(); });
-    laterRow.dataset.role = "sheet-later";
-    common.append(laterRow);
-    if (isAdmin()) {
-      // 管理员：删除入口（原来在边栏）。删除要弹确认框，所以这里**不自动收面板**
-      const delRow = actionRow("trash", "删除这个视频", () => askDelete(entry), "", false);
-      delRow.dataset.role = "sheet-delete";
-      common.append(delRow);
-    }
-    common.append(entry.settingsForm.node);
-
-    const groups = [];
-    if (tools.childNodes.length) groups.push(tools);
-    if (tvQuick) groups.push(tvQuick);
-    groups.push(common);
-
-    // 第 3 组：剧场入口（图3 的「合集 · 这是一个小短剧 更新至 N 集 >」）
-    if (playlist && playlist.seriesId) {
-      // tabindex=0：跟 actionRow 一样，电视端遥控器得能落焦（div 默认不可聚焦 ⇒ 点了没反应）
-      const row = el("div", { class: "sheet-row sheet-series", tabindex: "0", dataset: { role: "sheet-series" } },
-        icon("theater"),
-        el("span", { class: "sheet-label", text: "剧场 · " + (playlist.title || "") }),
-        el("span", { class: "sheet-right muted", text: "共 " + (playlist.episodeCount || state.items.length) + " 集" }),
-        el("span", { class: "sheet-arrow", text: "›" }));
-      row.addEventListener("click", (event) => {
-        event.stopPropagation();
-        location.hash = "#/series/" + encodeURIComponent(playlist.seriesId);
-      });
-      groups.push(el("div", { class: "sheet-group" }, row));
-    }
-
-    // 门禁要求：展开只能用数组（groups 是数组没错，但为了可读性显式用循环拼）
-    const panel = el("div", { class: "set-panel sheet hidden", dataset: { role: "settings-sheet" } },
-      el("div", { class: "sheet-handle" }));
-    for (const g of groups) panel.append(g);
-    entry.panel = panel;
-    entry.panel.addEventListener("click", (event) => event.stopPropagation());
-    // 面板自己能滚：滚轮/触摸就地消化，别冒泡到 feed（否则一滚就换下一条视频）
-    entry.panel.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
-    entry.panel.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
-
-    // 行上的状态文字（清屏开/关、稍后再看已添加/未添加）跟着真实状态刷
-    function paintCommon() {
-      const cleanRow = common.querySelector('[data-role="sheet-clean"] .sheet-right');
-      if (cleanRow) cleanRow.textContent = feed.classList.contains("clean") ? "已开启" : "关闭";
-      const laterRight = common.querySelector('[data-role="sheet-later"] .sheet-right');
-      if (laterRight) laterRight.textContent = (entry.item && entry.item.watch_later) ? "已添加" : "未添加";
-    }
-    entry.paintSheet = paintCommon;
-    entry.panel.__zvPaintCommon = paintCommon;
-    return entry.panel;
-  }
-
-  // 抖音式行：[图标] 标签 ………… 右侧值
-  // collapse=true（默认）：点完**立刻收起面板**回到播放（用户 2026-09-24：
-  // "任何操作完成都应该收起面板，如点了稍后再看后立刻收起，显示视频播放"）。
-  function actionRow(iconName, label, onClick, rightText, collapse) {
-    const right = el("span", { class: "sheet-right muted", text: rightText || "" });
-    // tabindex=0：电视端遥控器要能落焦到这一行（div 默认不可聚焦），确定键由 tv.js 代点
-    const row = el("div", { class: "sheet-row", tabindex: "0", dataset: { role: "sheet-action" } },
-      icon(iconName), el("span", { class: "sheet-label", text: label }), right);
-    row.addEventListener("click", (event) => {
-      event.stopPropagation();
-      onClick();
-      if (collapse !== false) closePanels();
-    });
-    return row;
-  }
-
-  function openPanel(entry) {
-    if (entry.destroyed || !entry.layer) return;
-    if (!entry.panel) entry.layer.append(ensureScrim(), buildPanel(entry));
-    closePanels();
-    holdCurrent(true);   // 面板开着期间：当前这条一直循环，不许自动下一个
-    // 长按/右键可能顺带选中了底下的文字，进而弹出系统选择菜单（用户报障）——开面板时清掉选区
-    try { const sel = window.getSelection(); if (sel) sel.removeAllRanges(); } catch (err) { /* 忽略 */ }
-    paintPanel(entry);
-    ensureScrim().classList.remove("hidden");
-    // 电视端：面板一开就把焦点落到第一行（用户 2026-09-27："面板打开没反应/只能上下左右"——
-    // 原来是"开了但没落焦"，第一下↓才落焦，看着就像没打开）。
-    if (tvMode()) setTimeout(() => focusFirst(), 0);
-    entry.panel.classList.remove("hidden");
-    if (entry.paintSheet) entry.paintSheet();
-  }
-
-  // 剧场「选集」面板：样式与剧场列表里的选集一致（.ep-list/.ep-item），点一集就跳过去。
-  function buildEpisodePanel(entry) {
-    const panel = el("div", { class: "set-panel eps hidden" });
-    const list = el("div", { class: "ep-list" });
-    state.items.forEach((item, i) => {
-      list.append(el("button", {
-        class: "ep-item" + (i === entry.index ? " on" : ""), type: "button",
-        dataset: { role: "ep-item", index: String(i) },
-        onclick: () => { panel.classList.add("hidden"); goTo(i); },
-      },
-        el("span", { class: "ep-no", text: item.episode_label || ("第 " + (i + 1) + " 集") }),
-        el("span", { class: "ep-title", text: item.title || ("#" + item.id) }),
-        el("span", { class: "ep-pct muted", text: fmtDuration(item.duration_ms) })));
-    });
-    panel.append(el("div", { class: "panel-title", text: (playlist.title || "剧场") + " · 选集" }), list);
-    panel.addEventListener("click", (event) => event.stopPropagation());
-    entry.epsPanel = panel;
-    return panel;
-  }
-
-  function closePanels() {
-    const hadOpen = anyPanelOpen();
-    for (const entry of state.built.values()) {
-      if (entry.panel) entry.panel.classList.add("hidden");
-      if (entry.epsPanel) entry.epsPanel.classList.add("hidden");
-    }
-    if (sheetScrim) sheetScrim.classList.add("hidden");
-    if (picker) picker.classList.add("hidden");
-    holdCurrent(false); // 面板收起 ⇒ 恢复用户设置的连播/循环行为
-    // 电视端：面板是 `.hidden` 藏起来的（节点还在文档里），tv.js 的"焦点节点被删才补焦点"兜不住 ——
-    // 收面板后焦点会掉到 body（遥控器立刻没反应）。这里显式把焦点还回画面（见 focusFirst 的说明）。
-    if (hadOpen && tvMode()) setTimeout(() => focusFirst(), 0);
-  }
-
-  // 面板开着时：当前这条一直循环，绝不自动下一个（用户 2026-09-24 的改进 3）。
-  // 收起后怎么播由用户的设置决定：开了连播/循环就照旧，都没开就播完暂停。
-  //
-  // ⚠️ 不变量：**"面板开着"绝不缓存成布尔值**，一律用 panelVisible() 现查 DOM。
-  //    面板节点是 entry 的 DOM 子节点：dropItem（从设置面板删掉当前视频）和 zvResumeNative
-  //    （原生收回播放、网页跳到别的条目）都会销毁 entry 却不走 closePanels()，缓存下来的 true
-  //    就永远复位不了 —— onEnded 里那句"面板开着就早退"从此对**所有**条目生效，
-  //    本条及之后每条视频播完都停在最后一帧（不连播、不循环、也没有播放按钮）。
-  function holdCurrent(on) {
-    const loop = on ? true : loopEnabled();
-    for (const entry of state.built.values()) {
-      if (entry.video) entry.video.loop = loop;
-    }
-  }
-
-  // 当前这条（active）的面板**真的可见**吗？判据就是 DOM（见上面 holdCurrent 的不变量）。
-  // 只看 active：别的条目的 layer 在翻页轨道里（手机端）或收在列表行里（电视端），它们的面板
-  // 就算没 .hidden 也压根不在屏幕上 —— 那种残留不许再把播放按死在"只循环当前这条"上。
-  function panelVisible() {
-    const entry = state.built.get(state.active);
-    if (!entry) return false;
-    if (entry.panel && !entry.panel.classList.contains("hidden")) return true;
-    return !!(entry.epsPanel && !entry.epsPanel.classList.contains("hidden"));
-  }
-
-  // 有面板开着吗？（返回手势/App 返回键先关它，再管全屏）
-  function anyPanelOpen() {
-    for (const entry of state.built.values()) {
-      if (entry.panel && !entry.panel.classList.contains("hidden")) return true;
-      if (entry.epsPanel && !entry.epsPanel.classList.contains("hidden")) return true;
-    }
-    return !!(picker && !picker.classList.contains("hidden"));
-  }
-
-  // App 里的判定：原生桥在（window.ZvAndroid）或 URL 带 zv=app（WebActivity 会加）。
-  // App 不显示设置按钮 —— 抖音就是长按弹面板，用户 2026-09-24 明确要一致。
-  function inAppWebView() {
-    return !!window.ZvAndroid || /[?&]zv=app(&|#|$)/.test(location.search + location.hash);
-  }
-
   // 设置入口：**不放边栏**（用户 2026-09-24 定稿：边栏只有 4 个）。
   // 网页端右键（contextmenu）或长按画面打开；App 里只有长按。
 
@@ -1479,239 +929,6 @@ export function mountFeed(view, options = {}) {
     if (gen === settingsGen) applySettings();
   }
 
-  /* ---------- 清屏播放 / 旋转全屏（用户 2026-09-23） ---------- */
-
-  // 清屏：把边栏/标题/角标都收起来，只留一个小箭头还原（比"点画面切换"更明确，不会和"点画面=暂停"打架）
-  /* ---------- 全屏（沉浸）状态：全局一份（feed 只有一个） ---------- */
-  //
-  // 用户 2026-09-24：「全屏播放时不显示任何按钮/进度、边栏收起；点屏幕切换显示；
-  // 左上角显示返回按钮（左箭头）」。所以全屏 = 沉浸态：进去先全收起，点屏幕来回切换。
-  const full = { rotated: false, native: false, uiHidden: false };
-  // B4：画中画状态。原生（安卓整窗小窗）时由 App 回调 window.zvPipMode 同步过来。
-  let nativePip = false;
-  const pipPaints = new Set();
-  function pipOn() {
-    if (nativePip) return true;
-    return typeof document !== "undefined" && !!document.pictureInPictureElement;
-  }
-  function paintPip() { for (const fn of pipPaints) fn(); }
-  let lastImmersive = null;
-  function paintImmersive() {
-    const on = full.rotated || full.native;
-    // CSS 旋转只在"系统没横过来"时用 —— 忘了它会出现"进了全屏但画面没横过来"（我自己踩过）
-    feed.classList.toggle("rot", full.rotated);
-    // ⚠️ 沉浸态（收顶栏/底栏/控件）**与转屏方式无关**：手机/App 里是系统横屏（native=true、
-    // rotated=false），只按 rotated 判断会让顶栏、底栏大喇喇留在屏幕上（用户 2026-09-24 报障：
-    // "电脑端显示不出来，手机端无论浏览器还是 App 都显示"）。
-    document.body.classList.toggle("rot-play", on);
-    feed.classList.toggle("immersive", on);
-    feed.classList.toggle("blank", full.uiHidden);
-    // 告诉 App 现在是不是全屏：系统返回手势要"先退出全屏"（见 WebActivity.handleOnBackPressed）
-    if (on !== lastImmersive) {
-      lastImmersive = on;
-      try { if (window.ZvAndroid && window.ZvAndroid.setImmersive) window.ZvAndroid.setImmersive(on); } catch (err) { /* 老版本 App 没有这个口 */ }
-    }
-  }
-  function setImmersive(on) {
-    full.uiHidden = on;            // 进全屏先收起，退出全屏恢复
-    if (on) feed.classList.remove("clean"); // 别和"清屏"那个状态打架
-    paintImmersive();
-  }
-  function immersiveOn() { return full.rotated || full.native; }
-
-  // 清屏状态记在本机（用户 2026-09-24："右侧工具栏折叠样式加记忆功能"）：
-  // 下次进来、切条目都保持上次的选择，不用每次手点。
-  const CLEAN_KEY = "zv_clean";
-  function readCleanPref() {
-    try { return localStorage.getItem(CLEAN_KEY) === "on"; } catch (err) { return false; }
-  }
-  function writeCleanPref(on) {
-    try {
-      if (on) localStorage.setItem(CLEAN_KEY, "on");
-      else localStorage.removeItem(CLEAN_KEY);
-    } catch (err) { /* 隐私模式忽略 */ }
-  }
-  function applyClean(btn, on) {
-    feed.classList.toggle("clean", on);
-    if (!btn) return;
-    btn.title = on ? "显示图标" : "清屏播放";
-    // 清屏后显示**反向（向上）箭头**：换 expand 那种四角图标会被看成"箭头没了"（用户报障）
-    setIcon(btn, on ? "up" : "down");
-  }
-
-  /** 清屏开关（面板里的「清屏播放」行用它；边栏那个按钮已经收进面板）。 */
-  function toggleClean() {
-    const on = !feed.classList.contains("clean");
-    feed.classList.toggle("clean", on);
-    writeCleanPref(on);
-    applyClean(null, on);
-    showToast(on ? "已清屏，长按画面可还原" : "已显示图标");
-    return on;
-  }
-
-  /** 分享：优先系统分享面板（手机），桌面退回复制链接。 */
-  async function shareItem(entry) {
-    const item = entry.item || {};
-    const url = location.origin + "/#/play/feed/" + encodeURIComponent(item.id || "");
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: item.title || "zizvideo", url });
-        return;
-      }
-      await navigator.clipboard.writeText(url);
-      showToast("链接已复制");
-    } catch (err) {
-      showToast("分享没成功（可手动复制地址）");
-    }
-  }
-
-  // 缓存视频：只有 App 里有原生桥（ZvAndroid.cacheVideo）才显示 —— 网页端下不了"到本机离线看"
-  function nativeCacheAvailable() {
-    return !!(window.ZvAndroid && typeof window.ZvAndroid.cacheVideo === "function");
-  }
-
-
-
-  // 旋转全屏（用户 2026-09-24）：**不许依赖系统自动旋转**。
-  // 三级策略：① 安卓原生桥能接管就交给它（真·系统横屏）；
-  //          ② 否则试全屏 + screen.orientation.lock("landscape")；锁了要**回读真实朝向**（lock 会假装成功）；
-  //          ③ 都不行就 CSS 把播放器整体转 90°（竖屏视口里也能横过来看，把手机横过来就行）。
-  // 进全屏 = 进沉浸态：控件全收起，点屏幕切换（用户 2026-09-24）。
-  // 只有 type 与 matchMedia **两处都说是横屏**才算"系统真的转了"：
-  // lock() 在无头/WebView 里会假装成功（实测 type 会短暂变 landscape 但实际没转），只信一处会误判成"已横屏"。
-  const isLandscape = () => {
-    try {
-      const type = screen.orientation && screen.orientation.type ? String(screen.orientation.type) : "";
-      const mq = window.matchMedia("(orientation: landscape)").matches;
-      return type.startsWith("landscape") && mq;
-    } catch (err) { return false; }
-  };
-  const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-
-  async function enterFullscreen() {
-    const bridge = window.ZvAndroid;
-    try {
-      if (bridge && typeof bridge.landscape === "function") full.native = bridge.landscape(true) === true;
-    } catch (err) { full.native = false; }
-    if (!full.native) {
-      try {
-        if (document.fullscreenElement === null && document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen();
-        }
-        if (screen.orientation && typeof screen.orientation.lock === "function") {
-          await screen.orientation.lock("landscape");
-          await sleep(250);
-          full.native = isLandscape();
-          await sleep(200);              // 再读一次：假成功会自己退回去
-          if (!isLandscape()) full.native = false;
-        }
-      } catch (err) { full.native = false; }
-    }
-    full.rotated = !full.native;
-    setImmersive(true);
-    showToast(full.native ? "横屏全屏（点屏幕显隐控件）" : "已旋转横屏：把手机横过来看（点屏幕显隐控件）");
-  }
-
-  // 离开播放页（返回/路由切换/清理）也要把全屏状态交还回去：用户 2026-09-24
-  // "全屏时点击返回应该同时退出全屏状态，而不是仅仅返回" —— 只清 class 不够，
-  // 系统横屏（原生桥）、方向锁、document 全屏都得释放。
-  // ⚠️ document.exitFullscreen 与 native 无关：浏览器那条路是我们自己 requestFullscreen 的（踩过）。
-  async function releaseSystemFullscreen() {
-    try { if (window.ZvAndroid && window.ZvAndroid.landscape) window.ZvAndroid.landscape(false); } catch (err) { /* 忽略 */ }
-    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (err) { /* 忽略 */ }
-    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (err) { /* 忽略 */ }
-  }
-
-  async function releaseFullscreen() {
-    full.rotated = false;
-    full.native = false;
-    full.uiHidden = false;
-    paintImmersive();
-    await releaseSystemFullscreen();
-  }
-
-  async function exitFullscreen() {
-    await releaseFullscreen();
-    showToast("已退出横屏");
-  }
-
-  function immersiveBack() {
-    const btn = el("button", { class: "icon-btn imm-back", type: "button", title: "退出全屏",
-      dataset: { role: "imm-back" } }, icon("back"));
-    btn.addEventListener("click", (event) => { event.stopPropagation(); exitFullscreen(); });
-    return btn;
-  }
-
-  // 全屏里的暂停入口：**画面正中的播放/暂停键**（用户 2026-09-24："可以在视频中间显示暂停按钮"）。
-  // 只在沉浸态且控件可见时出现；点了就地暂停/继续。
-  function centerPlayPause(entry) {
-    const btn = el("button", { class: "center-btn center-pause", type: "button", title: "暂停/播放",
-      dataset: { role: "center-pause" } }, icon("pause"));
-    const paint = () => setIcon(btn, entry.video && !entry.video.paused ? "pause" : "play");
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      togglePlay(entry);
-      paint();
-      if (entry.video && entry.video.paused) { full.uiHidden = false; paintImmersive(); }
-    });
-    entry.paintPlayPause = paint;
-    paint();
-    return btn;
-  }
-
-  /* ---------- B4 画中画 / 投屏 ---------- */
-
-  /** 小窗播放开关（面板里的按钮调它；原来的边栏按钮已移除）。 */
-  async function togglePip(entry) {
-    try {
-      if (nativePip) return; // 已经在原生小窗里
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (nativePipAvailable()) { window.ZvAndroid.enterPip(); return; }
-      else if (entry.video) await entry.video.requestPictureInPicture();
-      else showToast("这条放不了，开不了小窗");
-    } catch (err) {
-      showToast(pipFailText(err));
-    }
-    paintPip();
-  }
-
-  function pipFailText(err) {
-    const name = err && err.name ? err.name : "";
-    if (name === "NotAllowedError") return "这个浏览器不让直接开小窗，先点一下画面再试";
-    if (name === "NotSupportedError") return "这段视频不支持画中画";
-    return "开不了画中画：" + (err && err.message ? err.message : "未知原因");
-  }
-
-  /** 投屏（标准 Remote Playback；面板里的按钮调它）。 */
-  async function toggleCast(entry) {
-    const remote = entry.video && entry.video.remote;
-    if (!remote || typeof remote.prompt !== "function") { showToast("这个浏览器不支持投屏"); return; }
-    try {
-      await remote.prompt();
-    } catch (err) {
-      // 绝大多数是"附近没有可投屏的设备"——如实说，别装作投上了
-      showToast("没找到可投屏的设备（电视/盒子要和手机在同一 Wi-Fi）");
-    }
-  }
-
-  // 全屏（旋转全屏）按钮：按用户 2026-09-24 的要求**回到侧栏**（视频下方那排已撤）
-  function fullscreenButton() {
-    const btn = el("button", { class: "icon-btn", type: "button", title: "旋转全屏",
-      dataset: { role: "rail-fullscreen" } }, icon("expand"));
-    const paint = () => {
-      const on = immersiveOn();
-      setIcon(btn, on ? "collapse" : "expand");
-      btn.title = on ? "退出横屏" : "旋转全屏";
-    };
-    btn.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      if (immersiveOn()) await exitFullscreen();
-      else await enterFullscreen();
-      paint();
-    });
-    paint();
-    return btn;
-  }
 
   /* ---------- 反应 / 收藏 ---------- */
 
@@ -2190,266 +1407,6 @@ export function mountFeed(view, options = {}) {
     if (entry) openPanel(entry);
   }
 
-  // 电视端（遥控器）：**三栏 + 左右键切换**（用户 2026-09-28 最新一版，最高优先级）。
-  //
-  //   三栏：左 = 视频列表 · 中 = 播放窗口 · 右 = 媒体库列表（库里再按 → 露出「剧场/收藏/我的」）
-  //   非全屏：←→ 在这几栏之间走；↑↓ 在当前栏里走（在画面上 = 换视频）
-  //          左栏或中栏上按**确定 = 进全屏播放**；右栏库列表上按确定 = 换库
-  //   全屏：**什么都不显示**（进度条只在暂停时出现）；确定 = 播放/暂停；返回 = 回三栏
-  //   设置键（播放时，无论全屏与否、只要焦点在中间的画面栏）：画面右侧弹出「点赞/收藏/设置」栏，
-  //          焦点直接进栏里；返回 = 收起并把焦点还给画面
-  //   返回：① 有面板 ⇒ 关面板 ② 操作栏开着 ⇒ 收起 ③ 全屏 ⇒ 回三栏 ④ 否则交给路由
-  //   ⚠️ 长按没有任何特殊含义；屏幕上不放全屏键、不放搜索键（用户 2026-09-28："TV 端不需要"）。
-  const TV_CHROME = ".header, .bottom-nav, .ov-rail, .tv-ops, .ov-corner, .center-btn, .imm-back," +
-    " .set-panel, .sheet-scrim, .modal-overlay, .picker-overlay, .lib-chip," +
-    " .tv-row, .tv-list, .tv-libs, .tv-nav, .tv-tab";
-  // 画面态判定不绑死"某个具体 layer"：换视频会重建 layer、旧节点被搬走，
-  // 那一瞬间 activeElement 还指着旧节点 —— 必须仍旧当画面态，否则遥控器会突然没反应。
-  let tvSurface = tvMode();
-  /** 全屏（影院）状态；tvOpsOpen = 设置键弹出的「点赞/收藏/设置」栏开着。 */
-  let tvFull = false;
-  let tvOpsOpen = false;
-  /** 服务器版本号（只用来显示，读不到就空着）—— 电视端"这版到底生效没有"的第一判据。 */
-  let tvVersion = "";
-  function tvInChrome() {
-    const a = document.activeElement;
-    if (!a || a === document.body) return false;
-    return !!(a.closest && a.closest(TV_CHROME));
-  }
-  function tvSurfaceEntry() {
-    const entry = state.built.get(state.active);
-    return entry && !entry.destroyed ? entry : null;
-  }
-  function tvPanelOpen() {
-    const entry = tvSurfaceEntry();
-    return !!(entry && entry.panel && !entry.panel.classList.contains("hidden"));
-  }
-  /** 三栏/全屏/操作栏/暂停态，全落到 feed 的 class 上（CSS 见 app.css 的电视端那两段）。 */
-  function tvPaint() {
-    if (!tvLayout) return;
-    feed.classList.toggle("tv-cinema", tvFull);
-    feed.classList.toggle("tv-ops-open", tvOpsOpen);
-    document.body.classList.toggle("tv-cinema", tvFull);
-    // 全屏里"进度条只在暂停时显示"（用户 2026-09-28）：暂停态由播放事件同步
-    const entry = tvSurfaceEntry();
-    const paused = !!(entry && entry.video && entry.video.paused);
-    feed.classList.toggle("tv-paused", paused);
-    tvPaintHint();
-  }
-  function tvPaintHint() {
-    if (!tvMode()) return;
-    // 用户 2026-09-29："画面上不要出现操作提示" —— 操作提示（按键说明）整条撤掉。
-    // 这里只留一个**很淡的版本号**（右下角那种）：它帮我们判断"服务端更新到底生效没有"
-    // （2026-09-29 那次"没有任何变化"就是服务端没升级成功，当时只能猜）。全屏里连它也藏掉。
-    tvHintMain.textContent = "";
-    tvHintSub.textContent = tvVersion ? "v" + tvVersion : "";
-  }
-
-  // 进全屏前焦点在哪一栏（退出全屏要还回去）—— 用户 2026-09-30 报障："从视频列表点进全屏，按返回后
-  // 蓝色焦点框还在列表里，但实际焦点在播放画面（按上下键直接切播放）"：进全屏时列表被 display:none 藏了，
-  // 焦点掉给 body，而 tv.js 的兜底只在"焦点节点被删"时才补焦点（节点还在、只是被藏起来，兜不住），
-  // 于是**焦点在 body、焦点框留在列表行**，两边不一致 → 用户按上下键时看到的是"列表在选、实际在切播放"。
-  let tvReturnFocus = "surface";
-  function tvSetFull(on) {
-    if (!tvLayout || tvFull === !!on) return false;
-    if (on) {
-      // 进全屏前先看这一条 WebView 能不能放：解不了的编码 / 放不了的条目都交原生播放器
-      const cur = state.items[state.active];
-      if (tvNeedsNative(cur)) return tvNativePlay(cur);
-      if (cur && !isPlayable(cur) && !cur.missing) return tvNativePlay(cur);
-      const a = document.activeElement;
-      tvReturnFocus = (a && a.closest && a.closest(".tv-row")) ? "list" : "surface";
-    }
-    tvFull = !!on;
-    if (tvFull) tvSetOps(false);
-    tvPaint();
-    if (tvFull) {
-      // 进全屏就开播（电视端永远不静音；有手势的这一下一定是有声的）
-      const entry = tvSurfaceEntry();
-      if (entry && entry.video && !entry.broken && entry.video.paused) tryPlay(entry);
-      tvFocusSurface();   // 全屏里焦点必须在画面上（否则焦点框和实际焦点会分家）
-    } else if (tvReturnFocus === "list") {
-      if (!focusSelector(".tv-row.on")) tvFocusList();
-    } else {
-      tvFocusSurface();
-    }
-    return true;
-  }
-  /** 设置键弹出的「点赞/收藏/设置」栏：开、关（关的时候把焦点还给画面）。 */
-  function tvSetOps(on) {
-    if (!tvLayout) return false;
-    const next = !!on;
-    if (tvOpsOpen === next) return false;
-    tvOpsOpen = next;
-    tvPaint();
-    if (next) {
-      if (focusSelector(".tv-ops .icon-btn")) {
-        tvSurface = false;
-        document.body.classList.remove("tv-surface");
-      }
-    } else {
-      tvFocusSurface();
-    }
-    return true;
-  }
-  function tvFocusSurface() {
-    tvSurface = true;
-    document.body.classList.add("tv-surface");
-    const entry = tvSurfaceEntry();
-    if (entry && entry.layer) {
-      try { entry.layer.focus({ preventScroll: true }); } catch (err) { /* 老 WebView 不认参数 */ }
-    }
-    tvPaintHint();
-    return true;
-  }
-  function tvGoChrome(selector) {
-    if (!focusSelector(selector)) return false;
-    tvSurface = false;
-    document.body.classList.remove("tv-surface");
-    tvPaintHint();
-    return true;
-  }
-  /** 焦点进左栏视频列表（列表里 ↑↓ 选、右边跟着播）。 */
-  function tvFocusList() {
-    if (focusSelector(".tv-row.on")) return true;
-    return focusSelector(".tv-row");
-  }
-  /** 右栏再往右：露出「剧场/收藏/我的」并把焦点送进去。 */
-  function tvShowNav() {
-    if (!tvLayout || !tvNav) return false;
-    if (tvNav.classList.contains("hidden")) {
-      tvNav.classList.remove("hidden");
-      // 键的布局会变（右栏让位），强制一次回流再算焦点
-      void tvNav.offsetHeight;
-    }
-    if (focusSelector(".tv-nav .nav-item")) {
-      tvSurface = false;
-      document.body.classList.remove("tv-surface");
-      return true;
-    }
-    tvNav.classList.add("hidden");
-    return false;
-  }
-  function tvHideNav() {
-    if (!tvNav) return;
-    tvNav.classList.add("hidden");
-  }
-  /** 电视端 ←→：切上一个/下一个媒体库（到头就停住，不绕回）。 */
-  function tvSwitchLibrary(dir) {
-    if (playlist || !state.libraries.length) return false;
-    const tabs = tvTabs();
-    let idx = tabs.findIndex((t) => String(t.id || "") === String(state.scope || ""));
-    if (idx < 0) idx = 0;
-    const next = idx + dir;
-    if (next < 0 || next >= tabs.length) return false;
-    switchScope(tabs[next].id, tabs[next].name);
-    return true;
-  }
-  /**
-   * 在某栏（scope 选择器）里按方向键走一步；scope 传 null = 用通用空间导航（面板/弹窗靠 overlayRoots 收窄）。
-   * ⚠️ 走不动就停在原地，但调用方**照样吃掉这个按键** —— 漏出去会被 feed 的桌面键盘处理器接走
-   * （ArrowDown = 切下一个视频），那就是用户报的"没按确定、播放自己换了"。
-   */
-  function tvMoveIn(arrowKey, scope) {
-    const dir = arrowKey === "ArrowUp" ? "up" : arrowKey === "ArrowDown" ? "down"
-      : arrowKey === "ArrowLeft" ? "left" : "right";
-    if (scope) moveFocusIn(dir, scope);
-    else moveFocusIn(dir);
-  }
-  function onTvKeyDown(event) {
-    const entry = tvSurfaceEntry();
-    if (!entry) return false;
-    // 面板开着：↑↓ 交给空间导航走动，← 收面板
-    if (tvPanelOpen()) {
-      if (event.key === "ArrowLeft") { closePanels(); return true; }
-      // ⚠️ ↑↓ 必须**自己吃掉**：漏给 tv.js 的空间导航，一旦它移动失败（到边界），事件会继续冒泡到
-      // feed 的"桌面键盘处理器"，那边 ArrowDown = goTo(next) —— 于是"没按确定，播放自己换了"。
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, null); return true; }
-      return false;
-    }
-    const active = document.activeElement;
-    const inOps = !!(active && active.closest && active.closest(".tv-ops"));
-    const inList = !!(active && active.closest && active.closest(".tv-list"));
-    const inLibs = !!(active && active.closest && active.closest(".tv-libs"));
-    const inNav = !!(active && active.closest && active.closest(".tv-nav"));
-    const onStrip = !!(active && active.closest && active.closest(".tv-libs-strip"));
-
-    // ① 「点赞/收藏/设置」栏：↑↓ 走栏内按钮，← 收起并往左走（视频列表），→ 回播放界面
-    if (inOps) {
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-ops"); return true; }
-      // 这栏在**画面右侧**：← 回画面（用户 2026-09-29 纠正方向后的自然走法），→ 到头停住
-      if (event.key === "ArrowLeft") { tvSetOps(false); return true; }
-      if (event.key === "ArrowRight") return true;
-      return false;
-    }
-    // ② 「剧场/收藏/我的」抽屉（最左，← 露出来的）：→ 收起并回媒体库；其它交给空间导航
-    if (inNav) {
-      if (event.key === "ArrowRight") { tvHideNav(); tvFocusLibs(); return true; }
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-nav"); return true; }
-      return false;
-    }
-    // ③ 媒体库那一栏（展开态）：← 再往左露「剧场/收藏/我的」；→ 回视频列表并折叠
-    if (inLibs) {
-      if (event.key === "ArrowLeft") return tvShowNav();
-      if (event.key === "ArrowRight") { tvLibsExpand(false); tvFocusList(); return true; }
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") { tvMoveIn(event.key, ".tv-libs"); return true; }
-      return false;   // 确定 = 换库
-    }
-    // ④ 折叠时的那条窄条：焦点一进来就展开（用户 2026-09-29："默认折叠，有焦点再展开"）
-    if (onStrip) {
-      if (event.key === "ArrowRight") { tvLibsExpand(false); tvFocusList(); return true; }
-      if (event.key === "Enter" || event.key === "ArrowDown" || event.key === "ArrowUp") {
-        tvFocusLibs();
-        return true;
-      }
-      return false;
-    }
-    // ⑤ 视频列表：↑↓ 只走焦点（**不切播放**），确定才播；→ 回播放界面；← 去媒体库栏
-    if (inList) {
-      if (event.key === "Enter") { tvPlayFromList(Number(active.dataset.index)); return true; }
-      if (event.key === "ArrowRight") { tvFocusSurface(); return true; }
-      if (event.key === "ArrowLeft") { tvFocusLibs(); return true; }
-      // ⚠️ 用户 2026-10-01 报障："焦点每走几次播放就自己换了（没按确定）"：
-      // 走到列表**最后一行**时空间导航找不到下一个 → 事件冒泡到桌面键盘处理器 → ArrowDown = goTo(next)。
-      // 现在 ↑↓ 一律在**列表内部**走并吃掉按键（到边界就停住，不会漏出去、也不会溜到别的栏）。
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-        tvMoveIn(event.key, ".tv-list");
-        // 焦点走到（接近）当前批次末尾就继续加载 —— 以前是靠"漏出去被 goTo 接走"顺带触发的，
-        // 现在按键被我们自己吃掉了，得显式补上，否则用户选到第 10 条就到头了。
-        const cur = document.activeElement;
-        if (cur && cur.dataset && cur.dataset.index !== undefined) maybeLoadMore(Number(cur.dataset.index));
-        return true;
-      }
-      if (event.key === "Home") { focusSelector(".tv-row"); return true; }
-      if (event.key === "End") { focusSelector(".tv-list .tv-row:last-child"); return true; }
-      return false;
-    }
-    // ⑥ 焦点在播放界面上
-    if (tvFull) {
-      switch (event.key) {
-        case "Enter": togglePlay(entry); tvPaint(); return true;   // 全屏：确定 = 播放/暂停
-        case "ArrowUp": if (state.active > 0) { goTo(state.active - 1); return true; } return true;
-        case "ArrowDown":
-          if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
-          return true;
-        default: return false;   // 全屏里 ←→ 不切栏（用户："非全屏播放时"才切）
-      }
-    }
-    switch (event.key) {
-      case "ArrowUp":
-        if (state.active > 0) { goTo(state.active - 1); return true; }
-        return true;
-      case "ArrowDown":
-        if (state.active < state.items.length - 1 || state.hasMore) { goTo(state.active + 1); return true; }
-        return true;
-      // 用户 2026-09-30："视频播放界面再按右键改为全屏播放；设置键调出点赞功能（和右键重复了）"
-      case "ArrowLeft": tvFocusList(); return true;
-      case "ArrowRight": tvSetFull(true); return true;
-      case "Enter": tvSetFull(true); return true;   // 确定 = 进全屏播放
-      default: return false;
-    }
-  }
-
   function onKeyDown(event) {
     const target = event.target;
     const tag = target && target.tagName ? target.tagName : "";
@@ -2491,23 +1448,6 @@ export function mountFeed(view, options = {}) {
   document.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("pagehide", onPageHide);
   document.addEventListener("visibilitychange", onVisibility);
-  // 电视端：把遥控器按键接过来（tv.js 的通用空间导航在它之后跑）
-  function onTvFocusIn() {
-    // 媒体库那一栏：焦点不在它里面就折回去（用户 2026-09-29："默认折叠，有焦点再展开"）
-    if (tvLayout) {
-      const a = document.activeElement;
-      const inside = !!(a && a.closest && a.closest(".tv-libs"));
-      if (!inside) tvLibsExpand(false);
-    }
-    const next = !tvInChrome();
-    if (next !== tvSurface) {
-      tvSurface = next;
-      document.body.classList.toggle("tv-surface", tvSurface);
-      tvPaintHint();
-    }
-    if (tvLayout) tvPaint();   // 全屏里暂停才显示进度条：焦点/状态变了都重算一次
-  }
-
   if (tvMode()) {
     setFeedKeys({ down: onTvKeyDown });
     // 焦点一进界面控件就切"控件态"（两态视觉 + 按键提示跟着换）——用户 2026-09-27 报
@@ -2522,14 +1462,14 @@ export function mountFeed(view, options = {}) {
     api.setupStatus().then((st) => {
       const v = st && st.version;
       if (!v) return;
-      tvVersion = String(v);
+      rt.tvVersion = String(v);
       tvPaintHint();
     }).catch(() => { /* 读不到就不显示，不打扰 */ });
     // 遥控器「设置/菜单」键（用户 2026-09-28 最新版）：播放时弹画面右侧的「点赞/收藏/设置」栏，
     // 焦点直接进栏里；再按一次（或返回键）收起、焦点回画面。
     window.__zvTvMenu = () => {
       if (anyPanelOpen()) { closePanels(); return true; }
-      return tvSetOps(!tvOpsOpen);
+      return tvSetOps(!rt.tvOpsOpen);
     };
   }
 
@@ -2548,54 +1488,12 @@ export function mountFeed(view, options = {}) {
     loadMore();
   }
 
-  /**
-   * 原生把播放收回网页时调它（见 WebActivity.onResume）：
-   *   · 后台自动播到了**别的**剧集 ⇒ 网页跟着跳到那一条（用户 2026-09-26 报障：
-   *     后台听到 F 了，回前台却又回到最早的 A）；
-   *   · 还是同一条 ⇒ 就地 seek 回去接着播。
-   * 返回 true = 认领成功；false = 这一条不在网页当前列表里（原生据此如实提示，不假装成功）。
-   */
-  window.zvResumeNative = (mediaId, positionMs) => {
-    const id = String(mediaId || "");
-    if (!id) return false;
-    const index = state.items.findIndex((it) => String(it.id) === id);
-    if (index < 0) return false;
-    if (index !== state.active) goTo(index);
-    const entry = state.built.get(index) || ensureEntry(index);
-    if (!entry || !entry.video) return index === state.active;
-    const seek = () => {
-      try {
-        const d = entry.video.duration || 0;
-        let t = (Number(positionMs) || 0) / 1000;
-        if (d > 0 && t > d - 1) t = 0; // 后台可能已经播到结尾：从头开始比"卡在最后一秒"合理
-        entry.video.currentTime = t;
-      } catch (err) { /* 还没 metadata，等 loadedmetadata 再设 */ }
-    };
-    if (entry.video.readyState >= 1) seek();
-    else entry.video.addEventListener("loadedmetadata", seek, { once: true });
-    if (entry.video.paused) tryPlay(entry);
-    return true;
-  };
-
-  // App 的系统返回手势进来先问这里：全屏中就只退出全屏（符合播放器习惯），否则交给路由。
-  // App 进/出小窗（原生画中画）时通知这里，好让按钮状态和真实情况一致
-  const onPipMode = (on) => {
-    nativePip = !!on;
-    // 安卓的"画中画"是整窗缩放：小窗里只该有画面，顶栏/底栏/工具条全收起
-    document.body.classList.toggle("pip", nativePip);
-    paintPip();
-  };
+  // App 把播放收回网页：函数体在 feed-native.js（resumeNative）
+  window.zvResumeNative = ctx.native.resumeNative;
+  // App 进/出原生小窗、回到前台：函数体在 feed-native.js（onPipMode / soundNudge）
   window.zvPipMode = onPipMode;
 
-  // App（WebView）回到前台时由原生调它：WebView 设了 mediaPlaybackRequiresUserGesture=false，
-  // 只要页面可见就该有声 ⇒ 那次"被浏览器策略摁成的静音"可以自动恢复，用户不用再点一下喇叭。
-  // 网页端没有这个口（那种情况下浏览器一定要用户手势，只能由用户点）。
-  window.__zvSoundNudge = () => {
-    if (!state.soundBlocked || !state.soundOn) return false;
-    clearSoundBlocked();
-    return true;
-  };
-
+  window.__zvSoundNudge = ctx.native.soundNudge;
   // App 的返回手势/返回键先问这里：
   //   ① 有面板开着 ⇒ 只关面板（播放内容一点不动）；
   //   ② 电视端在影院（全屏）⇒ 回到有边栏的界面（用户 2026-09-28）；
@@ -2610,13 +1508,13 @@ export function mountFeed(view, options = {}) {
     const now = Date.now();
     if (tvExitArmed && now - tvExitArmed < 2500) { tvExitArmed = 0; return true; }
     tvExitArmed = now;
-    showToast(tvFull ? "再按一次返回键退出" : "再按一次返回键退出应用");
+    showToast(rt.tvFull ? "再按一次返回键退出" : "再按一次返回键退出应用");
     return false;
   }
   window.__zvExitFullscreen = () => {
     if (anyPanelOpen()) { closePanels(); return true; }
-    if (tvLayout && tvOpsOpen) { tvSetOps(false); return true; }
-    if (tvLayout && tvFull) { tvSetFull(false); return true; }
+    if (tvLayout && rt.tvOpsOpen) { tvSetOps(false); return true; }
+    if (tvLayout && rt.tvFull) { tvSetFull(false); return true; }
     // 电视端：没别的可退时，第一次吃掉这一下并提示，第二次才真的退出（手机/网页端行为不变）
     if (tvLayout) return !tvBackWantsExit();
     if (!immersiveOn()) return false;
@@ -2629,7 +1527,7 @@ export function mountFeed(view, options = {}) {
   // 别让界面卡在"以为还在全屏"（顶栏底栏一直藏着）。
   const onFullscreenChange = () => {
     if (document.fullscreenElement) return;
-    if (full.rotated || full.native) releaseFullscreen();
+    if (rt.full.rotated || rt.full.native) releaseFullscreen();
   };
   document.addEventListener("fullscreenchange", onFullscreenChange);
 
