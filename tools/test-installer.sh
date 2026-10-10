@@ -618,6 +618,36 @@ else
   bad "遇到非 SQLite 的库时 upgrade_callback 失败了（应当跳过备份但继续）"
 fi
 rm -rf "$T6"
+# 带**空格**的媒体根必须被当成一个目标（`for target in $targets` 会按空格切分 ——
+# macOS 上 `/Volumes/My Drive/…` 太常见；被切开后用户看到的是"探了几个不存在的位置"）
+printf '==> 带空格的媒体根：--verify 与权限阶段都不许被切碎\n'
+SP="$(mktemp -d)"; mkdir -p "$SP/My Drive/视频" "$SP/home/Library/Application Support/zizvideo" "$SP/bin" "$SP/daemons"
+printf '{"listen":"127.0.0.1:7817","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/var/zizvideo.db","media_allow_roots":["%s/My Drive/视频"],"allow_register":false}\n' "$SP" "$SP" "$SP" \
+  >"$SP/home/Library/Application Support/zizvideo/config.json"
+cat >"$SP/lc" <<'FAKELC4'
+#!/bin/sh
+if [ "$1" = "print" ]; then echo "	state = running"; exit 0; fi
+if [ "$1" = "bootstrap" ]; then
+  plist=""
+  for a in "$@"; do case "$a" in *.plist) plist="$a" ;; esac; done
+  if [ -n "$plist" ]; then
+    outp=$(awk '/StandardOutPath/{getline; gsub(/.*<string>|<\/string>.*/,""); print; exit}' "$plist")
+    if [ -n "$outp" ]; then printf '%s\n' "${ZV_FAKE_PROBE_JSON:-{\"path\":\"x\",\"readable\":true}}" >"$outp"; fi
+  fi
+fi
+exit 0
+FAKELC4
+chmod 0755 "$SP/lc"
+printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }; [ "$1" = "check-access" ] && { printf %s "{\"path\":\"x\",\"readable\":true}"; exit 0; }; exit 0\n' >"$SP/bin/zizvideo"
+chmod 0755 "$SP/bin/zizvideo"
+spout="$(HOME="$SP/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$SP/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$SP/daemons" ZV_INSTALL_ROOT="$SP" ZV_ACCESS_PROBE_WAIT=0 \
+  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+n_read="$(printf '%s' "$spout" | grep -c "守护进程读得到：$SP/My Drive/视频" || true)"
+[ "$n_read" = "1" ] && ok "--verify 把带空格的媒体根当成**一个**目标（不是切成几段）" \
+  || bad "--verify 对带空格路径的处理不对（匹配行数 ${n_read}）：$(printf '%s' "$spout" | grep '守护进程' | head -3 | tr '\n' ' ')"
+rm -rf "$SP"
+
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then
@@ -1362,6 +1392,17 @@ if grep -q "Privacy_AllFiles" "$OPEN_LOG" && grep -q -- "-R" "$OPEN_LOG"; then
 else
   bad "没有调用 open 打开设置面板/选中二进制：$(cat "$OPEN_LOG")"
 fi
+
+# ②b 带**空格**的媒体根：权限阶段必须把它当成一个目标（切碎了就会报"探了几个不存在的位置"）
+SP2="$(mktemp -d)"; mkdir -p "$SP2/home-fda/Library/Application Support/zizvideo" "$SP2/My Drive/视频"
+printf '{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s/My Drive/视频"]\n}\n' "$SP2/data" "$SP2" \
+  >"$SP2/home-fda/Library/Application Support/zizvideo/config.json"
+out=$(fda_case "$(cat "$SP2/home-fda/Library/Application Support/zizvideo/config.json")" \
+  '{"path":"x","readable":true}' 0 2>&1)
+n_sp="$(printf '%s' "$out" | grep -c "守护进程读得到：$SP2/My Drive/视频" || true)"
+[ "$n_sp" = "1" ] && ok "权限阶段把带空格的媒体根当成一个目标（没被空格切碎）" \
+  || bad "权限阶段切碎了带空格的路径（匹配 ${n_sp} 行）：$(printf '%s' "$out" | grep '读' | head -3 | tr '\n' ' ')"
+rm -rf "$SP2"
 
 # ③ 没有配媒体根时退回 --fda 哨兵探测
 : >"$OPEN_LOG"

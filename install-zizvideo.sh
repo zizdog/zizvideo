@@ -114,7 +114,9 @@ zizvideo 独立部署安装器
         镜像没有 crt 则降级为未签名部署，每次升级都要重新授权。
   --verify：不安装、不升级，只把当前部署体检一遍 —— 二进制能不能跑、配置能不能解析、服务在不在
         跑、/readyz 通不通、**每个媒体根在守护进程上下文里读不读得到**（复用安装时那套一次性
-        launchd 作业，结论可信；拿不到 sudo 会如实说不给结论）。退出码 0=全过、1=有 ✗。
+        launchd 作业，结论可信；拿不到 sudo 会如实说不给结论）。
+        退出码：0=全过；3=**服务在跑但没就绪**（媒体根/磁盘/ffmpeg 的问题，按提示修，别重启服务）；
+                1=服务不可用（健康端点无响应，查服务状态与日志）；2=参数错。
   完全磁盘访问（TCC）：装完会**在守护进程自己的上下文里**（一次性 launchd 作业）去读你在 config 里配的
         媒体根；读不到就打印「系统设置 → 隐私与安全性 → 完全磁盘访问」的引导、在 Finder 里选中二进制，
         并等你授权后复验（默认最多 60s；`ZV_ACCESS_PROBE_WAIT=0` 只报告不等待，供无人值守）。
@@ -1079,7 +1081,10 @@ check_full_disk_access() {
   targets=$(access_probe_targets)
   missing=""
   probed=0
-  for target in $targets; do
+  # ⚠️ 一行一个路径：`for target in $targets` 会按空格切分 ⇒ `/Volumes/My Drive/视频` 会被切成
+  # 两个不存在的路径，用户看到的是"探了两个不存在的位置"（坑 107/115 的同类）。
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
     probed=$((probed + 1))
     line=$(probe_access_in_daemon_context "$target")
     case "$line" in
@@ -1088,14 +1093,18 @@ check_full_disk_access() {
         ;;
       '')
         warn "  无法判定：${target}（一次性探测作业没有产出结果；可手动跑 $BIN check-access $target 看看）"
-        missing="${missing}${target} "
+        missing="${missing}${target}
+"
         ;;
       *)
         warn "  ✗ 守护进程读不到：$target"
-        missing="${missing}${target} "
+        missing="${missing}${target}
+"
         ;;
     esac
-  done
+  done <<EOF
+$targets
+EOF
   if [ "$probed" = "0" ] || [ -z "$missing" ]; then
     if [ "$probed" != "0" ]; then say "  全部可读：受保护位置里的媒体能正常扫描"; fi
     return 0
@@ -1124,13 +1133,17 @@ check_full_disk_access() {
     read -r -t 5 _ 2>/dev/null || true
     waited=$((waited + 5))
     still=""
-    for target in $missing; do
+    while IFS= read -r target; do
+      [ -n "$target" ] || continue
       line=$(probe_access_in_daemon_context "$target")
       case "$line" in
         *'"readable":true'*) say "  ✓ 现在读得到了：$target" ;;
-        *) still="${still}${target} " ;;
+        *) still="${still}${target}
+" ;;
       esac
-    done
+    done <<EOF
+$missing
+EOF
     if [ -z "$still" ]; then
       say "  权限检查通过：目录里的媒体能被扫描"
       return 0

@@ -11,7 +11,8 @@
 #    bash tools/verify-deploy.sh --config /etc/zizvideo/config.json --bin /opt/zizvideo/zizvideo
 #    bash tools/verify-deploy.sh --port 7766           # 只检查健康端点用哪个端口
 #    bash tools/verify-deploy.sh --no-service           # 容器/无 init 系统：跳过服务状态那一条
-#  退出码：0 = 关键项全过；1 = 有 ✗；2 = 参数/环境问题
+#  退出码：0 = 关键项全过；3 = **服务在跑但没就绪**（媒体根/磁盘/ffmpeg，按提示修，别重启服务）；
+#          1 = 服务不可用（健康端点无响应）/ 其它 ✗；2 = 参数或环境问题
 # ============================================================================
 set -uo pipefail
 
