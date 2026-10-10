@@ -125,3 +125,68 @@ func TestLibraryKindValidatedAndExposed(t *testing.T) {
 		t.Fatalf("库类型被非法请求改写成了 %q", lib.Kind)
 	}
 }
+
+// 后台两块「各管各的」的硬判据（用户 2026-10-10："后台各管各的"）：
+// GET /api/v1/media?kind=short|drama 必须按**库类型**过滤 —— 短视频管理里不出现剧集，
+// 短剧管理里不出现散片。靠接口约束 + 测试钉住，而不是前端自己过滤。
+func TestMediaListFiltersByLibraryKind(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	mkLib := func(name, kind string) *domain.Library {
+		root := filepath.Join(e.Root, name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		res, env, raw := e.write(http.MethodPost, "/api/v1/libraries", map[string]any{
+			"name": name, "root_path": root, "kind": kind})
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("建库 %s 失败 %d: %s", name, res.StatusCode, raw)
+		}
+		var lib domain.Library
+		decodeInto(t, env.Data, &lib)
+		return &lib
+	}
+	shortLib := mkLib("散片库", domain.KindShort)
+	dramaLib := mkLib("短剧库", domain.KindDrama)
+	e.newMedia(shortLib.ID, filepath.Join(e.Root, "散片库", "a.mp4"), body(8))
+	e.newMedia(shortLib.ID, filepath.Join(e.Root, "散片库", "b.mp4"), body(8))
+	e.newMedia(dramaLib.ID, filepath.Join(e.Root, "短剧库", "S01E01.mp4"), body(8))
+
+	listIDs := func(kind string) []string {
+		t.Helper()
+		res, env, raw := e.do(http.MethodGet, "/api/v1/media?per_page=50&kind="+kind, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("kind=%s 列表失败 %d: %s", kind, res.StatusCode, raw)
+		}
+		var page struct {
+			List []struct {
+				ID          string `json:"id"`
+				LibraryID   string `json:"library_id"`
+				LibraryName string `json:"library_name"`
+			} `json:"list"`
+		}
+		decodeInto(t, env.Data, &page)
+		out := []string{}
+		for _, it := range page.List {
+			out = append(out, it.LibraryID)
+		}
+		return out
+	}
+	shortIDs := listIDs(domain.KindShort)
+	if len(shortIDs) != 2 {
+		t.Fatalf("短视频库应 2 条，实际 %d（%v）", len(shortIDs), shortIDs)
+	}
+	for _, id := range shortIDs {
+		if id != shortLib.ID {
+			t.Fatalf("kind=short 列表里出现了别的库：%s", id)
+		}
+	}
+	dramaIDs := listIDs(domain.KindDrama)
+	if len(dramaIDs) != 1 || dramaIDs[0] != dramaLib.ID {
+		t.Fatalf("短剧库应 1 条且只属于剧库，实际 %v", dramaIDs)
+	}
+	// 不带 kind = 不过滤（管理面其它页签仍要看全部）
+	if res, _, _ := e.do(http.MethodGet, "/api/v1/media?per_page=50", nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("不带 kind 应 200，实际 %d", res.StatusCode)
+	}
+}

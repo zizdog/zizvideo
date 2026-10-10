@@ -19,10 +19,10 @@ import (
 
 // mediaItem is the single shape returned by /media, /media/{id} and /feed/next.
 type mediaItem struct {
-	ID         string        `json:"id"`
-	LibraryID  string        `json:"library_id"`
-	Title      string        `json:"title"`
-	Path       string        `json:"path,omitempty"`
+	ID        string `json:"id"`
+	LibraryID string `json:"library_id"`
+	Title     string `json:"title"`
+	Path      string `json:"path,omitempty"`
 	// FileName 只给文件名（不含目录）：原生播放页的「正在播放：…」要显示**文件名**而不是标题
 	// （用户 2026-10-01："是文件名，不是标题"）。宿主机绝对路径只给管理员（见 withPath），
 	// 文件名对"能播这一条"的人不算秘密，但目录不给（坑 65）。
@@ -163,6 +163,9 @@ func struct2Filter(r *http.Request, page, per int, sort string, desc bool) stora
 		LibraryID: r.URL.Query().Get("library_id"),
 		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
 		Status:    r.URL.Query().Get("status"),
+		// kind=short|drama：后台两块各管各的（短视频管理不出现剧集，短剧管理不出现散片）。
+		// 非法值被 storage 忽略（等于不过滤），不报错 —— 列表接口的既有习惯。
+		Kind: strings.TrimSpace(r.URL.Query().Get("kind")),
 	}
 }
 
