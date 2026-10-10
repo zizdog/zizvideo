@@ -140,6 +140,8 @@ if wanted post-artifacts; then
     step_skip "线上产物复核" "拉不到镜像索引（网络不通 / 还没发布过）"
   else
     printf '  镜像 latest = %s\n' "$mver"
+    local_ver="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+    [ "$mver" = "$local_ver" ] && printf '  （镜像 latest 就是本次版本：缺任何本地有的索引都算漏传）\n'
     tmpd="$(mktemp -d)"
     bad_items=0; checked=0
     for idx in "manifest.json" "linux.json" "android.json"; do
@@ -150,7 +152,15 @@ if wanted post-artifacts; then
         android.json)  assets_base="$MIRROR/apps/zizvideo" ;;
       esac
       if ! curl -fsS --max-time 20 "$url" -o "$tmpd/$idx" 2>/dev/null; then
-        printf '  · %s：取不到（没这类产物？）\n' "$idx"
+        # 缺索引要分清两种情况（否则发布后"漏传了 linux.json"会被当成"老版本没有这类产物"糊过去）：
+        #   · 镜像 latest == 本地版本（= 这就是本次发布）且**本地**有这份索引 ⇒ **漏传了** ⇒ 失败；
+        #   · 镜像还是上一版 ⇒ 老版本没有这类产物很正常 ⇒ 只记一条说明。
+        if [ "$mver" = "$local_ver" ] && [ -f "$ROOT/dist/apps/zizvideo/$idx" ]; then
+          printf '  ✗ %s：**本地有、镜像上没有** —— 本次发布漏传了它（独立部署/飞牛装不上）\n' "$idx"
+          bad_items=$((bad_items + 1))
+        else
+          printf '  · %s：镜像上没有（老版本没这类产物，正常）\n' "$idx"
+        fi
         continue
       fi
       # 每条资产：先比 size，再**下载**算 sha256（这是唯一能发现"被换过/被截断"的办法）
@@ -196,12 +206,14 @@ $rows
 EOF
     done
     rm -rf "$tmpd"
-    if [ "$bad_items" -eq 0 ] && [ "$checked" -gt 0 ]; then
+    # 顺序很重要：**只要有 ✗ 就是失败**（第一版把"没读到可比对资产"排在前面，
+    # 于是"漏传了 linux.json/android.json"被当成 skip 放过去了 —— 判据顺序错了等于没有判据）
+    if [ "$bad_items" -gt 0 ]; then
+      step_bad "线上产物复核 —— ${bad_items} 项有问题（漏传 / 与索引不符 / 取不到）"
+    elif [ "$checked" -gt 0 ]; then
       step_ok "线上产物复核（${checked} 份逐字节与索引一致）"
-    elif [ "$checked" -eq 0 ]; then
-      step_skip "线上产物复核" "索引里没读到可比对的资产"
     else
-      step_bad "线上产物复核 —— ${bad_items} 份与索引不符（线上被换过/被截断/索引过期）"
+      step_skip "线上产物复核" "索引里没读到可比对的资产"
     fi
   fi
 fi

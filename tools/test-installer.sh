@@ -877,6 +877,26 @@ case "$pfp2" in
   *) bad "产物被改后没报错：$(printf '%s' "$pfp2" | grep -E '✗' | head -2 | tr '\n' ' ')" ;;
 esac
 rm -rf "$PM"
+# 发布后复核：**本地有、镜像没有**的索引 = 本次发布漏传（必须失败，不能被"老版本没这类产物"糊过去）
+PM2="$(mktemp -d)"; mkdir -p "$PM2/apps/zizvideo"
+PFV="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+printf '{"app":"zizvideo","latest":"%s","assets":[]}\n' "$PFV" >"$PM2/apps/zizvideo/manifest.json"
+# 本地确实有 linux.json（dist 下），所以这就是"漏传"场景
+if [ -f "$ROOT/dist/apps/zizvideo/linux.json" ]; then
+  if ZV_PREFLIGHT_MIRROR="file://$PM2" bash "$PF" --only post-artifacts >"$PM2/o" 2>&1; then
+    bad "镜像 latest 就是本次版本、却缺本地有的 linux.json 时，复核竟然通过（漏传会被放过去）"
+  else
+    case "$(cat "$PM2/o")" in
+      *"漏传"*) ok "本地有、镜像没有的索引被如实判为「漏传」（发布后能抓到"少传了东西"）" ;;
+      *) bad "漏传场景的报错不清：$(grep '✗' "$PM2/o" | head -2 | tr '\n' ' ')" ;;
+    esac
+  fi
+else
+  note_skip "本地没有 dist/apps/zizvideo/linux.json，跳过漏传用例"
+fi
+rm -rf "$PM2"
+
+rm -rf "$PM"
 
 # ---------------------------------------------------------------------------
 # 安装器 --verify 与自查脚本 --as-daemon：两个**独立实现**在同一场景下必须给出同样判定
