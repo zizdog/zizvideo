@@ -166,6 +166,9 @@ func struct2Filter(r *http.Request, page, per int, sort string, desc bool) stora
 		// kind=short|drama：后台两块各管各的（短视频管理不出现剧集，短剧管理不出现散片）。
 		// 非法值被 storage 忽略（等于不过滤），不报错 —— 列表接口的既有习惯。
 		Kind: strings.TrimSpace(r.URL.Query().Get("kind")),
+		// ungrouped=1：只要"还没归入任何剧"的（短剧库里的未归组散片），
+		// 供后台「短剧管理」把它们归进某部剧。
+		UngroupedOnly: r.URL.Query().Get("ungrouped") == "1",
 	}
 }
 

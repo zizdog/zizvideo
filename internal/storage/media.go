@@ -278,11 +278,14 @@ type MediaFilter struct {
 	// Kind 按**库类型**过滤（short=短视频 / drama=短剧）：一条 media 的形态由它所在的库决定，
 	// 所以这里 JOIN 库表，而不是在 media 上加一列（用户 2026-10-10 的 Jellyfin 式模型）。
 	// 后台「短视频管理」「短剧管理」两块就是靠它各管各的（接口层带约束 + 测试钉住）。
-	Kind    string
-	Page    int
-	PerPage int
-	Sort    string
-	Desc    bool
+	Kind string
+	// UngroupedOnly 只出"还没归入任何剧"的媒体（短剧库扫描把库根散片留成未归组，
+	// 后台要有个入口把它们归进某部剧；2026-10-11 设计第 5 步收尾）。
+	UngroupedOnly bool
+	Page          int
+	PerPage       int
+	Sort          string
+	Desc          bool
 }
 
 // ListMedia returns a page of media inside the scope plus the scoped total.
@@ -300,6 +303,9 @@ func (db *DB) ListMedia(scope domain.LibraryScope, f MediaFilter) ([]domain.Medi
 	if domain.ValidLibraryKind(f.Kind) {
 		where += ` AND library_id IN (SELECT id FROM media_libraries WHERE kind = ?)`
 		args = append(args, f.Kind)
+	}
+	if f.UngroupedOnly {
+		where += ` AND id NOT IN (SELECT media_id FROM series_media)`
 	}
 	if f.Query != "" {
 		where += ` AND (title LIKE ? ESCAPE '\' OR path LIKE ? ESCAPE '\')`
