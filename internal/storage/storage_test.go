@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -500,5 +501,55 @@ func TestTruncateKeepsValidUTF8(t *testing.T) {
 	}
 	if got := truncate("短", 1); got != "" {
 		t.Fatalf("1 字节连一个完整 rune 都放不下，应返回空串，实际 %q", got)
+	}
+}
+
+// TestMigrateConcurrentHandles：升级场景下**两个进程/两个连接同时迁移同一个库**
+// （面板升级后用新二进制调 `zizvideo roots add`，而旧 daemon 还在跑）。
+// 老实现是"SELECT 判重 + deferred 事务"，判重与应用不原子 ⇒ 后到者会拿到
+// "duplicate column name" 而 Open 失败。现在每条迁移在 BEGIN IMMEDIATE 里重新判重。
+func TestMigrateConcurrentHandles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db", "zizvideo.db")
+	const workers = 4
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db, err := Open(path)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer db.Close()
+			<-start
+			if err := db.Migrate(); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("并发迁移必须全部成功（老实现会 duplicate column name）：%v", err)
+	}
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	migs, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := db.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != migs[len(migs)-1].version {
+		t.Fatalf("迁移后版本 = %d, 期望 %d", v, migs[len(migs)-1].version)
 	}
 }

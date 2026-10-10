@@ -22,3 +22,6 @@ ZizVideo-当前状态.md
 # Python 字节码（工具脚本跑出来的）
 __pycache__/
 *.pyc
+
+# Android/Gradle 会话状态（不应进仓库）
+android/.kotlin/
