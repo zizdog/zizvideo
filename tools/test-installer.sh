@@ -865,11 +865,37 @@ rows = [{"name": "zizvideo_9.9.9_darwin_arm64", "version": "9.9.9", "arch": "arm
 json.dump({"app": "zizvideo", "latest": "9.9.9", "assets": rows}, open(base + "/manifest.json", "w"))
 json.dump({"app": "zizvideo", "version": "9.9.9", "assets": rows}, open(base + "/9.9.9/manifest.json", "w"))
 PYP
+# 版本目录那份 manifest 也要读得到（idx 里带斜杠 ⇒ 落盘文件名必须 sanitize，
+# 否则会被报成"镜像上没有" —— 这个名字带斜杠的坑第三次踩了）
 pfp="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
+case "$pfp" in
+  *"顶层索引与版本目录索引一致"*) ok "顶层索引与版本目录索引都读到了且一致（idx 带斜杠的文件名处理正确）" ;;
+  *) bad "版本目录 manifest 没被正确读取：$(printf '%s' "$pfp" | grep -E 'manifest|✗' | head -3 | tr '\n' ' ')" ;;
+esac
 case "$pfp" in
   *"线上字节与索引 sha256 一致"*) ok "线上产物与索引逐字节一致时报 ✓" ;;
   *) bad "线上产物复核没报一致：$(printf '%s' "$pfp" | grep -E '✗|·' | head -2 | tr '\n' ' ')" ;;
 esac
+# 两份索引资产不一致 ⇒ 必须报错（面板读顶层、安装器读版本目录，打架会"显示一个版本、装另一个"）
+python3 - "$PM/apps/zizvideo/9.9.9/manifest.json" <<'PYD'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["assets"][0]["sha256"] = "1" * 64
+json.dump(d, open(p, "w"))
+PYD
+pfpm="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
+case "$pfpm" in
+  *"顶层索引与版本目录索引**不一致**"*) ok "两份索引资产不一致时如实报错（否则会"显示一个版本、装另一个"）" ;;
+  *) bad "两份索引不一致时没报错：$(printf '%s' "$pfpm" | grep -E '索引|✗' | head -2 | tr '\n' ' ')" ;;
+esac
+python3 - "$PM/apps/zizvideo/9.9.9/manifest.json" "$PMSHA" <<'PYP'
+import json, sys
+p, sha = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d["assets"][0]["sha256"] = sha
+json.dump(d, open(p, "w"))
+PYP
 printf 'tampered\n' >>"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
 pfp2="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
 case "$pfp2" in

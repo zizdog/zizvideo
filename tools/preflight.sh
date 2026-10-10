@@ -144,14 +144,18 @@ if wanted post-artifacts; then
     [ "$mver" = "$local_ver" ] && printf '  （镜像 latest 就是本次版本：缺任何本地有的索引都算漏传）\n'
     tmpd="$(mktemp -d)"
     bad_items=0; checked=0
-    for idx in "manifest.json" "linux.json" "android.json"; do
+    for idx in "manifest.json" "$mver/manifest.json" "linux.json" "android.json"; do
       url="$MIRROR/apps/zizvideo/$idx"
       case "$idx" in
-        manifest.json) assets_base="$MIRROR/apps/zizvideo/$mver" ;;
-        linux.json)    assets_base="$MIRROR/apps/zizvideo/$mver" ;;
-        android.json)  assets_base="$MIRROR/apps/zizvideo" ;;
+        manifest.json)       assets_base="$MIRROR/apps/zizvideo/$mver" ;;
+        */manifest.json)     assets_base="$MIRROR/apps/zizvideo/$mver" ;;
+        linux.json)          assets_base="$MIRROR/apps/zizvideo/$mver" ;;
+        android.json)        assets_base="$MIRROR/apps/zizvideo" ;;
       esac
-      if ! curl -fsS --max-time 20 "$url" -o "$tmpd/$idx" 2>/dev/null; then
+      # ⚠️ idx 里可能带斜杠（`0.6.4-mvp/manifest.json`）⇒ 落盘文件名必须先 sanitize，
+      # 否则 curl 因"目录不存在"写不进去，而报出来是"镜像上没有"（第三次踩这个名字带斜杠的坑）
+      safe_idx="$(printf '%s' "$idx" | tr '/' '_')"
+      if ! curl -fsS --max-time 20 "$url" -o "$tmpd/$safe_idx" 2>/dev/null; then
         # 缺索引要分清两种情况（否则发布后"漏传了 linux.json"会被当成"老版本没有这类产物"糊过去）：
         #   · 镜像 latest == 本地版本（= 这就是本次发布）且**本地**有这份索引 ⇒ **漏传了** ⇒ 失败；
         #   · 镜像还是上一版 ⇒ 老版本没有这类产物很正常 ⇒ 只记一条说明。
@@ -165,7 +169,7 @@ if wanted post-artifacts; then
       fi
       # 每条资产：先比 size，再**下载**算 sha256（这是唯一能发现"被换过/被截断"的办法）
       # ⚠️ macOS 自带 bash 3.2 **没有 mapfile**（安装器就要在 3.2 上跑）⇒ 用 while+数组
-      rows="$(python3 - "$tmpd/$idx" <<'PYI'
+      rows="$(python3 - "$tmpd/$safe_idx" <<'PYI'
 import json, sys
 d = json.load(open(sys.argv[1]))
 if "assets" in d:
@@ -205,6 +209,26 @@ PYI
 $rows
 EOF
     done
+    # 顶层索引与版本目录索引必须一致（面板读顶层、安装器读版本目录那份；打架就会出现"显示 0.6.5、装的是别的"）
+    if [ -f "$tmpd/manifest.json" ] && [ -f "$tmpd/${mver}_manifest.json" ]; then
+      if python3 - "$tmpd/manifest.json" "$tmpd/${mver}_manifest.json" <<'PYC' 2>/dev/null
+import json, sys
+top = json.load(open(sys.argv[1]))
+sub = json.load(open(sys.argv[2]))
+a = sorted((r.get("name"), r.get("sha256"), int(r.get("size") or 0)) for r in (top.get("assets") or []))
+b = sorted((r.get("name"), r.get("sha256"), int(r.get("size") or 0)) for r in (sub.get("assets") or []))
+if a != b:
+    print("不一致：顶层 %s / 版本目录 %s" % (a, b)); raise SystemExit(1)
+if (top.get("latest") or "") != (sub.get("version") or ""):
+    print("latest=%s 与版本目录 version=%s 不等" % (top.get("latest"), sub.get("version"))); raise SystemExit(1)
+PYC
+      then
+        printf '  ✓ 顶层索引与版本目录索引一致（资产与版本号都对得上）\n'
+      else
+        printf '  ✗ 顶层索引与版本目录索引**不一致**（面板读顶层、安装器读版本目录 ⇒ 会"显示一个版本、装另一个"）\n'
+        bad_items=$((bad_items + 1))
+      fi
+    fi
     rm -rf "$tmpd"
     # 顺序很重要：**只要有 ✗ 就是失败**（第一版把"没读到可比对资产"排在前面，
     # 于是"漏传了 linux.json/android.json"被当成 skip 放过去了 —— 判据顺序错了等于没有判据）
