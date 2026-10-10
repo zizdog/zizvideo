@@ -175,6 +175,43 @@ def main() -> int:
         print("   飞牛包清单已写：%s（%d 个架构：%s）" % (
             fpath, len(fnos_rows), ", ".join(r["arch"] for r in fnos_rows)))
 
+    # 容器镜像 tar 清单：dist/apps/zizvideo/docker/*.tar.gz → docker.json
+    # （与 fnos.json/android.json 同思路：app 级稳定路径 + 文件名带 sha256/size，用户 docker load 导入）
+    dockerdir = os.path.join(os.path.dirname(vdir), "docker")
+    docker_rows = []
+    if os.path.isdir(dockerdir):
+        for name in sorted(os.listdir(dockerdir)):
+            found = re.match(r"^zizvideo-(.+)-(amd64|arm64)\.tar\.gz$", name)
+            path = os.path.join(dockerdir, name)
+            if not found or not os.path.isfile(path):
+                continue
+            with open(path, "rb") as handle:
+                digest = hashlib.sha256(handle.read()).hexdigest()
+            docker_rows.append({
+                "name": name, "arch": found.group(2), "version": found.group(1),
+                "file": "docker/" + name, "sha256": digest, "size": os.path.getsize(path),
+            })
+    if docker_rows:
+        dproblems = []
+        for row in docker_rows:
+            if not SHA256_RE.match(row["sha256"]) or int(row["size"]) <= 0:
+                dproblems.append("%s 的 sha256/size 不合法" % row["name"])
+            if row["version"] != ver:
+                dproblems.append("%s 的版本 %s ≠ 本次 %s（打包之后又改过版本号？）" % (row["name"], row["version"], ver))
+        if dproblems:
+            print("!! docker.json 自校验不通过，未写：", file=sys.stderr)
+            for p in dproblems:
+                print("   - " + p, file=sys.stderr)
+            return 1
+        dpath = os.path.join(os.path.dirname(vdir), "docker.json")
+        with open(dpath, "w", encoding="utf-8") as handle:
+            json.dump({"app": "zizvideo", "platform": "docker", "latest": ver,
+                       "generated_at": stamp, "assets": docker_rows}, handle,
+                      ensure_ascii=False, indent=2)
+            handle.write("\n")
+        print("   容器镜像清单已写：%s（%d 个架构：%s）" % (
+            dpath, len(docker_rows), ", ".join(r["arch"] for r in docker_rows)))
+
     # 安卓客户端的自动更新清单（有 APK 才写；没带客户端时**不动**旧的那份，
     # 否则会把手上的更新源清掉）
     apk = None

@@ -154,6 +154,9 @@ export VERIFY_DEEP = $(DEEP)
 linux-verify: ## 把发布的 Linux 二进制跑进真 Linux 容器验一遍（--api 会跑建库/扫描/流式全链路）
 	@bash tools/verify-linux-container.sh $(if $(filter 1,$(API)),--api,)
 
+docker-tar: ## 导出可离线导入的容器镜像 tar（FROM scratch，不依赖 registry）+ 刷新 docker.json
+	@bash tools/make-docker-tar.sh --arch $(DOCKER_ARCH)
+
 docker-image: ## 打容器镜像（先把静态 Linux 二进制放进构建上下文；没有 docker daemon 会如实失败）
 	@bash tools/make-docker-image.sh --arch $(DOCKER_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 

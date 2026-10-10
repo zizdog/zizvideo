@@ -161,6 +161,13 @@ else
   printf '  · 没有 fnos.json / fnos/（没打飞牛包就跳过；要发就 make fpk）\n'
 fi
 
+hdr "容器镜像（有就核对）"
+if [ -f "$PARENT/docker.json" ] && [ -d "$PARENT/docker" ]; then
+  check_asset "$PARENT/docker.json" assets "docker.json" "$PARENT" && ok "docker.json 与 tar 逐字节一致" || bad "docker.json 与 tar 不一致"
+else
+  printf '  · 没有 docker.json / docker/（没导出镜像就跳过；要用就 make docker-tar）\n'
+fi
+
 hdr "安卓产物"
 APK="$(ls -1 "$DIR"/zizvideo-android-*.apk 2>/dev/null | head -1 || true)"
 if [ -n "$APK" ] && [ -f "$PARENT/android.json" ]; then

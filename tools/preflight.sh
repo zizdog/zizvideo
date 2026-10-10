@@ -144,7 +144,7 @@ if wanted post-artifacts; then
     [ "$mver" = "$local_ver" ] && printf '  （镜像 latest 就是本次版本：缺任何本地有的索引都算漏传）\n'
     tmpd="$(mktemp -d)"
     bad_items=0; checked=0
-    for idx in "manifest.json" "$mver/manifest.json" "linux.json" "android.json" "fnos.json"; do
+    for idx in "manifest.json" "$mver/manifest.json" "linux.json" "android.json" "fnos.json" "docker.json"; do
       url="$MIRROR/apps/zizvideo/$idx"
       case "$idx" in
         manifest.json)       assets_base="$MIRROR/apps/zizvideo/$mver" ;;
@@ -152,6 +152,7 @@ if wanted post-artifacts; then
         linux.json)          assets_base="$MIRROR/apps/zizvideo/$mver" ;;
         android.json)        assets_base="$MIRROR/apps/zizvideo" ;;
         fnos.json)           assets_base="$MIRROR/apps/zizvideo" ;;
+        docker.json)         assets_base="$MIRROR/apps/zizvideo" ;;
       esac
       # ⚠️ idx 里可能带斜杠（`0.6.4-mvp/manifest.json`）⇒ 落盘文件名必须先 sanitize，
       # 否则 curl 因"目录不存在"写不进去，而报出来是"镜像上没有"（第三次踩这个名字带斜杠的坑）

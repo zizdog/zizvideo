@@ -256,6 +256,32 @@ PYF
       ok "飞牛包可用：fnos.json → ${fname}（${fgot} B，线上可达）"
     fi
   fi
+  # 容器镜像 tar：docker.json 指向的包必须线上可达、大小一致
+  if [ -f "$APPDIR/docker.json" ] && curl -fsS --max-time 30 "$MIRROR_BASE/apps/zizvideo/docker.json" -o "$tmp/docker.json"; then
+    local dname dsize durl dgot
+    dname="$(python3 - "$tmp/docker.json" <<'PYD'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print((row.get("file") or "").split("/")[-1]); break
+PYD
+)"
+    dsize="$(python3 - "$tmp/docker.json" <<'PYD'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print(row.get("size") or 0); break
+PYD
+)"
+    if [ -n "$dname" ]; then
+      durl="$MIRROR_BASE/apps/zizvideo/docker/$dname"
+      dgot="$(curl -fsSI --max-time 30 "$durl" 2>/dev/null | tr -d '\r' \
+        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+      [ -n "$dgot" ] || die "线上取不到容器镜像：$durl"
+      [ "$dgot" = "$dsize" ] || die "线上容器镜像大小 ${dgot} ≠ 清单 ${dsize}（${dname}）"
+      ok "容器镜像可用：docker.json → ${dname}（${dgot} B，线上可达）"
+    fi
+  fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
   phase "复验"
 }
@@ -588,6 +614,26 @@ if [ -d "$APPDIR/fnos" ]; then
   done
   if [ -f "$APPDIR/fnos.json" ]; then
     queue_upload "$APP_DIR" "$APPDIR/fnos.json" "fnos.json"
+  fi
+fi
+
+# 容器镜像 tar：离线导入用（没有 registry 的机器也能拿到）。同样放 app 级稳定路径。
+if [ -d "$APPDIR/docker" ]; then
+  dkdir="$APP_DIR/docker"
+  dkbody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$dkdir")"
+  if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$dkbody" >/dev/null 2>&1; then
+    ok "已创建 docker/（容器镜像目录）"
+  elif api GET /api/v1/files -G --data-urlencode "path=$dkdir" 2>/dev/null | grep -q '"entries"'; then
+    ok "docker/ 已存在"
+  else
+    die "创建容器镜像目录失败：${dkdir}（面板接口不建目录）"
+  fi
+  for f in "$APPDIR"/docker/*.tar.gz; do
+    [ -f "$f" ] || continue
+    queue_upload "$dkdir" "$f" "$(basename "$f")"
+  done
+  if [ -f "$APPDIR/docker.json" ]; then
+    queue_upload "$APP_DIR" "$APPDIR/docker.json" "docker.json"
   fi
 fi
 

@@ -1494,6 +1494,45 @@ case "$crout" in
   *"latest"*) ok "顶层 latest 与版本目录不符时自检如实报错" ;;
   *) bad "latest 不符没有被报出来：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
 esac
+# 容器镜像清单（docker.json）：有 tar.gz 才写；版本对不上必须拒绝写（与 fnos.json 同一套规矩）
+DK="$(mktemp -d)"; mkdir -p "$DK/apps/zizvideo/9.9.9" "$DK/apps/zizvideo/docker"
+printf 'stub darwin\n' >"$DK/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
+printf 'stub tar\n' >"$DK/apps/zizvideo/docker/zizvideo-9.9.9-amd64.tar.gz"
+if python3 "$ROOT/tools/make-app-index.py" "$DK/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1 && [ -f "$DK/apps/zizvideo/docker.json" ]; then
+  ok "有镜像 tar 时生成器写出 docker.json"
+  python3 - "$DK/apps/zizvideo/docker.json" <<'PYDK' && ok "docker.json 的 file/sha256/size 与磁盘一致" || bad "docker.json 内容不对"
+import hashlib, json, os, sys
+d = json.load(open(sys.argv[1]))
+row = d["assets"][0]
+path = os.path.join(os.path.dirname(sys.argv[1]), row["file"])
+assert row["file"].startswith("docker/"), row["file"]
+assert row["sha256"] == hashlib.sha256(open(path, "rb").read()).hexdigest()
+assert int(row["size"]) == os.path.getsize(path)
+assert row["arch"] == "amd64"
+PYDK
+else
+  bad "有镜像 tar 时没写出 docker.json"
+fi
+mv "$DK/apps/zizvideo/docker/zizvideo-9.9.9-amd64.tar.gz" "$DK/apps/zizvideo/docker/zizvideo-1.1.1-amd64.tar.gz"
+if python3 "$ROOT/tools/make-app-index.py" "$DK/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1; then
+  bad "镜像 tar 版本与本次不一致时生成器没报错"
+else
+  ok "镜像 tar 版本与本次不一致时拒绝写 docker.json"
+fi
+rm -rf "$DK"
+# 没有 docker daemon 时必须**如实跳过**（exit 2），不许假装导出过
+SHIMD="$(mktemp -d)"; printf '#!/bin/sh\nexit 1\n' >"$SHIMD/docker"; chmod 0755 "$SHIMD/docker"
+if out=$(PATH="$SHIMD:$PATH" bash "$ROOT/tools/make-docker-tar.sh" --arch arm64 2>&1); then
+  bad "没有 docker daemon 时 make-docker-tar 竟然返回成功（假装导出过）"
+else
+  rc=$?
+  case "$out" in
+    *"如实跳过"*) ok "没有 docker daemon 时如实跳过（退出码 ${rc}）" ;;
+    *) bad "没有 daemon 时的说明不清：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')" ;;
+  esac
+fi
+rm -rf "$SHIMD"
+
 # 飞牛包清单（fnos.json）：有 .fpk 才写；版本对不上必须**拒绝写**（否则用户按索引下载到不匹配的包）
 FN="$(mktemp -d)"; mkdir -p "$FN/apps/zizvideo/9.9.9" "$FN/apps/zizvideo/fnos"
 printf 'stub darwin\n' >"$FN/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
