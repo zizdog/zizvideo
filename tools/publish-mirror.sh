@@ -197,7 +197,7 @@ PY
     got_size="$(curl -fsSI --max-time 30 "$MIRROR_BASE/apps/zizvideo/$apk_url" 2>/dev/null \
       | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
     [ -n "$got_size" ] || die "线上取不到 APP 更新包：$apk_url"
-    [ "$got_size" = "$want_size" ] || die "线上 APK 大小 ${got_size} ≠ 清单 ${want_size}（$apk_url）"
+    [ "$got_size" = "$want_size" ] || die "线上 APK 大小 ${got_size} ≠ 清单 ${want_size}（${apk_url}）"
     ok "安卓更新源可用：android.json → app ${apk_ver}，${link}（${got_size} B，线上可达）"
   fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
@@ -264,7 +264,7 @@ prune_old_versions() {
   info "清理镜像旧版本（保留最近 ${KEEP_VERSIONS} 个，当前 ${VERSION}）"
   local listing
   listing="$(api GET "/api/v1/files" -G --data-urlencode "path=$APP_DIR" 2>/dev/null || true)"
-  [ -n "$listing" ] || die "清理失败：列不出 $APP_DIR（面板接口异常）"
+  [ -n "$listing" ] || die "清理失败：列不出 ${APP_DIR}（面板接口异常）"
   local olds
   olds="$(printf '%s' "$listing" | VERSION="$VERSION" KEEP="$KEEP_VERSIONS" APP_DIR="$APP_DIR" python3 -c '
 import json, os, re, sys
@@ -366,7 +366,7 @@ if [ "$APP_ONLY" = "1" ]; then
   elif api GET /api/v1/files -G --data-urlencode "path=$adir" 2>/dev/null | grep -q '"entries"'; then
     ok "android/ 已存在"
   else
-    die "创建更新源目录失败：$adir（面板接口不建目录）"
+    die "创建更新源目录失败：${adir}（面板接口不建目录）"
   fi
   info "只发安卓客户端（服务端 ${VERSION} 一个字节都不动）"
   for f in "${apks[@]}" "$APPDIR/android.json"; do
@@ -385,7 +385,7 @@ except Exception:
 print(",".join(str(f.get("size")) for f in (d.get("data") or {}).get("uploaded") or [] if f.get("name") == os.environ["NAME"]))')"
     rm -f "$resp"
     [ "$got" = "$size" ] || die "$name 落盘大小 $got ≠ 本地 $size"
-    ok "$name（$size B）"
+    ok "${name}（$size B）"
   done
   ANDROID_APK="$(basename "$(ls -1 "${apks[@]}" | tail -1)")"
   if [ "$PRUNE" = "1" ]; then prune_old_apks; else info "（--no-prune：不清理旧 APK）"; fi
@@ -496,7 +496,7 @@ if [ -d "$APPDIR/android" ]; then
   elif api GET /api/v1/files -G --data-urlencode "path=$adir" 2>/dev/null | grep -q '"entries"'; then
     ok "android/ 已存在"
   else
-    die "创建更新源目录失败：$adir（面板接口不建目录）"
+    die "创建更新源目录失败：${adir}（面板接口不建目录）"
   fi
   for f in "$APPDIR"/android/*.apk; do
     [ -f "$f" ] || continue

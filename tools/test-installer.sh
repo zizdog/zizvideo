@@ -23,6 +23,11 @@ SB="$(mktemp -d -t zv-installer-test.XXXXXX)"
 trap 'rm -rf "$SB"' EXIT
 
 FAIL=0
+
+# ⚠️ 这个脚本会把 HOME 指到沙箱里（见下方 export HOME），而 Go 的模块缓存默认跟着 HOME 走
+# ⇒ 交叉编译会去空缓存里找依赖、然后去联网。这里在伪造之前把**真实**缓存位置记下来，
+# 交叉编译时显式传下去（判据：本机 proxy.golang.org 不可达，只有缓存能保证离线可复现）。
+REAL_GOMODCACHE="$(go env GOMODCACHE 2>/dev/null || true)"
 ok()  { printf '   ok：%s\n' "$*"; }
 bad() { printf '   !! %s\n' "$*" >&2; FAIL=1; }
 
@@ -209,6 +214,58 @@ if [ -n "$N_PREP" ] && [ -n "$N_MV" ] && [ "$N_PREP" -lt "$N_MV" ]; then
   ok "prepare_signature（第 $N_PREP 行）早于 mv 二进制（第 $N_MV 行）"
 else
   bad "顺序不对或读不到：prepare_signature=${N_PREP}，mv bin=$N_MV"
+fi
+
+# ---------------------------------------------------------------------------
+# 所有 shell 脚本的语法 + 一个 macOS bash 的坑：`$var` 紧挨中文字符会被当成变量名的一部分。
+#
+# 为什么值得拦（2026-10-11 亲自踩到）：我写的 `ok "…：${target}（模块缓存命中）"` 在 macOS 自带
+# bash 3.2 下报 `targetï…: unbound variable` —— bash 把全角括号的字节也吃进变量名了。
+# `set -u` 下直接炸，`set +u` 下会静默变成空串拼进消息。这类错一旦混进安装器就是"用户看到
+# 一句缺字的提示"或者"安装到一半退出"。**判据：变量后面紧跟非 ASCII 时一律写 `${var}`。**
+printf '==> shell 语法（含 tools/*.sh）+ `$var` 紧挨中文的坑\n'
+for sh in "$ROOT/install-zizvideo.sh" "$ROOT"/tools/*.sh; do
+  [ -f "$sh" ] || continue
+  if bash -n "$sh" 2>"$SB/sh-err.log"; then
+    :
+  else
+    bad "bash -n 失败：${sh} —— $(tr '\n' ' ' < "$SB/sh-err.log")"
+  fi
+done
+# ⚠️ 用 LC_ALL=C + POSIX 字符类，**不能用 `grep -P`**：BSD grep 不支持 -P，只会报错、
+# 输出为空 ⇒ 门禁变成永远绿的摆设（我第一版就是这么写的，灵敏度一测就露了）。
+BAD_VAR="$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^[:print:][:space:]]' \
+  "$ROOT/install-zizvideo.sh" "$ROOT"/tools/*.sh 2>/dev/null | head -5)"
+if [ -z "$BAD_VAR" ]; then
+  ok "语法全过；没有 \`\$var\` 紧挨中文的写法（要写就写 \${var}）"
+else
+  bad "有变量紧挨非 ASCII 字符（macOS bash 会把它当变量名的一部分）：$BAD_VAR"
+fi
+
+# ---------------------------------------------------------------------------
+# 独立部署的目标平台必须能构建出来（这属于"安装器这条路走不走得通"的一部分）：
+# 安装器支持 Linux（飞牛/NAS 等），而本机是 macOS —— 至少在这里静态证一遍交叉编译。
+# 先只用模块缓存（GOPROXY=off，正常开发机上缓存必然是热的，不依赖任何镜像）；
+# 缓存不全再退回环境里配的 GOPROXY（本机是 goproxy.cn，proxy.golang.org 不可达）。
+# 不新增门禁条目：直接并进这条已有的"独立部署"门禁。
+printf '==> 交叉编译（独立部署目标：linux/amd64 + linux/arm64，CGO_ENABLED=0）\n'
+if command -v go >/dev/null 2>&1; then
+  XTMP="$(mktemp -d)"
+  for target in linux/amd64 linux/arm64; do
+    XBIN="$XTMP/zv-$target"
+    XENV="GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0"
+    [ -n "$REAL_GOMODCACHE" ] && XENV="$XENV GOMODCACHE=$REAL_GOMODCACHE"
+    if (cd "$ROOT" && env $XENV GOPROXY=off go build -o "$XBIN" ./cmd/server) 2>"$XTMP/err.log"; then
+      ok "交叉编译通过：${target}（模块缓存命中，$(wc -c < "$XBIN" | tr -d ' ') 字节）"
+    elif (cd "$ROOT" && env $XENV go build -o "$XBIN" ./cmd/server) 2>"$XTMP/err2.log"; then
+      ok "交叉编译通过：${target}（走了 GOPROXY=${GOPROXY:-默认}，$(wc -c < "$XBIN" | tr -d ' ') 字节）"
+    else
+      bad "交叉编译失败：$target —— $(tail -2 "$XTMP/err2.log" "$XTMP/err.log" 2>/dev/null | tr '\n' ' ')"
+    fi
+  done
+  rm -rf "$XTMP"
+else
+  bad "PATH 里没有 go，无法验证交叉编译（独立部署门禁必须真跑）"
 fi
 
 # ---------------------------------------------------------------------------
