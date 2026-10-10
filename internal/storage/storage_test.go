@@ -553,3 +553,115 @@ func TestMigrateConcurrentHandles(t *testing.T) {
 		t.Fatalf("迁移后版本 = %d, 期望 %d", v, migs[len(migs)-1].version)
 	}
 }
+
+// TestLibraryKindRoundTripAndDefault：库类型（短视频/短剧）必须能存能读，
+// 空值/未知值一律按短视频库 —— 库里绝不允许出现第三种形态（2026-10-10 设计）。
+func TestLibraryKindRoundTripAndDefault(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "db", "zizvideo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	short := newLib("lib_short", "散片", t.TempDir())
+	if err := db.CreateLibrary(short); err != nil {
+		t.Fatal(err)
+	}
+	if short.Kind != domain.KindShort {
+		t.Fatalf("不传 kind 应默认 short，实际 %q", short.Kind)
+	}
+	drama := newLib("lib_drama", "短剧", t.TempDir())
+	drama.Kind = domain.KindDrama
+	if err := db.CreateLibrary(drama); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetLibrary("lib_drama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != domain.KindDrama {
+		t.Fatalf("读回来 kind = %q，期望 drama", got.Kind)
+	}
+	// 改类型：不动别的东西，读回一致
+	next := domain.KindShort
+	upd, err := db.UpdateLibrary("lib_drama", LibraryPatch{Kind: &next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upd.Kind != domain.KindShort || upd.Name != "短剧" {
+		t.Fatalf("改类型后 = %+v", upd)
+	}
+	// 非法类型必须被拒（而不是静默写成第三种）
+	bogus := "mixed"
+	if _, err := db.UpdateLibrary("lib_drama", LibraryPatch{Kind: &bogus}); err == nil {
+		t.Fatal("非法库类型必须被拒")
+	}
+	// 未知类型即使直接写进库，读出来也按 short
+	if _, err := db.Exec(`UPDATE media_libraries SET kind = 'weird' WHERE id = ?`, "lib_short"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := db.GetLibrary("lib_short")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Kind != domain.KindShort {
+		t.Fatalf("未知 kind 应回落到 short，实际 %q", again.Kind)
+	}
+}
+
+// TestMigrationClassifiesLibrariesWithSeriesAsDrama：migration 0024 的存量归类规则 ——
+// **建过剧场的库判 drama，其余判 short**（用户 2026-10-10 的设计：目录/剧场决定形态）。
+func TestMigrationClassifiesLibrariesWithSeriesAsDrama(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "db", "zizvideo.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSeries := newLib("lib_a", "有剧", t.TempDir())
+	plain := newLib("lib_b", "没剧", t.TempDir())
+	for _, l := range []*domain.Library{withSeries, plain} {
+		if err := db.CreateLibrary(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 建一部剧（挂在 lib_a）——模拟"迁移前就已经在用剧场功能"
+	if err := db.CreateSeries(&domain.Series{ID: "ser_1", Title: "某剧", LibraryID: withSeries.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// 把 0024 的效果在测试里回放一遍（迁移只会跑一次，这里验证归类 SQL 本身）
+	if _, err := db.Exec(`UPDATE media_libraries SET kind = 'short'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE media_libraries SET kind = 'drama'
+		WHERE id IN (SELECT DISTINCT library_id FROM series WHERE library_id IS NOT NULL AND library_id != '')`); err != nil {
+		t.Fatal(err)
+	}
+	a, err := db.GetLibrary(withSeries.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.GetLibrary(plain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kind != domain.KindDrama {
+		t.Fatalf("有剧场的库应判 drama，实际 %q", a.Kind)
+	}
+	if b.Kind != domain.KindShort {
+		t.Fatalf("没有剧场的库应判 short，实际 %q", b.Kind)
+	}
+	db.Close()
+	// 迁移文件本身也必须真的把这个列建出来（防止只改代码忘了迁移）
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	v, err := again.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v < 24 {
+		t.Fatalf("schema 版本 = %d，0024（library kind）应已应用", v)
+	}
+}

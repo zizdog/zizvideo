@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -69,5 +70,58 @@ func TestMediaFileNameForEveryoneHostPathOnlyForAdmin(t *testing.T) {
 	}
 	if _, ok := got["path"]; ok {
 		t.Fatalf("普通用户不该看到宿主机路径: %v", got["path"])
+	}
+}
+
+// 库类型（短视频库 / 短剧库）是用户 2026-10-10 拍板的 Jellyfin 式模型的第一层：
+// 创建/修改都要能指定，非法值必须 400（不许静默落成第三种形态）。
+func TestLibraryKindValidatedAndExposed(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	root := filepath.Join(e.Root, "drama-lib")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ① 建短剧库：响应里带 kind
+	res, env, raw := e.write(http.MethodPost, "/api/v1/libraries", map[string]any{
+		"name": "短剧库", "root_path": root, "kind": "drama"})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("建库失败 %d: %s", res.StatusCode, raw)
+	}
+	var created domain.Library
+	decodeInto(t, env.Data, &created)
+	if created.Kind != domain.KindDrama {
+		t.Fatalf("kind = %q，期望 drama", created.Kind)
+	}
+	// ② 改回短视频库
+	res, env, raw = e.write(http.MethodPatch, "/api/v1/libraries/"+created.ID, map[string]any{"kind": "short"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("改类型失败 %d: %s", res.StatusCode, raw)
+	}
+	var patched domain.Library
+	decodeInto(t, env.Data, &patched)
+	if patched.Kind != domain.KindShort {
+		t.Fatalf("改类型后 kind = %q，期望 short", patched.Kind)
+	}
+	// ③ 非法类型：400，且库里不能留下第三种形态
+	res, _, raw = e.write(http.MethodPatch, "/api/v1/libraries/"+created.ID, map[string]any{"kind": "mixed"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非法类型应 400，得到 %d (%s)", res.StatusCode, raw)
+	}
+	root2 := filepath.Join(e.Root, "bogus-lib")
+	if err := os.MkdirAll(root2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, _, raw = e.write(http.MethodPost, "/api/v1/libraries", map[string]any{
+		"name": "非法库", "root_path": root2, "kind": "movies"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非法类型创建应 400，得到 %d (%s)", res.StatusCode, raw)
+	}
+	lib, err := e.DB.GetLibrary(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lib.Kind != domain.KindShort {
+		t.Fatalf("库类型被非法请求改写成了 %q", lib.Kind)
 	}
 }

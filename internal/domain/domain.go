@@ -82,9 +82,28 @@ const (
 )
 
 // Library is a registered media root.
+// 媒体库类型（用户 2026-10-10 拍板，Jellyfin 式"电影库/电视剧库"）：
+//
+//	· KindShort = 短视频库：一条视频 = 一个独立条目（对应 Jellyfin 电影库）；
+//	· KindDrama = 短剧库：**目录结构决定归属**（库根一级目录=一部剧，其下季目录可选），
+//	  首页 feed 永不出剧集，后台归「短剧管理」。
+//
+// 一条 media 属于哪种形态**由它所在的库决定**（不新增 media.kind，避免两份真源）。
+const (
+	KindShort = "short"
+	KindDrama = "drama"
+)
+
+// ValidLibraryKind 是**唯一**的类型判据（API/storage/扫描器都用它）。
+func ValidLibraryKind(kind string) bool {
+	return kind == KindShort || kind == KindDrama
+}
+
 type Library struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind 见上面的常量；空值按 KindShort 处理（老数据/老客户端不传时）。
+	Kind               string   `json:"kind"`
 	RootPath           string   `json:"root_path"`
 	Recursive          bool     `json:"recursive"`
 	Enabled            bool     `json:"enabled"`
@@ -315,12 +334,12 @@ var (
 	// 三种原因共用一句话是有意的：不要泄露"这个用户名存不存在"。
 	ErrBadCredentials = New("AUTH_BAD_CREDENTIALS", "用户名或口令不正确", 401)
 	ErrForbidden      = New("FORBIDDEN_ROLE", "没有权限执行该操作", 403)
-	ErrCSRF         = New("FORBIDDEN_CSRF", "CSRF 校验失败，请刷新页面", 403)
-	ErrBadRequest   = New("VALIDATION_BAD_REQUEST", "请求格式不正确", 400)
-	ErrNotFound     = New("VALIDATION_NOT_FOUND", "对象不存在", 404)
-	ErrConflict     = New("VALIDATION_CONFLICT", "对象已存在", 409)
-	ErrRateLimited  = New("RATE_LIMITED", "尝试过于频繁，请稍后再试", 429)
-	ErrInternal     = New("INTERNAL_ERROR", "服务内部错误", 500)
+	ErrCSRF           = New("FORBIDDEN_CSRF", "CSRF 校验失败，请刷新页面", 403)
+	ErrBadRequest     = New("VALIDATION_BAD_REQUEST", "请求格式不正确", 400)
+	ErrNotFound       = New("VALIDATION_NOT_FOUND", "对象不存在", 404)
+	ErrConflict       = New("VALIDATION_CONFLICT", "对象已存在", 409)
+	ErrRateLimited    = New("RATE_LIMITED", "尝试过于频繁，请稍后再试", 429)
+	ErrInternal       = New("INTERNAL_ERROR", "服务内部错误", 500)
 
 	ErrPathNotAbsolute = New("MEDIA_PATH_NOT_ABSOLUTE", "必须是绝对路径", 400)
 	ErrPathNotClean    = New("MEDIA_PATH_NOT_CLEAN", "路径含冗余片段，请用规范写法", 400)

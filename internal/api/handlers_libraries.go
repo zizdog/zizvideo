@@ -21,8 +21,11 @@ func (s *Server) HandleListLibraries(w http.ResponseWriter, r *http.Request) {
 }
 
 type libraryReq struct {
-	Name               string   `json:"name"`
-	RootPath           string   `json:"root_path"`
+	Name     string `json:"name"`
+	RootPath string `json:"root_path"`
+	// Kind 是库类型（short=短视频库 / drama=短剧库，见 domain.KindShort/KindDrama）：
+	// 创建时选定，决定扫描规则、归组方式与后台归属（用户 2026-10-10 的 Jellyfin 式模型）。
+	Kind               string   `json:"kind"`
 	Recursive          *bool    `json:"recursive"`
 	Enabled            *bool    `json:"enabled"`
 	IgnoreRules        []string `json:"ignore_rules"`
@@ -46,8 +49,16 @@ func (s *Server) HandleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" {
+		kind = domain.KindShort // 老客户端不传 ⇒ 短视频库（与迁移的默认值一致）
+	}
+	if !domain.ValidLibraryKind(kind) {
+		s.fail(w, r, domain.New("VALIDATION_LIBRARY_KIND", "库类型只能是 short（短视频库）或 drama（短剧库）", 400))
+		return
+	}
 	lib := &domain.Library{
-		ID: domain.NewID("lib"), Name: req.Name, RootPath: req.RootPath,
+		ID: domain.NewID("lib"), Name: req.Name, Kind: kind, RootPath: req.RootPath,
 		Recursive: true, Enabled: true, IgnoreRules: req.IgnoreRules,
 	}
 	if req.Recursive != nil {
@@ -112,6 +123,14 @@ func (s *Server) HandlePatchLibrary(w http.ResponseWriter, r *http.Request) {
 	if req.Name != "" {
 		name := strings.TrimSpace(req.Name)
 		patch.Name = &name
+	}
+	if req.Kind != "" {
+		kind := strings.TrimSpace(req.Kind)
+		if !domain.ValidLibraryKind(kind) {
+			s.fail(w, r, domain.New("VALIDATION_LIBRARY_KIND", "库类型只能是 short（短视频库）或 drama（短剧库）", 400))
+			return
+		}
+		patch.Kind = &kind
 	}
 	if req.RootPath != "" {
 		if _, err := media.ValidateLibraryPath(s.Roots.List(), req.RootPath); err != nil {

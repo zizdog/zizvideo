@@ -8,16 +8,20 @@ import (
 	"github.com/zizdog/zizvideo/internal/domain"
 )
 
-const libCols = `id, name, root_path, recursive, enabled, ignore_rules,
+const libCols = `id, name, COALESCE(kind,''), root_path, recursive, enabled, ignore_rules,
 	default_for_new_users, COALESCE(group_id,''), COALESCE(mount_id,''), created_at, updated_at`
 
 func scanLibrary(s interface{ Scan(...any) error }) (*domain.Library, error) {
 	var l domain.Library
 	var recursive, enabled, defaultNew int
 	var rules string
-	if err := s.Scan(&l.ID, &l.Name, &l.RootPath, &recursive, &enabled, &rules,
+	if err := s.Scan(&l.ID, &l.Name, &l.Kind, &l.RootPath, &recursive, &enabled, &rules,
 		&defaultNew, &l.GroupID, &l.MountID, &l.CreatedAt, &l.UpdatedAt); err != nil {
 		return nil, err
+	}
+	if !domain.ValidLibraryKind(l.Kind) {
+		// 空/未知一律按短视频库：宁可少一个形态，也不要让库里出现第三种类型
+		l.Kind = domain.KindShort
 	}
 	l.Recursive = recursive != 0
 	l.Enabled = enabled != 0
@@ -41,10 +45,13 @@ func encodeRules(rules []string) string {
 func (db *DB) CreateLibrary(l *domain.Library) error {
 	now := domain.NowString()
 	l.CreatedAt, l.UpdatedAt = now, now
+	if !domain.ValidLibraryKind(l.Kind) {
+		l.Kind = domain.KindShort
+	}
 	_, err := db.Exec(`INSERT INTO media_libraries
-		(id, name, root_path, recursive, enabled, ignore_rules, mount_id, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		l.ID, l.Name, l.RootPath, boolToInt(l.Recursive), boolToInt(l.Enabled),
+		(id, name, kind, root_path, recursive, enabled, ignore_rules, mount_id, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		l.ID, l.Name, l.Kind, l.RootPath, boolToInt(l.Recursive), boolToInt(l.Enabled),
 		encodeRules(l.IgnoreRules), l.MountID, now, now)
 	return err
 }
@@ -95,7 +102,9 @@ func (db *DB) ListEnabledLibraries() ([]domain.Library, error) {
 
 // LibraryPatch is a partial library update.
 type LibraryPatch struct {
-	Name               *string
+	Name *string
+	// Kind 改类型只改归类（不动文件、不改记录 id，随时可改回）；取值必须过 domain.ValidLibraryKind。
+	Kind               *string
 	RootPath           *string
 	Recursive          *bool
 	Enabled            *bool
@@ -111,6 +120,14 @@ func (db *DB) UpdateLibrary(id string, p LibraryPatch) (*domain.Library, error) 
 	if p.Name != nil {
 		sets = append(sets, "name = ?")
 		args = append(args, *p.Name)
+	}
+	if p.Kind != nil {
+		kind := *p.Kind
+		if !domain.ValidLibraryKind(kind) {
+			return nil, domain.New("VALIDATION_LIBRARY_KIND", "库类型只能是 short（短视频库）或 drama（短剧库）", 400)
+		}
+		sets = append(sets, "kind = ?")
+		args = append(args, kind)
 	}
 	if p.RootPath != nil {
 		sets = append(sets, "root_path = ?")
