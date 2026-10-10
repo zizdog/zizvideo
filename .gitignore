@@ -13,3 +13,8 @@ ZizVideo-当前状态.md
 
 # 门禁指纹标记（tools/check-stamp.sh 写；必须被忽略，否则会把自已写进指纹）
 .zv-check-stamp
+
+# macOS Finder 元数据（2026-10-10 一次性收拾：以前被跟踪，导致每轮 git add -A
+# 都把 Finder 的目录垃圾卷进提交。这里忽略 + git rm --cached 全部摘掉，本地文件不动）
+.DS_Store
+**/.DS_Store

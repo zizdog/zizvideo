@@ -33,6 +33,15 @@ func main() {
 		}
 		return
 	}
+	// 面板「权限」页的自检口：`zizvideo check-access <绝对路径>` ⇒ 一行 JSON（见 check_access.go）。
+	// ⚠️ 它**永远 exit 0**（"读不了"由 readable:false 表达）：面板把非零退出当"跑不起来"报错。
+	if i := indexVerb(args, "check-access"); i >= 0 {
+		if err := runCheckAccess(append(append([]string{}, args[:i]...), args[i+1:]...)); err != nil {
+			fmt.Fprintln(os.Stderr, "zizvideo:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "zizvideo:", err)
 		os.Exit(1)
@@ -189,8 +198,11 @@ func printUsage() {
 用法:
   zizvideo [--config <file>] [--version]
   zizvideo roots list|add <绝对路径>|remove <绝对路径> [--config <file>]
+  zizvideo check-access <绝对路径>
 
-root 子命令直接读写同一份 config.json，输出一行 JSON。`)
+root 子命令直接读写同一份 config.json，输出一行 JSON。
+check-access 以当前用户身份真去读一次路径，输出一行 JSON：
+{"path":"…","readable":true|false,"reason":"…"}（永远 exit 0）。`)
 	fmt.Fprintln(os.Stderr)
 }
 
