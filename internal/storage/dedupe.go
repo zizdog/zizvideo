@@ -38,58 +38,45 @@ func (db *DB) DuplicateGroups(limit int) ([]DuplicateGroup, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := db.Query(`SELECT size, duration_ms, COUNT(1) AS n FROM media
-		WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL AND duration_ms > 0 AND size > 0
-		GROUP BY size, duration_ms HAVING n > 1
-		ORDER BY n DESC, size DESC LIMIT ?`, domain.MediaReady, limit)
-	if err != nil {
-		return nil, err
-	}
-	keys := []DuplicateGroup{}
-	for rows.Next() {
-		var g DuplicateGroup
-		var n int
-		if err := rows.Scan(&g.Size, &g.DurationMS, &n); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		keys = append(keys, g)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-
-	out := make([]DuplicateGroup, 0, len(keys))
-	for _, g := range keys {
-		members, err := db.duplicateMembers(g.Size, g.DurationMS)
-		if err != nil {
-			return nil, err
-		}
-		g.Members = members
-		out = append(out, g)
-	}
-	return out, nil
-}
-
-func (db *DB) duplicateMembers(size, durationMS int64) ([]DuplicateMember, error) {
-	rows, err := db.Query(`SELECT id, library_id, path, title, duration_ms, size, status,
-		COALESCE(missing_since,''), created_at FROM media
-		WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL AND size = ? AND duration_ms = ?
-		ORDER BY created_at ASC, id ASC`, domain.MediaReady, size, durationMS)
+	// 一次查完：先用 CTE 选出"重复键"（组数受 limit 限），再把成员 JOIN 回来。
+	// 老实现是 1 次查组 + **每组 1 次**查成员（最多 101 次往返，2026-10-10 审计的 N+1）；
+	// 现在固定 2 次以内的往返（SQLite 里 CTE 只算一趟），结果与老的逐组查询逐字节等价。
+	rows, err := db.Query(`WITH dup AS (
+			SELECT size, duration_ms, COUNT(1) AS n FROM media
+			WHERE deleted_at IS NULL AND status = ? AND missing_since IS NULL
+			  AND duration_ms > 0 AND size > 0
+			GROUP BY size, duration_ms HAVING n > 1
+			ORDER BY n DESC, size DESC LIMIT ?
+		)
+		SELECT m.id, m.library_id, m.path, m.title, m.duration_ms, m.size, m.status,
+			COALESCE(m.missing_since,''), m.created_at, d.size, d.duration_ms
+		FROM media m JOIN dup d ON m.size = d.size AND m.duration_ms = d.duration_ms
+		WHERE m.deleted_at IS NULL AND m.status = ? AND m.missing_since IS NULL
+		ORDER BY d.n DESC, d.size DESC, m.created_at ASC, m.id ASC`,
+		domain.MediaReady, limit, domain.MediaReady)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []DuplicateMember{}
+	// 组顺序沿用 CTE 的 (n DESC, size DESC)；SQLite 的行序就是上面 ORDER BY 给的，
+	// 这里按首次出现顺序建组，成员顺序也保持 created_at,id 升序（与老的逐组查询一致）。
+	out := []DuplicateGroup{}
+	index := map[[2]int64]int{}
 	for rows.Next() {
 		var m DuplicateMember
+		var size, durationMS int64
 		if err := rows.Scan(&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.DurationMS, &m.Size,
-			&m.Status, &m.MissingSince, &m.CreatedAt); err != nil {
+			&m.Status, &m.MissingSince, &m.CreatedAt, &size, &durationMS); err != nil {
 			return nil, err
 		}
-		out = append(out, m)
+		key := [2]int64{size, durationMS}
+		i, ok := index[key]
+		if !ok {
+			out = append(out, DuplicateGroup{Size: size, DurationMS: durationMS, Members: []DuplicateMember{}})
+			i = len(out) - 1
+			index[key] = i
+		}
+		out[i].Members = append(out[i].Members, m)
 	}
 	return out, rows.Err()
 }
