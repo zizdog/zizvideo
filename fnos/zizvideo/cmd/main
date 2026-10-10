@@ -158,9 +158,49 @@ cmd_start() {
       rm -f "$PIDFILE"
       return 1
     fi
-    if [ "$i" -ge 4 ] && curl -fsS --max-time 2 "http://127.0.0.1:$TRIM_SERVICE_PORT/readyz" >/dev/null 2>&1; then
-      log "$APPNAME 已启动（pid ${pid}，端口 ${TRIM_SERVICE_PORT}）"
-      return 0
+    if [ "$i" -ge 4 ]; then
+      # 取**状态码**再解释：503 = 服务在跑但自检没过（多半是媒体根不存在/没挂盘或权限不够），
+      # 和"服务没起来"完全是两件事 —— 日志里必须写清楚，否则用户会一直重启服务（方向错）。
+      rcode="$(curl -s -o "$TRIM_PKGTMP/readyz.json" -w '%{http_code}' --max-time 2 \
+        "http://127.0.0.1:$TRIM_SERVICE_PORT/readyz" 2>/dev/null || true)"
+      # curl 连不上时自己会打印 000；这里只兜"完全没输出"的情况（`|| echo 000` 会变成 000000 —— 踩过）
+      [ -n "$rcode" ] || rcode=000
+      case "$rcode" in
+        200)
+          log "$APPNAME 已启动（pid ${pid}，端口 ${TRIM_SERVICE_PORT}）"
+          return 0 ;;
+        503)
+          log "$APPNAME 已启动（pid ${pid}，端口 ${TRIM_SERVICE_PORT}），但自检没过（HTTP 503）："
+          if command -v python3 >/dev/null 2>&1; then
+            python3 - "$TRIM_PKGTMP/readyz.json" <<'PYRZ' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+checks = (d.get("data") or {}).get("checks") or {}
+hints = {"media_roots": "媒体根不存在或读不到（在飞牛「应用设置 → 授权目录」里授权，或把视频放进共享目录 zizvideo/media）",
+         "ffmpeg": "缺少 ffmpeg/ffprobe", "db": "数据库打不开", "disk": "磁盘空间不足"}
+for k, v in checks.items():
+    if isinstance(v, dict) and "ok" in v:
+        bad = not (v.get("ok") or v.get("ready"))
+    elif isinstance(v, dict):
+        bad = any(str(st) != "ok" for st in v.values())
+    else:
+        bad = False
+    if bad:
+        print("  · %s：%s" % (k, hints.get(k, "看 /readyz")))
+        if isinstance(v, dict) and "ok" not in v:
+            for sub, st in v.items():
+                if str(st) != "ok":
+                    print("      %s：%s" % (sub, st))
+PYRZ
+          fi
+          return 0 ;;
+        # 000/其它 = 还没监听上（服务刚起要迁移数据库、绑端口）⇒ **继续等**，别在这里下结论
+        # （第一版把 000 也当"结论"直接返回，等于"服务起来了但日志说 HTTP 000000"，误导人）
+        *) : ;;
+      esac
     fi
     sleep 0.5; i=$((i + 1))
   done

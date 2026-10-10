@@ -1064,9 +1064,40 @@ while [ "$i" -lt 40 ]; do
   case "$mcode" in 200|5*) break ;; esac
   sleep 0.3; i=$((i + 1))
 done
-kill "$msrv" 2>/dev/null || true; wait "$msrv" 2>/dev/null || true
 [ "$mcode" = "503" ] && ok "媒体根不存在时 /readyz 回 503（明确"没就绪"，不是假装健康也不是无响应）" \
   || bad "媒体根不存在时的 /readyz 状态码是 ${mcode}（期望 503）"
+# 503 必须被**翻译成人话**：否则用户会去重启服务，而该做的是挂盘 / 建目录 / 装 ffmpeg
+vout="$(bash "$ROOT/tools/verify-deploy.sh" --config "$CW/missing.json" --bin "$ROOT/dist/zizvideo" --no-service 2>&1 || true)"
+case "$vout" in
+  *"服务在跑，但自检没过"*) ok "自查脚本把 503 说成「服务在跑但自检没过」（不是服务没起来）" ;;
+  *) bad "自查脚本对 503 的解释不清：$(printf '%s' "$vout" | grep -E 'readyz' | head -2 | tr '\n' ' ')" ;;
+esac
+case "$vout" in
+  *"目录不存在（挂盘了吗？）或权限不够"*) ok "自查脚本把原因指到媒体根（挂盘/权限），而不是"服务坏了"" ;;
+  *) bad "自查脚本没把原因指到媒体根：$(printf '%s' "$vout" | grep '没过' | head -2 | tr '\n' ' ')" ;;
+esac
+case "$vout" in
+  *"挂盘了吗"*) ok "媒体根不存在时明确说「挂盘了吗」" ;;
+  *) bad "媒体根不存在时没给"挂盘"提示" ;;
+esac
+# 飞牛 start 的日志也要把 503 翻译出来（用户看的就是那里）
+FR="$(mktemp -d)"; mkdir -p "$FR/var" "$FR/etc" "$FR/app/bin"
+printf '{"listen":"127.0.0.1:7799","data_dir":"%s/var","database_path":"%s/var/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$FR" "$FR" "$FR" >"$FR/etc/config.json"
+printf '#!/bin/sh\nexec %s/dist/zizvideo --config "%s/etc/config.json"\n' "$ROOT" "$FR" >"$FR/app/bin/zizvideo"
+chmod 0755 "$FR/app/bin/zizvideo"
+fout="$(TRIM_APPDEST="$FR/app" TRIM_PKGETC="$FR/etc" TRIM_PKGVAR="$FR/var" TRIM_SERVICE_PORT=7799 \
+  sh "$ROOT/fnos/zizvideo/cmd/main" start 2>&1 || true)"
+TRIM_APPDEST="$FR/app" TRIM_PKGETC="$FR/etc" TRIM_PKGVAR="$FR/var" sh "$ROOT/fnos/zizvideo/cmd/main" stop >/dev/null 2>&1 || true
+case "$fout" in
+  *"自检没过（HTTP 503）"*) ok "飞牛 start 日志把 503 说清楚（不是「服务没起来」）" ;;
+  *) bad "飞牛 start 没解释 503：$(printf '%s' "$fout" | tail -2 | tr '\n' ' ')" ;;
+esac
+case "$fout" in
+  *"授权目录"*|*"zizvideo/media"*) ok "飞牛日志给出该怎么做（授权目录 / 放进共享目录）" ;;
+  *) bad "飞牛日志没给处置办法" ;;
+esac
+kill "$msrv" 2>/dev/null || true; wait "$msrv" 2>/dev/null || true
+rm -rf "$FR"
 rm -rf "$CW"
 
 # ---------------------------------------------------------------------------

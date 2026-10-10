@@ -40,6 +40,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+READYZ_BODY="$(mktemp -t zv-readyz.XXXXXX)"
+trap 'rm -f "$READYZ_BODY"' EXIT
+
 PASS=0; FAIL=0; NOTE=0
 ok()   { PASS=$((PASS + 1)); printf '  ✓ %s\n' "$*"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  ✗ %s\n' "$*"; }
@@ -160,8 +163,12 @@ else
 fi
 if [ -n "${PORT:-}" ]; then
   url="http://127.0.0.1:$PORT/readyz"
-  body="$(curl -fsS --max-time 5 "$url" 2>/dev/null)"
-  if [ -n "$body" ]; then
+  # ⚠️ 必须取**状态码**：`curl -f` 会把 503（服务在跑、自检没过）和"根本没响应"混成一回事
+  rcode="$(curl -s -o "$READYZ_BODY" -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+  body="$(cat "$READYZ_BODY" 2>/dev/null || true)"
+  if [ "$rcode" = "000" ] || [ -z "$body" ]; then
+    bad "$url 没有响应（服务没起来 / 端口不对 / 只绑了别的地址）"
+  elif [ "$rcode" = "200" ]; then
     ok "$url 回 200"
     printf '%s' "$body" | python3 -c 'import json,sys
 try:
@@ -188,7 +195,39 @@ for k, v in checks.items():
     detail = str(v.get("note") or v.get("detail") or v.get("error") or v.get("reason") or "")
     print("    %s %s %s" % (flag, k, detail[:70]))' 2>/dev/null || true
   else
-    bad "$url 没回 200（服务没起来 / 端口不对 / 只绑了别的地址）"
+    # 503 不是"服务坏了" —— 是"服务在跑，但自检没过"。逐条把没过的原因翻成人话，
+    # 否则用户会去重启服务（方向错），实际要做的往往是"挂盘 / 建目录 / 装 ffmpeg"。
+    bad "$url 回 $rcode —— **服务在跑，但自检没过**（不是服务没起来）"
+    printf '%s' "$body" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("  · （响应不是 JSON，原始内容前 200 字）"); raise SystemExit
+data = d.get("data") or {}
+checks = data.get("checks") or {}
+hints = {
+    "media_roots": "媒体根读不到：**目录不存在（挂盘了吗？）或权限不够** —— 用 `zizvideo check-access <目录>` 复核",
+    "ffmpeg": "找不到 ffmpeg/ffprobe：装上（macOS: brew install ffmpeg；Debian/飞牛: apt install ffmpeg）",
+    "db": "数据库打不开：数据目录不可写、或库文件损坏（看数据目录里的 pre-upgrade 备份）",
+    "disk": "磁盘空间不足：清理数据目录或扩容",
+}
+shown = 0
+for k, v in checks.items():
+    bad_it = False
+    if isinstance(v, dict) and "ok" in v:
+        bad_it = not (v.get("ok") or v.get("ready"))
+    elif isinstance(v, dict):
+        bad_it = any(str(st) != "ok" for st in v.values())
+    if not bad_it:
+        continue
+    shown += 1
+    print("  · 没过的一项：%s → %s" % (k, hints.get(k, "看 /readyz 的原始输出")))
+    if isinstance(v, dict) and "ok" not in v:
+        for sub, st in v.items():
+            if str(st) != "ok":
+                print("       %s：%s" % (sub, st))
+if not shown:
+    print("  · 响应里没标出具体哪项没过（老版本？）原始内容前 200 字：%s" % str(data)[:200])' 2>/dev/null || true
   fi
 else
   note "配置里没有 listen，跳过健康检查（可用 --port 指定）"
@@ -259,6 +298,10 @@ probe_one() { # $1 = 路径；回显 "readable reason"
 if [ -x "$BIN" ] && [ -n "${roots:-}" ] && [ "${roots:-}" != "?" ]; then
   IFS=',' read -r -a root_arr <<<"$roots"
   for r in "${root_arr[@]}"; do
+    if [ ! -e "$r" ]; then
+      bad "目录不存在：${r} —— 挂盘了吗？**路径写错/盘没挂**都会是这样（这也算"读不到"）"
+      continue
+    fi
     line="$(probe_one "$r")"
     case "$line" in
       *'"readable":true'*) ok "读得到：$r" ;;
