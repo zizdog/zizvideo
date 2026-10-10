@@ -135,6 +135,46 @@ def main() -> int:
         print("   Linux 清单已写：%s（%d 个架构：%s）" % (
             lpath, len(linux_rows), ", ".join(r["arch"] for r in linux_rows)))
 
+    # 飞牛（fnOS）应用包清单：把 dist/apps/zizvideo/fnos/*.fpk 写进 fnos.json。
+    # 与 android.json 同思路 —— 飞牛用户/文档靠它拿到**稳定路径**的包（版本目录会被 prune 掉）。
+    fnosdir = os.path.join(os.path.dirname(vdir), "fnos")
+    fnos_rows = []
+    if os.path.isdir(fnosdir):
+        for name in sorted(os.listdir(fnosdir)):
+            found = re.match(r"^zizvideo-(.+)-(x86|arm)\.fpk$", name)
+            path = os.path.join(fnosdir, name)
+            if not found or not os.path.isfile(path):
+                continue
+            with open(path, "rb") as handle:
+                digest = hashlib.sha256(handle.read()).hexdigest()
+            fnos_rows.append({
+                "name": name, "arch": found.group(2), "version": found.group(1),
+                "file": "fnos/" + name, "sha256": digest, "size": os.path.getsize(path),
+            })
+    # fpk 的版本号是**去掉 -mvp 后缀**的（飞牛要求 1.0.0 这种形状）⇒ 比较要用 pkgver，
+    # 同时把服务端版本也记进去（android.json 也是这个思路：version + server_version）
+    pkgver = ver[:-4] if ver.endswith("-mvp") else ver
+    if fnos_rows:
+        fproblems = []
+        for row in fnos_rows:
+            if not SHA256_RE.match(row["sha256"]) or int(row["size"]) <= 0:
+                fproblems.append("%s 的 sha256/size 不合法" % row["name"])
+            if row["version"] != pkgver:
+                fproblems.append("%s 的版本 %s ≠ 本次 %s（打完包之后又改过版本号？）" % (row["name"], row["version"], pkgver))
+        if fproblems:
+            print("!! fnos.json 自校验不通过，未写：", file=sys.stderr)
+            for p in fproblems:
+                print("   - " + p, file=sys.stderr)
+            return 1
+        fpath = os.path.join(os.path.dirname(vdir), "fnos.json")
+        with open(fpath, "w", encoding="utf-8") as handle:
+            json.dump({"app": "zizvideo", "platform": "fnos", "version": pkgver,
+                       "server_version": ver, "generated_at": stamp, "assets": fnos_rows}, handle,
+                      ensure_ascii=False, indent=2)
+            handle.write("\n")
+        print("   飞牛包清单已写：%s（%d 个架构：%s）" % (
+            fpath, len(fnos_rows), ", ".join(r["arch"] for r in fnos_rows)))
+
     # 安卓客户端的自动更新清单（有 APK 才写；没带客户端时**不动**旧的那份，
     # 否则会把手上的更新源清掉）
     apk = None

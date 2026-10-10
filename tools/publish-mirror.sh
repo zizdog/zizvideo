@@ -228,6 +228,34 @@ PYL
       ok "Linux 独立部署源可用：linux.json → ${lname}（${lgot} B，线上可达）"
     fi
   fi
+  # 飞牛包：fnos.json 指向的包必须线上可达、大小一致（与 android.json 同样待遇）
+  if [ -f "$APPDIR/fnos.json" ] && curl -fsS --max-time 30 "$MIRROR_BASE/apps/zizvideo/fnos.json" -o "$tmp/fnos.json"; then
+    local fname fsize furl fgot
+    fname="$(python3 - "$tmp/fnos.json" <<'PYF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print((row.get("file") or "").split("/")[-1])
+    break
+PYF
+)"
+    fsize="$(python3 - "$tmp/fnos.json" <<'PYF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print(row.get("size") or 0)
+    break
+PYF
+)"
+    if [ -n "$fname" ]; then
+      furl="$MIRROR_BASE/apps/zizvideo/fnos/$fname"
+      fgot="$(curl -fsSI --max-time 30 "$furl" 2>/dev/null | tr -d '\r' \
+        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+      [ -n "$fgot" ] || die "线上取不到飞牛包：$furl"
+      [ "$fgot" = "$fsize" ] || die "线上飞牛包大小 ${fgot} ≠ 清单 ${fsize}（${fname}）"
+      ok "飞牛包可用：fnos.json → ${fname}（${fgot} B，线上可达）"
+    fi
+  fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
   phase "复验"
 }
@@ -540,6 +568,27 @@ if [ -d "$APPDIR/android" ]; then
     queue_upload "$adir" "$f" "$(basename "$f")"
   done
   ANDROID_APK="$(basename "$(ls -1 "$APPDIR"/android/*.apk | tail -1)")"
+fi
+
+# 飞牛（fnOS）应用包：放 app 级稳定路径 apps/zizvideo/fnos/（版本目录会被 prune 掉），
+# 并把 fnos.json 索引传上去 —— 飞牛用户按文档下载 .fpk 用 appcenter-cli 装。
+if [ -d "$APPDIR/fnos" ]; then
+  fdir="$APP_DIR/fnos"
+  fbody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$fdir")"
+  if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$fbody" >/dev/null 2>&1; then
+    ok "已创建 fnos/（飞牛包目录）"
+  elif api GET /api/v1/files -G --data-urlencode "path=$fdir" 2>/dev/null | grep -q '"entries"'; then
+    ok "fnos/ 已存在"
+  else
+    die "创建飞牛包目录失败：${fdir}（面板接口不建目录）"
+  fi
+  for f in "$APPDIR"/fnos/*.fpk; do
+    [ -f "$f" ] || continue
+    queue_upload "$fdir" "$f" "$(basename "$f")"
+  done
+  if [ -f "$APPDIR/fnos.json" ]; then
+    queue_upload "$APP_DIR" "$APPDIR/fnos.json" "fnos.json"
+  fi
 fi
 
 up_fail=0

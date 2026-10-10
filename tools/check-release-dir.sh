@@ -38,9 +38,9 @@ hdr() { printf '\n== %s\n' "$*"; }
 echo "版本目录：$DIR"
 
 # 索引里每条资产都要：文件在、size 对、sha256 对
-check_asset() { # $1=索引文件 $2=json 里的字段名（assets） $3=标签
-  local idx="$1" key="$2" label="$3"
-  python3 - "$idx" "$key" "$DIR" "$label" <<'PYEOF'
+check_asset() { # $1=索引文件 $2=json 里的字段名（assets） $3=标签 [$4=资产所在基准目录]
+  local idx="$1" key="$2" label="$3" base="${4:-$DIR}"
+  python3 - "$idx" "$key" "$base" "$label" <<'PYEOF'
 import hashlib, json, os, sys
 idx, key, vdir, label = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
@@ -52,7 +52,7 @@ if not rows:
     print("!! %s 里没有 assets" % label); raise SystemExit(1)
 bad = 0
 for row in rows:
-    name = row.get("name") or ""
+    name = row.get("file") or row.get("name") or ""
     path = os.path.join(vdir, name)
     if not os.path.isfile(path):
         print("!! %s：索引里有 %s，磁盘上没有" % (label, name)); bad += 1; continue
@@ -153,6 +153,14 @@ else
   printf '  ⚠️ 没有 %s —— Linux 产物**从没在真 Linux 上跑过**（有 docker 的机器上跑 `make linux-verify`）\n' "$(basename "$STAMP")"
 fi
 
+hdr "飞牛应用包（有就核对）"
+if [ -f "$PARENT/fnos.json" ] && [ -d "$PARENT/fnos" ]; then
+  # fnos.json 里的资产用 `file` 字段（fnos/xxx.fpk）⇒ 按 base=$PARENT 解析
+  check_asset "$PARENT/fnos.json" assets "fnos.json" "$PARENT" && ok "fnos.json 与 .fpk 逐字节一致" || bad "fnos.json 与 .fpk 不一致"
+else
+  printf '  · 没有 fnos.json / fnos/（没打飞牛包就跳过；要发就 make fpk）\n'
+fi
+
 hdr "安卓产物"
 APK="$(ls -1 "$DIR"/zizvideo-android-*.apk 2>/dev/null | head -1 || true)"
 if [ -n "$APK" ] && [ -f "$PARENT/android.json" ]; then
@@ -178,7 +186,7 @@ else
 fi
 
 hdr "飞牛应用包（有就一并自检）"
-FPK="$(ls -1 "$ROOT/dist/fnos"/zizvideo-*-x86.fpk "$ROOT/dist/fnos"/zizvideo-*-arm.fpk 2>/dev/null | head -1 || true)"
+FPK="$(ls -1 "$PARENT"/fnos/zizvideo-*-x86.fpk "$PARENT"/fnos/zizvideo-*-arm.fpk 2>/dev/null | head -1 || true)"
 if [ -n "$FPK" ]; then
   if out="$(bash "$ROOT/tools/check-fnos-fpk.sh" "$FPK" 2>&1)"; then
     ok "$(basename "$FPK")：$(printf '%s' "$out" | grep '结论' | head -1)"

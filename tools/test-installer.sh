@@ -732,7 +732,7 @@ elif command -v fnpack >/dev/null 2>&1; then FN="$(command -v fnpack)"; fi
 if [ -n "$FN" ]; then
   ok "本机有 fnpack（${FN}）：跑一次**真打包**验包结构与向导格式"
   if out=$(bash "$ROOT/tools/make-fnos-pkg.sh" --arch amd64 2>&1); then
-    fpk="$(ls -1 "$ROOT/dist/fnos"/zizvideo-*-x86.fpk 2>/dev/null | head -1 || true)"
+    fpk="$(ls -1 "$ROOT/dist/apps/zizvideo/fnos"/zizvideo-*-x86.fpk 2>/dev/null | head -1 || true)"
     if [ -n "$fpk" ] && [ "$(wc -c <"$fpk" | tr -d ' ')" -gt 1000000 ]; then
       ok "fnpack 真打包成功：$(basename "$fpk")（$(wc -c <"$fpk" | tr -d ' ') 字节）"
       # 包里必须真有我们的二进制与 9 个 cmd 脚本（别只看"打包成功"）
@@ -757,7 +757,7 @@ if [ -n "$FN" ]; then
         esac
       fi
     else
-      bad "fnpack 说成功但没有像样的 .fpk：$fpk"
+      bad "fnpack 说成功但没有像样的 .fpk：${fpk}（看 dist/apps/zizvideo/fnos/）"
     fi
   else
     bad "fnpack 真打包失败：$(printf '%s' "$out" | tail -3)"
@@ -1483,6 +1483,35 @@ case "$crout" in
   *"latest"*) ok "顶层 latest 与版本目录不符时自检如实报错" ;;
   *) bad "latest 不符没有被报出来：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
 esac
+# 飞牛包清单（fnos.json）：有 .fpk 才写；版本对不上必须**拒绝写**（否则用户按索引下载到不匹配的包）
+FN="$(mktemp -d)"; mkdir -p "$FN/apps/zizvideo/9.9.9" "$FN/apps/zizvideo/fnos"
+printf 'stub darwin\n' >"$FN/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
+printf 'stub linux\n' >"$FN/apps/zizvideo/9.9.9/zizvideo_9.9.9_linux_amd64"
+printf 'stub fpk 9.9.9\n' >"$FN/apps/zizvideo/fnos/zizvideo-9.9.9-x86.fpk"
+if python3 "$ROOT/tools/make-app-index.py" "$FN/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1 && [ -f "$FN/apps/zizvideo/fnos.json" ]; then
+  ok "有 .fpk 时生成器写出 fnos.json"
+  python3 - "$FN/apps/zizvideo/fnos.json" <<'PYF2' && ok "fnos.json 里 file 指向 fnos/ 下的包且 sha256/size 与磁盘一致" || bad "fnos.json 内容不对"
+import hashlib, json, os, sys
+d = json.load(open(sys.argv[1]))
+row = d["assets"][0]
+path = os.path.join(os.path.dirname(sys.argv[1]), row["file"])   # fnos.json 与 fnos/ 同层
+assert row["file"] == "fnos/zizvideo-9.9.9-x86.fpk", row["file"]
+assert row["sha256"] == hashlib.sha256(open(path, "rb").read()).hexdigest()
+assert int(row["size"]) == os.path.getsize(path)
+assert d["version"] == "9.9.9"
+PYF2
+else
+  bad "有 .fpk 时没写出 fnos.json"
+fi
+# 版本对不上：必须拒绝写（把包名改成别的版本）
+mv "$FN/apps/zizvideo/fnos/zizvideo-9.9.9-x86.fpk" "$FN/apps/zizvideo/fnos/zizvideo-1.1.1-x86.fpk"
+if python3 "$ROOT/tools/make-app-index.py" "$FN/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1; then
+  bad "fpk 版本与本次版本不一致时生成器没报错"
+else
+  ok "fpk 版本与本次不一致时拒绝写 fnos.json（不把不匹配的包发出去）"
+fi
+rm -rf "$FN"
+
 # stamp 对账：把"这一份字节在真 Linux 上验过"变成可核对的证据（发版前必须能答"验过没"）
 python3 - "$FAKE/rel/v9.9.9" "$FAKE/rel/.linux-verified.json" <<'PYS'
 import hashlib, json, os, sys

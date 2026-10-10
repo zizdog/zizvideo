@@ -12,8 +12,8 @@
 #  用法：
 #    bash tools/make-fnos-pkg.sh [--arch amd64|arm64] [--version <ver>] [--stage-only]
 #  产物：
-#    dist/fnos/zizvideo-<pkgver>-<x86|arm>.fpk    （需要 fnpack；官方提供 macOS 版）
-#    dist/fnos/zizvideo-<ver>-<arch>/            （总是产出：可直接 fnpack build 的目录）
+#    dist/apps/zizvideo/fnos/zizvideo-<pkgver>-<x86|arm>.fpk    （需要 fnpack；官方提供 macOS 版）
+#    dist/apps/zizvideo/fnos/zizvideo-<ver>-<arch>/              （总是产出：可直接 fnpack build 的目录）
 # ============================================================================
 set -euo pipefail
 
@@ -41,7 +41,8 @@ esac
 # fpk 的版本号用**去掉 -mvp 后缀**的服务端版本（飞牛要求 1.0.0 / 1.2.3-beta 这种形状）
 PKGVER="${VERSION%-mvp}"
 SRC="$ROOT/fnos/zizvideo"
-DIST="$ROOT/dist/fnos"
+# 产物放 app 级稳定路径（与 android/ 同一思路）：版本目录会被 prune 掉，飞牛包不能跟着走
+DIST="$ROOT/dist/apps/zizvideo/fnos"
 STAGE="$DIST/zizvideo-${PKGVER}-${FNOS_PLATFORM}"
 
 [ -d "$SRC" ] || { echo "!! 缺包源目录：$SRC" >&2; exit 1; }
@@ -104,6 +105,18 @@ SIZE="$(wc -c <"$FPK" | tr -d ' ')"
 if [ "$SIZE" -lt 1000000 ]; then
   echo "!! .fpk 只有 ${SIZE} 字节 —— 太小了，八成没把二进制打进去（不谎报成功）" >&2
   exit 1
+fi
+# ⚠️ 打完包必须**立刻刷新 fnos.json 索引**：否则索引里还是上一份 .fpk 的 sha256，
+# 而 make release-check 会（正确地）报"fnos.json 与 .fpk 不一致" —— 用户按索引下载就会拿到对不上的包。
+VERDIR="$ROOT/dist/apps/zizvideo/$VERSION"
+if [ -d "$VERDIR" ]; then
+  if python3 "$ROOT/tools/make-app-index.py" "$VERDIR" "$VERSION" >/dev/null 2>&1; then
+    echo "==> 已刷新索引（fnos.json / manifest.json / linux.json）"
+  else
+    echo "!! 索引刷新失败 —— 别慌着发：先看 make release 的输出（fnos.json 可能是旧的）" >&2
+  fi
+else
+  echo "（没有 ${VERDIR}，跳过索引刷新；先 make release）"
 fi
 echo "==> 已产出：${FPK}（${SIZE} 字节）"
 echo "    装到飞牛设备：appcenter-cli install-fpk $FPK"
