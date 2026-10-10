@@ -25,3 +25,7 @@ __pycache__/
 
 # Android/Gradle 会话状态（不应进仓库）
 android/.kotlin/
+
+# 容器构建上下文里的大二进制与运行时数据（每次由 make docker 重新放进来）
+docker/zizvideo
+docker/data/

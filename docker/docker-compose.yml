@@ -1,0 +1,20 @@
+# 用法（先 make release，再把对应架构的静态二进制放到 docker/zizvideo）：
+#   docker compose -f docker/docker-compose.yml up -d
+services:
+  zizvideo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zizvideo:local
+    container_name: zizvideo
+    restart: unless-stopped
+    ports:
+      - "7766:7766"
+    environment:
+      ZV_LISTEN: "0.0.0.0:7766"
+      ZV_DATA_DIR: "/data"
+      # 冒号分隔；容器内路径，对应下面 volumes 里的挂载点
+      ZV_MEDIA_ROOTS: "/media"
+    volumes:
+      - ./data:/data
+      - /volume1/video:/media:ro
