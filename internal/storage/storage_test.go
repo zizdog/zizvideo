@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -716,4 +717,66 @@ func TestSwapMakesQueriesAtomic(t *testing.T) {
 		t.Fatalf("Swap 之后应看到新库的内容，实际 %+v", libs)
 	}
 	first.Close()
+}
+
+// TestTransactionsAreImmediate：事务必须是 IMMEDIATE（`_txlock=immediate`）。
+//
+// 为什么（2026-10-11 审计）：SQLite 默认 deferred 事务在"先读后写"时，如果中途别的连接提交过，
+// 升级写锁会**直接失败**（SQLITE_BUSY_SNAPSHOT）。本项目大量事务正是"先查存在性/计数，再写"
+// （AddSeriesMedia / ApplyDeletions / DeleteLibrary / 迁移…），扫描器与 API 并发时会冒"随机 500"。
+// IMMEDIATE 在 BEGIN 就拿写锁，配合 busy_timeout 变成"排队等"。
+//
+// 判据（能区分两种模式）：A 开事务只读（还没写），B 去写。
+//
+//	· deferred：B 能写成功（A 只持有读快照）—— 老行为；
+//	· immediate：A 已持有写锁 ⇒ B 拿不到锁（用很短的 busy_timeout 让它立即报错）。
+func TestTransactionsAreImmediate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "z.db")
+	a, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.CreateLibrary(newLib("lib_a", "A", "/tmp/a")); err != nil {
+		t.Fatal(err)
+	}
+	// 第二个连接用**极短**的 busy_timeout，好在拿不到锁时立刻返回而不是等 5 秒
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	raw, err := sql.Open("sqlite", u.String()+
+		"?_txlock=immediate&_pragma=busy_timeout(120)&_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	second := &DB{}
+	second.conn.Store(raw)
+
+	tx, err := a.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A 只读（deferred 模式下这时不会持有写锁）
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM media_libraries`).Scan(&n); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	// B 试着写：immediate 下 A 已持写锁 ⇒ B 报 database is locked
+	_, werr := second.Exec(`UPDATE media_libraries SET name = name WHERE id = 'lib_a'`)
+	if werr == nil {
+		_ = tx.Rollback()
+		t.Fatal("A 开着事务时 B 竟然能写 —— 说明事务不是 IMMEDIATE（deferred 会在这里丢写/报 BUSY_SNAPSHOT）")
+	}
+	if !busyErr(werr) && !strings.Contains(strings.ToLower(werr.Error()), "locked") {
+		_ = tx.Rollback()
+		t.Fatalf("B 的写入应因锁失败，实际：%v", werr)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// A 提交后 B 立刻能写（没有死锁残留）
+	if _, err := second.Exec(`UPDATE media_libraries SET updated_at = ? WHERE id = 'lib_a'`, domain.NowString()); err != nil {
+		t.Fatalf("A 提交后 B 应能写：%v", err)
+	}
 }

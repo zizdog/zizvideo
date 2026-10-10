@@ -63,8 +63,15 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	// `_txlock=immediate`：所有 `db.Begin()` 都开成 **IMMEDIATE** 事务（2026-10-11 审计的
+	// "deferred tx 的 BUSY_SNAPSHOT" 风险）。默认的 deferred 事务在"先读后写"时，如果中途
+	// 别的连接提交过，升级写锁会直接失败（SQLITE_BUSY_SNAPSHOT），而本项目大量事务正是
+	// "先查存在性/计数，再写"（AddSeriesMedia / ApplyDeletions / DeleteLibrary / 迁移…），
+	// 扫描器与 API 并发时就会冒出"随机 500"。IMMEDIATE 在 BEGIN 时就拿写锁，配合
+	// busy_timeout(5000) 变成"排队等"，不再有中途升级失败。
 	dsn := u.String() +
-		"?_pragma=busy_timeout(5000)" +
+		"?_txlock=immediate" +
+		"&_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
 		"&_pragma=synchronous(NORMAL)" +
 		"&_pragma=foreign_keys(ON)" +
