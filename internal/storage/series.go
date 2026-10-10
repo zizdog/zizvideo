@@ -467,7 +467,11 @@ func (db *DB) ApplySeriesEpisodes(seriesID string, assigns []EpisodeAssignment) 
 	}
 	updated := 0
 	for _, a := range assigns {
-		res, err := tx.Exec(`UPDATE series_media SET season = ?, episode = ?, episode_source = ?
+		// ⚠️ 不许用 NULL 覆盖**已知**的季/集号（COALESCE(?, season)）：识别器"这次没认出来"
+		// 不等于"这条没有季号" —— 目录结构派生出来的季号（短剧库扫描）就是这么被抹掉的
+		// （2026-10-10 实现时发现）。要清空请走手动改（episode_source='manual'，这里本来就会跳过）。
+		res, err := tx.Exec(`UPDATE series_media SET season = COALESCE(?, season),
+				episode = COALESCE(?, episode), episode_source = ?
 			WHERE series_id = ? AND media_id = ?
 			  AND COALESCE(episode_source,'') <> ?`,
 			intArg(a.Season), intArg(a.Episode), a.Source, seriesID, a.MediaID,

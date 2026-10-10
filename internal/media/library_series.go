@@ -34,6 +34,14 @@ var (
 	reSeasonChinese = regexp.MustCompile(`^第\s*([0-9零一二三四五六七八九十百两\s]{1,8})\s*[季部]$`)
 )
 
+// SeasonDirNumber 从**季目录名**取季号（S01 / Season 1 / 第1季 / 第一季…）；不是季目录就 ok=false。
+//
+// 导出是因为 detect（自动识别）要用**同一份**规则：文件名的季号优先，文件名没给就看父目录，
+// 否则短剧库扫描刚落库的"目录派生季号"会被随后的自动识别任务抹成 NULL（见 EpisodesFor 的说明）。
+func SeasonDirNumber(name string) (int, bool) {
+	return seasonDirNumber(name)
+}
+
 // seasonDirNumber 从季目录名取季号；不是季目录就 ok=false。
 func seasonDirNumber(name string) (int, bool) {
 	if m := reSeasonShort.FindStringSubmatch(name); m != nil {

@@ -47,13 +47,24 @@ func MediaName(m domain.Media) string {
 }
 
 // EpisodesFor derives the nullable numbers for one media row (加入剧场时复用）。
+//
+// 季号规则：**文件名优先，父目录兜底**（`剧A/Season 1/01.mp4` ⇒ 第 1 季）。
+// 为什么必须兜底（2026-10-10 实现时发现）：短剧库的扫描归剧按**目录结构**给季号，
+// 而扫描结束后 api 会自动跑一次识别（handlers_detect 的 OnScanFinished）；老实现只认文件名
+// ⇒ 刚写好的"季 1"会被立刻改成 NULL。现在两边用同一份规则（media.SeasonDirNumber），
+// 加上 storage 那道"不许用 NULL 覆盖已知值"的门禁，双保险。
 func EpisodesFor(m domain.Media) (season, episode *int, ok bool) {
 	numbers, ok := media.ParseEpisode(MediaName(m))
-	if !ok {
-		return nil, nil, false
+	if ok {
+		season, episode = media.EpisodePointers(numbers)
 	}
-	season, episode = media.EpisodePointers(numbers)
-	return season, episode, true
+	if season == nil && m.Path != "" {
+		if n, sok := media.SeasonDirNumber(filepath.Base(filepath.Dir(m.Path))); sok {
+			season = &n
+			ok = true // 文件名认不出集号也没关系：目录给了季号，就如实写季
+		}
+	}
+	return season, episode, ok
 }
 
 // Series re-derives every member's number from its filename. It only reads:

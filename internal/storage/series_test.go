@@ -208,3 +208,67 @@ func TestRemoveSeriesMediaIDsCompactsPositions(t *testing.T) {
 		t.Fatalf("空列表应是无操作：removed=%d err=%v", removed, err)
 	}
 }
+
+// TestApplySeriesEpisodesNeverErasesKnownNumbers：识别器"这次没认出来"不许把**已知**的
+// 季/集号擦成 NULL（2026-10-10 实现时发现：短剧库扫描按目录给的季号，会被扫描结束后的
+// 自动识别任务抹掉 —— 那边同时修了识别规则，这里是写入端那道保险）。
+func TestApplySeriesEpisodesNeverErasesKnownNumbers(t *testing.T) {
+	db := openFeedDB(t)
+	lib := newLib("lib_1", "剧库", "/tmp/drama")
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	ser, ids := seedSeries(t, db, lib.ID, "某剧", 1)
+	season, episode := 1, 1
+	if _, err := db.ApplySeriesEpisodes(ser.ID, []EpisodeAssignment{{
+		MediaID: ids[0], Season: &season, Episode: &episode, Source: domain.EpisodeSourceFilename,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// 识别器这次什么都没认出来（nil/nil）：已知值必须原样保留
+	if _, err := db.ApplySeriesEpisodes(ser.ID, []EpisodeAssignment{{
+		MediaID: ids[0], Source: domain.EpisodeSourceFilename,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	eps, _, err := db.ListSeriesEpisodes(domain.LibraryScope{All: true}, ser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 || eps[0].Season == nil || *eps[0].Season != 1 || eps[0].Episode == nil || *eps[0].Episode != 1 {
+		t.Fatalf("已知的季/集号被 NULL 覆盖了：%+v", eps)
+	}
+	// 有真值时要能正常更新（只补季、集号保留）
+	onlySeason := 2
+	if _, err := db.ApplySeriesEpisodes(ser.ID, []EpisodeAssignment{{
+		MediaID: ids[0], Season: &onlySeason, Source: domain.EpisodeSourceFilename,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	eps, _, err = db.ListSeriesEpisodes(domain.LibraryScope{All: true}, ser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eps[0].Season == nil || *eps[0].Season != 2 || eps[0].Episode == nil || *eps[0].Episode != 1 {
+		t.Fatalf("补季号后 = %+v（集号应保留）", eps[0])
+	}
+	// 手动改过的（manual）永远不被识别器覆盖
+	manualEp := 9
+	if _, err := db.ApplySeriesEpisodes(ser.ID, []EpisodeAssignment{{
+		MediaID: ids[0], Episode: &manualEp, Source: domain.EpisodeSourceManual,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApplySeriesEpisodes(ser.ID, []EpisodeAssignment{{
+		MediaID: ids[0], Episode: &episode, Source: domain.EpisodeSourceFilename,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	eps, _, err = db.ListSeriesEpisodes(domain.LibraryScope{All: true}, ser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eps[0].Episode == nil || *eps[0].Episode != 9 {
+		t.Fatalf("手动集号被识别器覆盖了：%+v", eps[0])
+	}
+}
