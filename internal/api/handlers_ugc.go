@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"sort"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,7 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -297,7 +296,8 @@ func (s *Server) HandleUGCCancel(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 // HandleUGCPut 边收边写：offset 必须与磁盘上已有字节数一致，收够 size 才算完成。
-// 网络中断不清 .zvpart（这正是续传的意义），错误里带上真实进度。
+// 分片写入内核在 upload_part.go（与后台上传唯一一份）；这里只保留 UGC 的策略：
+// 网络中断**不清** .zvpart（这正是续传的意义），错误里带上真实进度，进度落库。
 func (s *Server) HandleUGCPut(w http.ResponseWriter, r *http.Request) {
 	s.extendReadDeadline(w)
 	it, err := s.ugcItemFor(r, r.PathValue("id"))
@@ -315,63 +315,31 @@ func (s *Server) HandleUGCPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	part := it.Path + partSuffix
-	offset, hasRange, oerr := resumeOffset(r.Header.Get("Content-Range"))
-	if oerr != nil {
-		s.fail(w, r, domain.New("UPLOAD_RANGE_INVALID", "断点信息不合法", 400))
-		return
+	res, derr := s.writePart(w, r, partPolicy{
+		PartPath: part, DeclaredSize: it.Size, MaxBytes: s.Cfg.UploadMaxBytes(),
+		Mode: 0o600, QueryOffset: true,
+	})
+	// 进度落库只在这三种情况做（与老实现一致）：真动过 .part 才写；
+	// 断点不符/打不开目录时直接返回，不覆盖上一次记下的进度。磁盘上的 .zvpart 才是事实。
+	if derr == nil || derr.Code == codePartTooLarge || derr.Code == codePartWriteFail {
+		_ = s.DB.SetUploadReceived(it.ID, res.Total)
 	}
-	if !hasRange {
-		if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
-			n, aerr := strconv.ParseInt(raw, 10, 64)
-			if aerr != nil || n < 0 {
-				s.fail(w, r, domain.New("UPLOAD_RANGE_INVALID", "断点位置不合法", 400))
-				return
-			}
-			offset = n
-		}
-	}
-	received := int64(0)
-	if st, serr := os.Stat(part); serr == nil {
-		received = st.Size()
-	}
-	if offset != received {
-		s.fail(w, r, domain.New("UPLOAD_RESUME_MISMATCH",
-			fmt.Sprintf("断点位置与已收到的内容不一致（服务端已有 %d 字节）", received), 409))
-		return
-	}
-	if received > it.Size {
-		s.fail(w, r, domain.New("UPLOAD_RESUME_MISMATCH", "已收到的内容超过声明大小", 409))
-		return
-	}
-	flags := os.O_CREATE | os.O_WRONLY
-	if received > 0 {
-		flags |= os.O_APPEND
-	} else {
-		flags |= os.O_TRUNC
-	}
-	f, ferr := os.OpenFile(part, flags, 0o600)
-	if ferr != nil {
-		s.fail(w, r, domain.New("UPLOAD_OPEN_FAILED", "无法写入收件目录："+ferr.Error(), 500))
-		return
-	}
-	remain := it.Size - received
-	written, cerr := io.Copy(f, http.MaxBytesReader(w, r.Body, remain))
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	total := received + written
-	_ = s.DB.SetUploadReceived(it.ID, total)
-	if cerr != nil || syncErr != nil || closeErr != nil {
-		if isTooLarge(cerr) {
-			s.fail(w, r, domain.New("UPLOAD_FILE_TOO_LARGE",
-				fmt.Sprintf("文件超过声明大小（上限 %d MB）", s.Cfg.UploadMaxFileMB), 413))
+	if derr != nil {
+		// 与后台口同一套语义：拦在**声明大小**上 ⇒ 400 UPLOAD_SIZE_MISMATCH（如实说清
+		// 收到多少、声明多少）；只有真撞到全局单文件上限才 413。
+		if derr.Code == codePartTooLarge && res.CapDeclared {
+			s.fail(w, r, domain.New("UPLOAD_SIZE_MISMATCH",
+				fmt.Sprintf("收到的字节数超过声明（收到 %d，声明 %d）", res.Total, it.Size), 400))
 			return
 		}
-		s.fail(w, r, domain.New("UPLOAD_WRITE_FAILED",
-			fmt.Sprintf("上传中断，已保留 %d 字节可续传", total), 400))
+		s.fail(w, r, uploadPartError(derr,
+			"无法写入收件目录：",
+			fmt.Sprintf("文件超过单文件上限 %d MB", s.Cfg.UploadMaxFileMB),
+			fmt.Sprintf("上传中断，已保留 %d 字节可续传", res.Total)))
 		return
 	}
-	respond(w, http.StatusOK, map[string]any{"received": total >= it.Size,
-		"received_bytes": total, "size": it.Size}, nil)
+	respond(w, http.StatusOK, map[string]any{"received": res.Total >= it.Size,
+		"received_bytes": res.Total, "size": it.Size}, nil)
 }
 
 // ============================================================================
@@ -805,9 +773,11 @@ func (s *Server) HandleAdminRejectBatch(w http.ResponseWriter, r *http.Request) 
 }
 
 // linkApprovedSeries 把刚通过的 media 挂进剧场（P1 剧场草稿）：
-//   · 给了 series_id 就挂现有的；给了 series_title 就按标题找，找不到就用这个库新建一个；
-//   · 集号/季号用**文件名识别**（与后台"识别"同一套 detect.EpisodesFor）；
-//   · 挂完按 (season, episode) 重排一次 —— 批量审核很可能乱序通过，不重排播放顺序就乱了。
+//
+//	· 给了 series_id 就挂现有的；给了 series_title 就按标题找，找不到就用这个库新建一个；
+//	· 集号/季号用**文件名识别**（与后台"识别"同一套 detect.EpisodesFor）；
+//	· 挂完按 (season, episode) 重排一次 —— 批量审核很可能乱序通过，不重排播放顺序就乱了。
+//
 // 返回挂上的剧场 id（没要求归入剧场时返回空串）。
 func (s *Server) linkApprovedSeries(ctx context.Context, req ugcApproveReq, lib *domain.Library, mediaID string) (string, error) {
 	wantID := strings.TrimSpace(req.SeriesID)

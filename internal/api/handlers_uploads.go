@@ -2,9 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,7 +22,6 @@ import (
 // 会话只存内存：进程重启后未完成的上传会 404，重新 start 即可（start 会清掉 .zvpart）。
 
 const (
-	partSuffix       = ".zvpart"
 	uploadSessionTTL = 6 * time.Hour
 	longUploadWindow = 2 * time.Hour
 )
@@ -422,7 +419,8 @@ func (s *Server) ensureSeriesDir(lib *domain.Library, title string) (string, err
 // ============================================================================
 
 // HandleUploadPut 边收边写：io.Copy 到 .zvpart，绝不 read-all 进内存。
-// Content-Range 给断点位置时可续传；读失败/超限/大小不符一律删掉 .part。
+// 分片写入内核在 upload_part.go（与 UGC 唯一一份）；这里只保留后台口的策略：
+// 写失败/超限一律删掉半截 .part，整文件没传完也删，传完才原子改名。
 func (s *Server) HandleUploadPut(w http.ResponseWriter, r *http.Request) {
 	// 大文件要跑很久：按面板同名思路把读截止时间往后推（保留上限，不清零）。
 	// 这一步必须真到达 ResponseWriter（statusWriter 有 Unwrap），失败会记日志而不是被吞。
@@ -446,54 +444,31 @@ func (s *Server) HandleUploadPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	part := file.Final + partSuffix
-	offset, hasRange, oerr := resumeOffset(r.Header.Get("Content-Range"))
-	if oerr != nil {
-		s.fail(w, r, domain.New("UPLOAD_RANGE_INVALID", "断点信息不合法", 400))
-		return
-	}
-	if file.Size > 0 && offset > file.Size {
-		s.fail(w, r, domain.New("UPLOAD_RANGE_INVALID", "断点位置超过文件大小", 400))
-		return
-	}
-	flags := os.O_CREATE | os.O_WRONLY
-	if offset > 0 {
-		st, serr := os.Stat(part)
-		if serr != nil || st.Size() != offset {
-			s.fail(w, r, domain.New("UPLOAD_RESUME_MISMATCH",
-				"断点位置与已收到的内容不一致，请从头重传", 409))
+	res, derr := s.writePart(w, r, partPolicy{
+		PartPath: part, DeclaredSize: file.Size, MaxBytes: maxBytes, Mode: 0o644,
+	})
+	if derr != nil {
+		// 只有"写"失败才删半截：断点不符/打不开目录时保留 .part，
+		// 让客户端重读断点接着传（老实现也是这两支才删）。
+		if derr.Code == codePartTooLarge || derr.Code == codePartWriteFail {
+			_ = os.Remove(part)
+		}
+		// 拦在"声明大小"上时如实说声明不符（老代码这条就是 400 UPLOAD_SIZE_MISMATCH）；
+		// 只有真的撞到全局单文件上限才说 413 超限。
+		if derr.Code == codePartTooLarge && res.CapDeclared {
+			s.fail(w, r, domain.New("UPLOAD_SIZE_MISMATCH",
+				fmt.Sprintf("收到的字节数超过声明（收到 %d，声明 %d）", res.Total, file.Size), 400))
 			return
 		}
-		flags |= os.O_APPEND
-	} else {
-		flags |= os.O_TRUNC
-	}
-	f, err := os.OpenFile(part, flags, 0o644)
-	if err != nil {
-		s.fail(w, r, domain.New("UPLOAD_OPEN_FAILED", "无法写入目标目录："+err.Error(), 500))
+		s.fail(w, r, uploadPartError(derr,
+			"无法写入目标目录：",
+			fmt.Sprintf("文件超过单文件上限 %d MB", s.Cfg.UploadMaxFileMB),
+			"上传中断，已清理临时文件"))
 		return
 	}
-	written, cerr := io.Copy(f, http.MaxBytesReader(w, r.Body, maxBytes))
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	if cerr != nil || syncErr != nil || closeErr != nil {
-		_ = os.Remove(part)
-		if isTooLarge(cerr) {
-			s.fail(w, r, domain.New("UPLOAD_FILE_TOO_LARGE",
-				fmt.Sprintf("文件超过单文件上限 %d MB", s.Cfg.UploadMaxFileMB), 413))
-			return
-		}
-		s.fail(w, r, domain.New("UPLOAD_WRITE_FAILED", "上传中断，已清理临时文件", 400))
-		return
-	}
-	total := offset + written
-	if file.Size > 0 && total > file.Size {
-		_ = os.Remove(part)
-		s.fail(w, r, domain.New("UPLOAD_SIZE_MISMATCH",
-			fmt.Sprintf("收到的字节数超过声明（收到 %d，声明 %d）", total, file.Size), 400))
-		return
-	}
+	total := res.Total
 	if file.Size > 0 && total < file.Size {
-		if !hasRange {
+		if !res.HasRange {
 			// 整文件 PUT 没传完：删掉半截，提示重传。
 			// 这里最常见的外因是**反向代理把请求体截断了**（nginx 默认 client_max_body_size 1m）——
 			// 所以报错里直接把这个可能性说出来，别让用户对着"字节数不符"猜（用户 2026-09-24）。
@@ -528,31 +503,6 @@ func (s *Server) HandleUploadPut(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, map[string]any{
 		"received": true, "index": index, "name": filepath.Base(final),
 		"path": final, "size": total}, nil)
-}
-
-func isTooLarge(err error) bool {
-	var maxErr *http.MaxBytesError
-	return errors.As(err, &maxErr)
-}
-
-// resumeOffset reads "bytes <start>-<end>/<total>"; empty means start from zero.
-// hasRange=true 表示这是分块（未传完时保留 .part 等下一块）。
-func resumeOffset(header string) (int64, bool, error) {
-	h := strings.TrimSpace(header)
-	if h == "" {
-		return 0, false, nil
-	}
-	if !strings.HasPrefix(strings.ToLower(h), "bytes ") {
-		return 0, true, errors.New("bad unit")
-	}
-	spec := strings.TrimSpace(h[len("bytes "):])
-	spec = strings.SplitN(spec, "/", 2)[0]
-	start := strings.SplitN(spec, "-", 2)[0]
-	n, err := strconv.ParseInt(strings.TrimSpace(start), 10, 64)
-	if err != nil || n < 0 {
-		return 0, true, errors.New("bad start")
-	}
-	return n, true, nil
 }
 
 // ============================================================================
