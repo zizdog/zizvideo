@@ -75,7 +75,7 @@ function isUnder(path, roots) {
 function mountLibraries(root) {
   const note = banner();
   const timers = [];
-  const { table, body } = gridOf(["名称", "根目录", "递归", "启用", "分组", "新用户默认可看", "创建时间", "操作"]);
+  const { table, body } = gridOf(["名称", "类型", "根目录", "递归", "启用", "分组", "新用户默认可看", "创建时间", "操作"]);
   // 未设置默认库 = 新用户看不到任何内容（fail-closed），常驻提示（B.8）。
   const defaultHint = el("div", {
     class: "banner", hidden: true, dataset: { role: "default-unset-hint" },
@@ -87,6 +87,13 @@ function mountLibraries(root) {
   });
   const nameInput = input({ placeholder: "名称", required: true });
   const pathInput = input({ placeholder: "根目录，例如 /Users/me/Videos", required: true });
+  // 库类型（用户 2026-10-10 的 Jellyfin 式模型）：创建时选定，决定扫描规则、归组方式与
+  // 后台归属 —— 短视频库（散片，一条视频一个条目）/ 短剧库（库根一级目录=一部剧）。
+  const kindSelect = el("select", { class: "input", dataset: { role: "library-kind" } },
+    el("option", { value: "short", text: "短视频库（散片）" }),
+    el("option", { value: "drama", text: "短剧库（目录=一部剧）" }));
+  const kindNote = el("div", { class: "muted small-note",
+    text: "短视频库：一条视频就是一个条目，首页刷它；短剧库：库根下每个目录算一部剧，只进「剧场」，首页永不出现。" });
   const recursive = el("input", { type: "checkbox", checked: true });
   const enabled = el("input", { type: "checkbox", checked: true });
   const ignoreInput = input({ placeholder: "忽略规则，逗号分隔" });
@@ -143,6 +150,8 @@ function mountLibraries(root) {
     el("div", { class: "row" },
       el("label", { class: "check" }, recursive, el("span", { text: "递归扫描" })),
       el("label", { class: "check" }, enabled, el("span", { text: "启用" }))),
+    el("div", { class: "row" }, field("库类型", kindSelect)),
+    kindNote,
     field("忽略规则", ignoreInput),
     el("div", { class: "actions" }, submit, cancel));
   // ⚠️ 折叠必须是 <details> 在外、表单在里：<summary> 放进 <form> 里不会折叠（本轮踩到）。
@@ -159,6 +168,7 @@ function mountLibraries(root) {
       recursive.checked = !!library.recursive;
       enabled.checked = !!library.enabled;
       ignoreInput.value = Array.isArray(library.ignore_rules) ? library.ignore_rules.join(",") : "";
+      kindSelect.value = library.kind === "drama" ? "drama" : "short";
       submit.textContent = "保存";
       cancel.hidden = false;
     } else {
@@ -167,6 +177,7 @@ function mountLibraries(root) {
       recursive.checked = true;
       enabled.checked = true;
       ignoreInput.value = "";
+      kindSelect.value = "short";
       submit.textContent = "新建";
       cancel.hidden = true;
     }
@@ -195,7 +206,7 @@ function mountLibraries(root) {
       const list = libResult && Array.isArray(libResult.list) ? libResult.list : [];
       groups = groupResult && Array.isArray(groupResult.list) ? groupResult.list : [];
       clear(body);
-      if (!list.length) body.append(emptyRow(8, "暂无媒体库"));
+      if (!list.length) body.append(emptyRow(9, "暂无媒体库"));
       // 按组分区显示：每组一个小标题行（带整组操作），最后是"未分组"。
       // 组顺序按后端给的 sort_order；库在组内保持原来的创建顺序。
       const known = new Set(groups.map((g) => g.id));
@@ -203,7 +214,7 @@ function mountLibraries(root) {
         const members = list.filter((library) => library.group_id === group.id);
         const rows = [];
         if (!members.length) {
-          rows.push(emptyRow(8, "这个分组还没有媒体库 —— 用右侧「分组」下拉把库归进来"));
+          rows.push(emptyRow(9, "这个分组还没有媒体库 —— 用右侧「分组」下拉把库归进来"));
         }
         for (const library of members) rows.push(libraryRow(library));
         const head = groupHeaderRow(group, members);
@@ -446,7 +457,24 @@ function mountLibraries(root) {
         isDefault.disabled = false;
       }
     });
-    return rowOf([library.name, library.root_path, library.recursive ? "是" : "否",
+    const kindCell = el("div", { class: "row" },
+      el("span", { class: "muted", text: library.kind === "drama" ? "短剧库" : "短视频库" }),
+      button("改类型", async () => {
+        const to = library.kind === "drama" ? "short" : "drama";
+        const toLabel = to === "drama" ? "短剧库" : "短视频库";
+        // 改类型会改变内容的可见性（短剧库的内容会从首页消失、只进剧场），必须说清后果
+        const ok = await confirmDialog({
+          title: "把「" + (library.name || library.id) + "」改成" + toLabel + "？",
+          message: to === "drama"
+            ? "库里的文件与记录都不动；这个库的内容会从首页消失，改由「短剧管理」按目录归剧。"
+            : "库里的文件与记录都不动；这个库的内容会重新出现在首页，剧场归组不再生效。",
+          confirmText: "改成" + toLabel, danger: to === "drama",
+        });
+        if (!ok) return;
+        try { await api.updateLibrary(library.id, { kind: to }); await refresh(); }
+        catch (err) { setBanner(note, err && err.message ? err.message : "改类型失败"); }
+      }));
+    return rowOf([library.name, kindCell, library.root_path, library.recursive ? "是" : "否",
       library.enabled ? "是" : "否", groupSelect, el("label", { class: "check" }, isDefault),
       fmtDate(library.created_at), holder]);
   }
@@ -477,6 +505,7 @@ function mountLibraries(root) {
     const payload = {
       name: nameInput.value.trim(),
       root_path: pathInput.value.trim(),
+      kind: kindSelect.value,
       recursive: recursive.checked,
       enabled: enabled.checked,
       ignore_rules: ignoreInput.value.split(",").map((part) => part.trim()).filter(Boolean),
@@ -677,6 +706,9 @@ function mountMedia(root) {
       const list = result && Array.isArray(result.list) ? result.list : [];
       for (const library of list) {
         names.set(String(library.id), library.name || String(library.id));
+        // 只列**短视频库**：这一块管的是散片，短剧库的剧集在「短剧管理」里按剧组织
+        // （用户 2026-10-10："后台各管各的"）。老服务端不返回 kind 时按 short 处理。
+        if (library.kind === "drama") continue;
         librarySelect.append(el("option", { value: String(library.id), text: library.name || String(library.id) }));
       }
     } catch (err) {
@@ -693,6 +725,9 @@ function mountMedia(root) {
         library_id: librarySelect.value,
         q: query.value.trim(),
         status: statusSelect.value,
+        // 这一块只管**短视频库**（散片）：短剧库的剧集在「短剧管理」里按剧组织，
+        // 两边各管各的（用户 2026-10-10）；不加这个过滤就会把剧集混进来。
+        kind: "short",
       });
       const list = result && result.data && Array.isArray(result.data.list) ? result.data.list : [];
       const meta = (result && result.meta) || {};
@@ -1705,8 +1740,8 @@ export function mountAdmin(view, initialTab) {
   // 扫描→扫描媒体）。改名字时字数要对得上，不然左边栏一行长一行短。
   const definitions = [
     { key: "libraries", label: "媒体管理", icon: "grid", mount: mountLibraries },
-    { key: "media", label: "媒体列表", icon: "play", mount: mountMedia },
-    { key: "series", label: "剧场管理", icon: "theater", mount: mountSeriesTab },
+    { key: "media", label: "散片管理", icon: "play", mount: mountMedia },
+    { key: "series", label: "短剧管理", icon: "theater", mount: mountSeriesTab },
     { key: "roots", label: "媒体目录", icon: "home", mount: mountRoots },
     { key: "uploads", label: "上传审核", icon: "up", mount: mountUploadsTab },
     { key: "users", label: "用户管理", icon: "person", mount: mountUsers },
@@ -1772,8 +1807,9 @@ export function mountAdmin(view, initialTab) {
     el("div", { class: "admin-main" },
       el("div", { class: "row" }, back),
       note,
-      el("div", { class: "muted", text: "剧场的新建/导入/识别/上传/管理都在「剧场管理」版块。" }),
+      el("div", { class: "muted", text: "短剧的新建/导入/识别/上传/管理都在「短剧管理」版块；散片在「散片管理」。" }),
       el("div", { class: "muted", text: "请确保添加了正确的【媒体目录】，默认为【用户/视频】文件夹。" }),
+      el("div", { class: "muted", text: "新建库时选类型：短视频库=散片（首页刷），短剧库=目录即一部剧（只进剧场）。" }),
       panel)));
   select(tabButtons.has(initialTab) ? initialTab : "libraries");
 

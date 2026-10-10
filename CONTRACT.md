@@ -61,6 +61,27 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   `zizvideo-codesign.crt`）并由安装器导入信任 ⇒ 授权授一次、升级不失效；镜像没有 crt
   时降级为未签名部署（每次升级都要重新授权，脚本会明说）。
 
+## 库类型与内容形态（2026-10-10 用户拍板，Jellyfin 式）
+
+短视频与短剧**独立开、显示共用、管理各管各的**：
+
+| | 短视频（`library.kind='short'`） | 短剧（`library.kind='drama'`） |
+|---|---|---|
+| 对应 | Jellyfin「电影」库 | Jellyfin「电视剧」库 |
+| 一条媒体是什么 | 散片（独立条目） | 某部剧某一季的一集 |
+| 归组依据 | 无 | **目录结构**：库根一级目录=一部剧，其下 `Season xx`/`Sxx`=季 |
+| 出现在首页 `/feed/next` | ✅ 只有它 | ❌ **永不出现**（`ShortOnlyClause`，结构性规则） |
+| 出现在剧场 `/series` | ❌ | ✅ 只有它 |
+| 后台板块 | 散片管理（`GET /media?kind=short`） | 短剧管理（剧场/剧集） |
+
+- 一条 media 的形态**由它所在的库决定**（`media.library_id → media_libraries.kind`），
+  media 表上没有 kind 列 —— 单一真源，别再加一份。
+- `feed_hide_series` 开关**已删**（迁移 0025）：首页不出剧集是结构性的，不是用户可切的状态。
+- 库类型创建时选（`POST /api/v1/libraries` 的 `kind`），之后可改（`PATCH`）：改类型**不动文件、
+  不改记录 id**，只是归类/可见性变化。取值只有 `short`/`drama`（`domain.ValidLibraryKind`），
+  非法值 400（`VALIDATION_LIBRARY_KIND`）。
+- 存量归类（迁移 0024）：**有剧场的库判 drama，其余 short**。
+
 ## 共用契约
 - 端口 **7766**；面板托管的二进制固定在 `/opt/zizvideo/bin/zizvideo`。
 - 数据目录 `~/Library/Application Support/zizvideo/`（DB、封面、config.json）；

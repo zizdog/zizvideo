@@ -78,7 +78,7 @@ export function mountSeries(view) {
     clear(body);
     if (!list.length) {
       count.hidden = true;
-      body.append(el("div", { class: "muted", text: "还没有剧场" }));
+      body.append(el("div", { class: "muted", text: "还没有短剧：先在后台建一个「短剧库」，把每部剧放成库下的一个目录" }));
       return;
     }
     count.hidden = false;
@@ -116,7 +116,7 @@ export function mountSeries(view) {
       }
       body.append(bar);
       const items = list.filter((it) => (it.library_id || "") === currentLib);
-      body.append(items.length ? posterGrid(items, {}) : el("div", { class: "muted", text: "这个库里还没有剧场" }));
+      body.append(items.length ? posterGrid(items, {}) : el("div", { class: "muted", text: "这个短剧库里还没有剧" }));
       return;
     }
     // 所有内容（不再往里塞"观看中"板块：四个页签平级）
