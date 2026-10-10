@@ -62,6 +62,7 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 | （空） | 安装；默认 `--system` |
 | `--user` | 用户级 LaunchAgent，只在有人登录后运行（没有 sudo 时用） |
 | `--upgrade` / `--uninstall` / `--purge` | 升级 / 卸载（保留数据）/ 卸载并删数据（需二次确认） |
+| `--verify` | **体检当前部署**（不改任何东西）：二进制/配置/服务状态/`/readyz`/**每个媒体根在守护进程上下文里读不读得到**；退出码 0 全过 / 3 在跑但没就绪 / 1 服务不可用 |
 | `--dry-run` | 只打印将要做什么，不写任何系统状态 |
 | `--mirror <base>` | 换镜像基址（默认 `https://mirror.zizdog.com:8888`） |
 | `--listen <host:port>` | 改监听地址（默认 `127.0.0.1:7766`） |
@@ -72,6 +73,21 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 **外置盘权限**：读 `~/Movies` 不用授权。读 `/Volumes/*` 要在
 「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里给该二进制授权一次；
 无头机器需要有人到机器前，或用 MDM 下发。
+
+装完安装器会**自己检查这一步**：它写一个一次性 launchd 作业，让 launchd 直接执行
+`zizvideo check-access <你的媒体根>`（TCC 按**发起进程**判权限，在终端里读出来的不算数），
+读不到就讲清影响 + 在 Finder 里选中二进制 + 打开「系统设置 → 隐私与安全性 → 完全磁盘访问」并等你授权后复验
+（最多 60 秒；`ZV_ACCESS_PROBE_WAIT=0` 只报告不等待）。**这一步不会让安装失败**。
+
+### 其它平台
+
+| 平台 | 怎么装 | 入口 |
+|---|---|---|
+| Linux / NAS（systemd） | `sudo bash install-zizvideo-linux.sh` | 见 [`docs/独立部署.md`](docs/独立部署.md) |
+| 容器（Docker/群晖/Unraid/飞牛） | `docker load -i zizvideo-<版本>-<架构>.tar.gz` 或自己 `make docker-image` | 同上 / `docker.json` 索引 |
+| 飞牛 fnOS | `appcenter-cli install-fpk zizvideo-<版本>-x86.fpk` | 同上 / `fnos.json` 索引 |
+
+三种都有对应的**自查**：`bash tools/verify-deploy.sh`（装完体检，退出码 0/3/1 与 `--verify` 一致）。
 
 **签名**：镜像有 `zizvideo-codesign.crt` 时安装器导入并信任它，授权一次跨升级有效。
 镜像没有 crt 就是未签名部署，每次升级都要重新授权。
@@ -185,11 +201,18 @@ make fmt         # gofmt
 版本真源是 `Makefile` 的 `VERSION` 与 `internal/api/api.go` 的 `Version`（两处必须一致）。
 
 ```bash
+make preflight   # **发布前一条命令**：沙箱门禁 / 端到端冒烟 / 飞牛真打包 / 真 Linux / 容器镜像 /
+                 #   发布目录对账 / 镜像漂移 全跑并给结论（含每步耗时与"本次发布件清单"）
 make release     # 构建 arm64 → 固定证书签名（com.zizvideo.server）→ 写 dist/apps/zizvideo/ + 索引
-make publish     # 传到公网镜像 apps/zizvideo/（走 mini 面板接口，凭据见 ZizVideo-当前状态.md）
-make verify      # 只复验线上（快：索引 ↔ 本地发布件比 sha256/大小 + 线上 HEAD，不下整包）
-make verify DEEP=1   # 需要字节级复验时：整包下载复算 sha256 + 跑 --version
+make fpk         # 飞牛 .fpk（官方 fnpack 真打包）+ 刷新 fnos.json   ← release **不含**这步
+make docker-tar  # 离线容器镜像 tar + 刷新 docker.json            ← release **也不含**这步
+make publish     # 传到公网镜像 apps/zizvideo/（先跑 release-check：索引↔产物对不齐就不发）
+make preflight-post  # **发布后复核**：线上产物下载回来复算 sha256 / latest / 漏传 / 两份索引一致性
 ```
+
+> `make release` 只出 darwin 与 linux 二进制和 `manifest.json`/`linux.json`/`android.json`；
+> **`fnos.json` 要 `make fpk` 才刷新、`docker.json` 要 `make docker-tar` 才刷新** ——
+> 少跑哪条，用户就静默拿不到对应平台的东西（`make preflight` 会把这些都做出来并列出清单）。
 
 - **同版本绝不许换字节重传**：要改就 bump `VERSION`（例如 `0.1.2-mvp → 0.1.3-mvp`）。
 - 公网镜像 `https://mirror.zizdog.com:8888/apps/zizvideo/` 上的 `manifest.json` 是**面板认可的版本真源**：

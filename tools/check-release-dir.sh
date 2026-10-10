@@ -201,7 +201,7 @@ if [ -n "$FPK" ]; then
     bad "$(basename "$FPK") 自检没过：$(printf '%s' "$out" | grep '✗' | head -3 | tr '\n' ' ')"
   fi
 else
-  printf '  · 没有 dist/fnos/*.fpk（没打飞牛包就跳过；要发就 make fpk）\n'
+  printf '  · 没有 %s/fnos/*.fpk（没打飞牛包就跳过；要发就 make fpk）\n' "$PARENT"
 fi
 
 printf '\n== 结论：%d 项通过，%d 项失败\n' "$PASS" "$FAIL"

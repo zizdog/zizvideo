@@ -1030,6 +1030,13 @@ if /bin/bash "$ROOT/tools/preflight.sh" --list >/dev/null 2>&1; then
 else
   bad "preflight.sh 在 /bin/bash 3.2 下跑不起来"
 fi
+# bash 3.2 + set -u 下**展开空数组**会报 unbound（4.4+ 才修）—— 语法检查抓不到，只能真跑边缘输入
+# （我就是在 `--only` 不存在时踩的：`for o in "${ONLY[@]}"` 直接炸）
+if /bin/bash "$ROOT/tools/preflight.sh" --only 不存在的步骤 >/dev/null 2>&1; then
+  ok "preflight.sh 传未知 --only 时不崩（空数组展开已按 3.2 写法处理）"
+else
+  bad "preflight.sh 传未知 --only 时崩了（很可能是 bash 3.2 下空数组展开的 unbound）"
+fi
 
 printf '==> 脚本头部注释块不许混进可执行行（防自我递归）\n'
 hdr_bad=""

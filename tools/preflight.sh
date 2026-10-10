@@ -18,13 +18,16 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MIRROR="${ZV_PREFLIGHT_MIRROR:-https://mirror.zizdog.com:8888}"
-ONLY=()
+# ⚠️ 用**字符串**而不是数组：bash 3.2（macOS 自带）+ `set -u` 下展开空数组 `"${ARR[@]}"` 会报
+# "unbound variable"（4.4+ 才修）。这类坑是"语法检查抓不到、跑起来才炸"的典型。
+ONLY_LIST=""
 
 STEPS=(
   "check:沙箱门禁与单测（make check）"
   "smoke:端到端冒烟（make smoke，真服务+真 ffmpeg）"
   "fpk:飞牛真打包 + 解开核对 23 项（make fpk-check）"
   "linux:发布的 Linux 二进制在真 Linux（容器）跑全链路（make linux-verify API=1）"
+  "docker:导出离线可导入的容器镜像 tar + 刷新 docker.json（make docker-tar）"
   "release:发布目录索引 ↔ 产物 + Linux 验证 stamp 对账（make release-check）"
   "mirror:镜像上的安装器/清单与我们验过的是否同一份字节"
   "post-artifacts:发布后复核：线上产物与索引里的 sha256/size 是否一致（下载复算）"
@@ -33,23 +36,34 @@ STEPS=(
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --only) ONLY+=("$2"); shift 2 ;;
+    --only) ONLY_LIST="$ONLY_LIST $2"; shift 2 ;;
     --list) for s in "${STEPS[@]}"; do printf '%s\n' "${s%%:*}"; done; exit 0 ;;
-    --post) ONLY=("mirror" "post-artifacts" "post-latest"); shift ;;
+    --post) ONLY_LIST="mirror post-artifacts post-latest"; shift ;;
     --help|-h) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "!! 未知参数：$1（--help 看用法）" >&2; exit 2 ;;
   esac
 done
-wanted() { [ "${#ONLY[@]}" -eq 0 ] && return 0; for o in "${ONLY[@]}"; do [ "$o" = "$1" ] && return 0; done; return 1; }
+# post-* 是**发布后**才该跑的（发布前跑必然"latest ≠ 本地"而报失败）⇒ 默认不跑，只在 --post 或显式 --only 时跑
+POST_STEPS="post-artifacts post-latest"
+wanted() {
+  case " $ONLY_LIST " in *" $1 "*) return 0 ;; esac
+  [ -n "$ONLY_LIST" ] && return 1
+  case " $POST_STEPS " in *" $1 "*) return 1 ;; esac
+  return 0
+}
 
 PASS=0; FAIL=0; SKIP=0
 declare -a SUMMARY=()
-step_ok()   { PASS=$((PASS + 1)); SUMMARY+=("✓ $1"); }
-step_bad()  { FAIL=$((FAIL + 1)); SUMMARY+=("✗ $1"); }
-step_skip() { SKIP=$((SKIP + 1)); SUMMARY+=("· $1（跳过：$2）"); }   # SKIP 不算失败，但必须写清原因
+declare -a TIMES=()
+T_START=0
+begin_step() { T_START="$(date +%s)"; }
+step_ok()   { PASS=$((PASS + 1)); SUMMARY+=("✓ $1"); TIMES+=("$(( $(date +%s) - T_START ))s"); }
+step_bad()  { FAIL=$((FAIL + 1)); SUMMARY+=("✗ $1"); TIMES+=("$(( $(date +%s) - T_START ))s"); }
+step_skip() { SKIP=$((SKIP + 1)); SUMMARY+=("· $1（跳过：$2）"); TIMES+=("—"); }   # SKIP 不算失败，但必须写清原因
 
 run_make() { # run_make <名字> <失败说明> <make 参数...>
   local name="$1" hint="$2"; shift 2
+  begin_step
   printf '\n──── %s ────\n' "$name"
   if ( cd "$ROOT" && make "$@" ); then
     step_ok "$name"
@@ -66,6 +80,7 @@ if wanted smoke; then
   run_make "端到端冒烟" "冒烟失败通常是服务端行为变了（看上面 HTTP/断言）" smoke
 fi
 if wanted fpk; then
+  begin_step
   printf '\n──── 飞牛真打包 + 自检 ────\n'
   if ! command -v fnpack >/dev/null 2>&1 && [ ! -x "$ROOT/.tools/fnpack" ]; then
     step_skip "飞牛包" "没有 fnpack（官方打包器）"
@@ -76,6 +91,7 @@ if wanted fpk; then
   fi
 fi
 if wanted linux; then
+  begin_step
   printf '\n──── 真 Linux（容器）────\n'
   if ! docker info >/dev/null 2>&1; then
     step_skip "真 Linux 验证" "没有可用的 docker daemon（**这不算验过**）"
@@ -85,12 +101,24 @@ if wanted linux; then
     step_bad "真 Linux 验证 —— 发布件在 Linux 上出问题，用户那边就是"装完起不来""
   fi
 fi
+if wanted docker; then
+  begin_step
+  printf '\n──── 导出容器镜像 tar ────\n'
+  if ! docker info >/dev/null 2>&1; then
+    step_skip "容器镜像 tar" "没有可用的 docker daemon（**用户就拿不到离线镜像**；有 docker 的机器上跑 make docker-tar）"
+  elif ( cd "$ROOT" && make docker-tar DOCKER_ARCH="$( [ "$(uname -m)" = "arm64" ] && echo arm64 || echo amd64 )" ); then
+    step_ok "容器镜像 tar（离线可 docker load 导入，docker.json 已刷新）"
+  else
+    step_bad "容器镜像 tar —— 导出失败（看上面输出）"
+  fi
+fi
 if wanted release; then
   run_make "发布目录对账" "索引与产物不一致（宁可重跑 make release）" release-check
 fi
 
 # ---- 镜像漂移：用户下到的东西，跟我们验过的是不是一份 ------------------------
 if wanted mirror; then
+  begin_step
   printf '\n──── 镜像漂移（安装器/清单同源）────\n'
   drifted=""
   for f in install-zizvideo.sh install-zizvideo-linux.sh; do
@@ -133,6 +161,7 @@ fi
 # 为什么值得下载复算：`publish-mirror.sh` 上传时会核对大小，但那是在**发布那一刻**；
 # 事后文件被换、被截断、CDN 缓存了旧版本，都只有"下载回来算 sha256"才能发现。
 if wanted post-artifacts; then
+  begin_step
   printf '\n──── 发布后复核：线上产物 ↔ 索引 ────\n'
   mver="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/manifest.json" 2>/dev/null \
     | python3 -c 'import json,sys; print((json.load(sys.stdin).get("latest") or ""))' 2>/dev/null || true)"
@@ -245,6 +274,7 @@ PYC
 fi
 
 if wanted post-latest; then
+  begin_step
   printf '\n──── 发布后复核：latest 就是本版本吗 ────\n'
   mver2="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/manifest.json" 2>/dev/null \
     | python3 -c 'import json,sys; print((json.load(sys.stdin).get("latest") or ""))' 2>/dev/null || true)"
@@ -261,7 +291,27 @@ fi
 
 # ---- 结论 -------------------------------------------------------------------
 printf '\n════ 发布前检查结论 ════\n'
-for line in "${SUMMARY[@]}"; do printf '  %s\n' "$line"; done
+i=0
+for line in ${SUMMARY[@]+"${SUMMARY[@]}"}; do
+  printf '  %-70s %s\n' "$line" "${TIMES[$i]:-}"
+  i=$((i + 1))
+done
+# 本次发布件清单（发布时最该确认的一件事：该带的都做出来了吗）
+APPD="$ROOT/dist/apps/zizvideo"
+VERD="$APPD/$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+if [ -d "$VERD" ]; then
+  n_darwin=$(ls -1 "$VERD"/zizvideo_*_darwin_* 2>/dev/null | wc -l | tr -d ' ')
+  n_linux=$(ls -1 "$VERD"/zizvideo_*_linux_* 2>/dev/null | wc -l | tr -d ' ')
+  n_fpk=$(ls -1 "$APPD"/fnos/*.fpk 2>/dev/null | wc -l | tr -d ' ')
+  n_tar=$(ls -1 "$APPD"/docker/*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+  n_apk=$(ls -1 "$VERD"/*.apk 2>/dev/null | wc -l | tr -d ' ')
+  printf '\n本次发布件：darwin %s / linux %s / 飞牛 %s / 容器 %s / APK %s' \
+    "$n_darwin" "$n_linux" "$n_fpk" "$n_tar" "$n_apk"
+  for idx in linux.json fnos.json docker.json android.json; do
+    [ -f "$APPD/$idx" ] && printf ' / %s ✓' "$idx" || printf ' / %s ✗' "$idx"
+  done
+  printf '\n（索引缺哪个，对应平台就发不出去；fnos.json 要 make fpk、docker.json 要 make docker-tar）\n'
+fi
 printf '\n通过 %d，失败 %d，跳过 %d\n' "$PASS" "$FAIL" "$SKIP"
 if [ "$FAIL" -gt 0 ]; then
   printf '有失败项：先修上面每条 ✗（跳过的项也要看清原因 —— 跳过 ≠ 验过）\n' >&2

@@ -7,7 +7,7 @@
 #  桌面入口的端口与 manifest 的 service_port 是否一致（两份真源漂移就点不开）。这些只能在
 #  解开包之后查 —— 而用户装不上的时候我们拿不到他的机器，所以要在发之前查。
 #
-#  用法：bash tools/check-fnos-fpk.sh [<file.fpk>]      # 缺省取 dist/fnos/zizvideo-<版本>-x86.fpk
+#  用法：bash tools/check-fnos-fpk.sh [<file.fpk>]   # 缺省取 dist/apps/zizvideo/fnos/zizvideo-<版本>-x86.fpk
 #  退出码：0 全过；1 有问题；2 环境/参数问题
 # ============================================================================
 set -uo pipefail
@@ -15,7 +15,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 PKGVER="${VER%-mvp}"
-FPK="${1:-$ROOT/dist/fnos/zizvideo-${PKGVER}-x86.fpk}"
+# 默认路径 = app 级稳定路径（与 tools/make-fnos-pkg.sh 的产出一致；第一版忘了跟着搬，导致 make fpk-check 找不到包）
+FPK="${1:-$ROOT/dist/apps/zizvideo/fnos/zizvideo-${PKGVER}-x86.fpk}"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); printf '  ✓ %s\n' "$*"; }

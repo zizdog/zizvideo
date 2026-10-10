@@ -2,7 +2,7 @@
 """check-docs.py —— 文档 ↔ 实现一致性检查（文档腐烂是长期风险）
 
 检查三件事（都是"写死了必腐"或"改名后没人改文档"的典型）：
-  ① 文档里提到的仓库内路径（tools/… 、docker/… 、fnos/… 、install-*.sh…）必须存在；
+  ① 文档里提到的仓库内路径（tools/… 、docker/… 、fnos/… 、dist/… 、install-*.sh…）必须存在；
   ② 文档里写的 `make <目标>` 必须在 Makefile 里真的有；
   ③ 文档**不许写死门禁条数**（例如"覆盖（92 条 ok）"）—— 条数会涨，写死了必腐，
      应该写"条数见 make check 输出"。
@@ -27,7 +27,7 @@ DOCS = [os.path.join(ROOT, p) for p in LIVING if os.path.isfile(os.path.join(ROO
 
 # 只认"仓库根下的实际路径"（tree 图里的相对路径如 `cmd/main` 不算 —— 它是 fnos 包内的相对路径）
 PATH_RE = re.compile(
-    r"(?<![\w./])((?:tools|docker|fnos|docs)/[A-Za-z0-9_./\u4e00-\u9fff\-]+"
+    r"(?<![\w./])((?:tools|docker|fnos|docs|dist)/[A-Za-z0-9_./\u4e00-\u9fff\-]+"
     r"|install-zizvideo[a-z\-]*\.sh)"
 )
 MAKE_RE = re.compile(r"\bmake ([a-z][a-z0-9\-]*)")
@@ -42,9 +42,16 @@ def main() -> int:
     checked = 0
     for doc in DOCS:
         text = open(doc, encoding="utf-8").read()
-        text_no_placeholder = re.sub(r"<[^>]*>", "", text)   # 去掉 <版本>/<arch> 这类占位
-        for m in PATH_RE.finditer(text_no_placeholder):
+        # 在**原文**里找路径，但跳过"模板"：紧跟着 `<`（占位符）或 `*`（glob）的匹配（如 `…/zizvideo-<版本>-x86.fpk`、
+        # `…/zizvideo-*.fpk`）不是路径声明。
+        # （第一版先剥掉 `<…>` 再匹配，于是模板被拼成了 `zizvideo--x86.fpk` 这种不存在的路径，报了 4 处误报）
+        for m in PATH_RE.finditer(text):
+            # 紧跟 `<`（占位符）或 `*`（glob）的都不是"路径声明"，是模板
+            if text[m.end():m.end() + 1] in ("<", "*"):
+                continue
             p = m.group(1).rstrip(".,;)`'\"")
+            if "//" in p:
+                continue
             checked += 1
             full = os.path.join(ROOT, p)
             if p.endswith("/"):
