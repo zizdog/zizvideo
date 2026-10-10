@@ -561,3 +561,56 @@ func TestScannerRefusesLibraryOutsideAllowRoots(t *testing.T) {
 		t.Fatalf("越界扫描不得遍历任何文件: %+v", task)
 	}
 }
+
+// TestScanUnreadableSubdirNeverDeletes 是 2026-10-10 审计抓到的 P0 的回归门禁：
+// 一个**子目录**读不到（权限/IO）时，该目录里的文件不会进 seen；老代码把它当"文件不在了"，
+// 第一遍标缺失、第二遍（autoscan 默认 5 分钟一轮）就软删 —— 记录一软删，观看进度/收藏/
+// 稍后再看/剧场成员全跟着断（重扫会以新 id 复活）。修法：枚举不完整 ⇒ 这一轮只入库、不删。
+func TestScanUnreadableSubdirNeverDeletes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不受目录权限限制，无法构造'读不到'的场景")
+	}
+	env := newScanEnv(t)
+	env.write(t, "keep.mp4", "keep")
+	env.write(t, "sub/hidden.mp4", "hidden")
+	env.run(t)
+	before := env.media(t)
+	if len(before) != 2 {
+		t.Fatalf("前置扫描应建立两条记录，实际 %d", len(before))
+	}
+	locked := filepath.Join(env.root, "sub")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0o755) // 让 t.TempDir 的清理能删掉它
+
+	// 连扫两轮：第二轮正是老代码软删的时刻
+	first := env.run(t)
+	if first.Status != domain.TaskInterrupted {
+		t.Fatalf("枚举不完整时状态必须是 interrupted，实际 %s（%s）", first.Status, first.Error)
+	}
+	if !strings.Contains(first.Error, "读不到") {
+		t.Fatalf("错误里要如实说明'有东西读不到'，实际 %q", first.Error)
+	}
+	if first.Missing != 0 || first.Suspected != 0 {
+		t.Fatalf("枚举不完整时不得报缺失/疑似：missing=%d suspected=%d", first.Missing, first.Suspected)
+	}
+	second := env.run(t)
+	if second.Missing != 0 || second.Suspected != 0 {
+		t.Fatalf("第二轮也不得报缺失/疑似：missing=%d suspected=%d", second.Missing, second.Suspected)
+	}
+	after := env.media(t)
+	if len(after) != 2 {
+		t.Fatalf("读不到的目录不得导致软删：期望 2 条，实际 %d", len(after))
+	}
+	// 记录必须还是同两条（id 不变 ⇒ 进度/收藏/剧场成员都还在）
+	ids := map[string]bool{}
+	for _, m := range after {
+		ids[m.ID] = true
+	}
+	for _, m := range before {
+		if !ids[m.ID] {
+			t.Fatalf("记录 %s（%s）被删掉了", m.ID, m.Path)
+		}
+	}
+}

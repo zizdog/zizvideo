@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -51,6 +52,9 @@ func (s *Scanner) Run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	if res.interrupted {
 		status = domain.TaskInterrupted
 	}
+	if res.taskFailed {
+		status = domain.TaskFailed
+	}
 	if err := s.DB.FinishScanTask(task.ID, status, res.errMsg, res.missing, res.suspected, res.renamed); err != nil {
 		s.Log.Error("写入任务终态失败", "task_id", task.ID, "library_id", lib.ID, "error", err.Error())
 	}
@@ -67,7 +71,13 @@ type scanResult struct {
 	suspected   int
 	renamed     int
 	interrupted bool
-	errMsg      string
+	// taskFailed：**决定性的步骤**（对账/写库）失败 ⇒ 终态必须如实是 failed，
+	// 不能像以前那样"出错也报 success"（2026-10-10 审计：对账正是唯一决定删不删的地方）。
+	taskFailed bool
+	// partial：枚举不完整（有目录/文件读不到）⇒ 这一轮**不是权威的**：
+	// 不标记缺失、不软删，只把看得见的入库（否则第二次扫描会软删真实记录）。
+	partial bool
+	errMsg  string
 }
 
 func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Library) scanResult {
@@ -98,11 +108,22 @@ func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 		}
 	}
 
-	entries, interrupted := s.enumerate(ctx, lib)
-	if interrupted {
+	entries, fatal, unreadable := s.enumerate(ctx, lib)
+	if fatal {
 		res.interrupted = true
 		res.errMsg = "扫描过程中根路径不可用或设备变化，已中断（不做删除）"
 		return res
+	}
+	if unreadable > 0 {
+		// 有目录/文件读不到（权限、IO、并发改名…）⇒ 这一轮**只入库、不删**。
+		// 老代码把这类错误直接 `return nil` 忽略掉，于是这些文件不进 seen，
+		// 对账把它们当成"文件不在了"：第一遍标缺失、第二遍（autoscan 默认 5 分钟）软删。
+		// 记录一软删，观看进度/收藏/稍后再看/剧场成员全部跟着断（media 行换了新 id）。
+		res.interrupted = true
+		res.partial = true
+		res.errMsg = fmt.Sprintf(
+			"有 %d 个目录/文件读不到（权限或 IO 错误）：本轮只入库、不标记缺失、不删除；修好权限后重扫即可",
+			unreadable)
 	}
 	res.total = len(entries)
 
@@ -166,16 +187,27 @@ func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	res.scanned = int(atomic.LoadInt64(&processed))
 	res.failed = int(atomic.LoadInt64(&failed))
 
-	res.missing, res.suspected, _ = s.reconcile(lib, seen)
+	// 对账（唯一决定"标缺失/软删"的步骤）：枚举不完整时只做"清除已看见的缺失标记"，
+	// 绝不标记缺失、绝不删除（partial）；真出错就如实让任务失败，不再静默当成功。
+	missing, suspected, rerr := s.reconcile(lib, seen, !res.partial)
+	res.missing, res.suspected = missing, suspected
+	if rerr != nil {
+		res.taskFailed = true
+		res.errMsg = "对账失败：" + rerr.Error() + "（本轮未完成，未做任何删除）"
+	}
 	return res
 }
 
 // enumerate collects media candidates, applying ignore rules and the extension
 // whitelist. Symlinks are rejected by default.
-func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEntry, bool) {
+//
+// 返回三个值：候选文件、**致命**中断（根不可用/设备变化 ⇒ 整个扫描作废）、
+// 以及"读不到的目录/条目"个数（⇒ 本轮枚举不是权威的，调用方必须禁止删除）。
+func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEntry, bool, int) {
 	rules := append(append([]string{}, DefaultIgnoreRules...), lib.IgnoreRules...)
 	var out []fileEntry
 	interrupted := false
+	unreadable := 0
 	root := lib.RootPath
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -186,6 +218,13 @@ func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEnt
 			if path == root {
 				interrupted = true
 				return filepath.SkipAll
+			}
+			// ⚠️ 读不到的**子目录/条目**不算"根挂了"，但也绝不是"文件不在了"：
+			// 记数（调用方据此禁止删除），并如实记日志（以前这里静默 return nil）。
+			unreadable++
+			s.Log.Warn("枚举时读不到条目，本轮不做删除", "library_id", lib.ID, "path", path, "error", err.Error())
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -217,6 +256,9 @@ func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEnt
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
+			// 拿不到 size/mtime 同样不能当成"文件不在了"（并发改名/权限）
+			unreadable++
+			s.Log.Warn("读取条目信息失败，本轮不做删除", "library_id", lib.ID, "path", path, "error", ierr.Error())
 			return nil
 		}
 		if _, verr := ValidateMediaFile(s.Roots.List(), root, filepath.Clean(path)); verr != nil {
@@ -233,7 +275,7 @@ func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEnt
 	if err != nil && ctx.Err() == nil {
 		interrupted = true
 	}
-	return out, interrupted
+	return out, interrupted, unreadable
 }
 
 func ignored(name string, rules []string) bool {
@@ -524,42 +566,55 @@ func asProbeError(err error, target **ffmpeg.ProbeError) bool {
 
 // reconcile is the two-phase deletion step: first sighting only marks a row as
 // missing, and deletion needs a second, threshold-bounded confirmation.
-func (s *Scanner) reconcile(lib *domain.Library, seen *sync.Map) (missing, suspected, deleted int) {
+//
+// allowDelete=false 用于"这一轮枚举不完整"（有目录读不到）的情形：此时只把**看得见的**
+// 条目的缺失标记清掉，对看不见的条目**什么都不做** —— "看不见"不等于"不在了"。
+//
+// 任何写库失败都返回 error（以前是一律 `_ =` 吞掉，任务仍报 success）。
+func (s *Scanner) reconcile(lib *domain.Library, seen *sync.Map, allowDelete bool) (int, int, error) {
 	byPath, missingSince, err := s.DB.MediaIDsByLibrary(lib.ID)
 	if err != nil {
 		s.Log.Error("读取媒体清单失败", "library_id", lib.ID, "error", err.Error())
-		return 0, 0, 0
+		return 0, 0, fmt.Errorf("读取媒体清单失败: %w", err)
 	}
 	live := len(byPath)
 	now := domain.NowString()
 	var toDelete []string
+	missing := 0
 	for path, id := range byPath {
 		if _, ok := seen.Load(path); ok {
 			if missingSince[id] != "" {
-				_ = s.DB.ClearMissing(id)
+				if err := s.DB.ClearMissing(id); err != nil {
+					return 0, 0, fmt.Errorf("清除缺失标记失败: %w", err)
+				}
 			}
 			continue
 		}
+		if !allowDelete {
+			continue // 枚举不完整：不标记、不删除
+		}
 		missing++
 		if missingSince[id] == "" {
-			_ = s.DB.MarkMissing(id, now)
+			if err := s.DB.MarkMissing(id, now); err != nil {
+				return 0, 0, fmt.Errorf("标记缺失失败: %w", err)
+			}
 			continue
 		}
 		toDelete = append(toDelete, id)
 	}
 	if missing == 0 {
-		return 0, 0, 0
+		return 0, 0, nil
 	}
 	if overThreshold(missing, live, s.Cfg.ScanDeleteRatio, s.Cfg.ScanDeleteCount) {
 		s.Log.Warn("疑似丢失，超过阈值不软删", "library_id", lib.ID, "missing", missing, "live", live)
-		return missing, missing, 0
+		return missing, missing, nil
 	}
 	if err := s.DB.ApplyDeletions(toDelete); err != nil {
 		s.Log.Error("软删除失败", "library_id", lib.ID, "error", err.Error())
-		return missing, missing, 0
+		return missing, missing, fmt.Errorf("软删除失败: %w", err)
 	}
 	// Deleted rows are no longer "missing"; report only what is still absent.
-	return missing - len(toDelete), 0, len(toDelete)
+	return missing - len(toDelete), 0, nil
 }
 
 func overThreshold(missing, live int, ratio float64, count int) bool {
