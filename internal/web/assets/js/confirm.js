@@ -6,6 +6,9 @@
 import { el } from "./dom.js";
 import { tvMode } from "./tv.js";
 
+// 路由切换时 app.js 的 closeOverlays() 会广播它：浮层节点被统一摘掉，等结果的 Promise 要收尾。
+const TEARDOWN_EVENT = "zv:overlay-teardown";
+
 export function confirmDialog(options) {
   const opts = options || {};
   const inputOpt = opts.input || null;
@@ -26,12 +29,23 @@ export function confirmDialog(options) {
       }
       done = true;
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener(TEARDOWN_EVENT, onTeardown);
       overlay.remove();
       resolve(field ? (ok ? field.value.trim() : null) : !!ok);
     }
 
     function onKey(event) {
       if (event.key === "Escape") { event.preventDefault(); close(false); }
+    }
+
+    // 路由切换会把 body 上残留的浮层统一摘掉（见 app.js 的 closeOverlays）：节点都没了，
+    // 这个 await 必须有个结果 —— 按"用户取消"收尾，调用方就什么都不做。
+    function onTeardown() {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener(TEARDOWN_EVENT, onTeardown);
+      resolve(field ? null : false);
     }
 
     const cancel = el("button", {
@@ -49,6 +63,7 @@ export function confirmDialog(options) {
       el("div", { class: "actions modal-actions" }, cancel, ok)));
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(false); });
     document.addEventListener("keydown", onKey);
+    document.addEventListener(TEARDOWN_EVENT, onTeardown);
     document.body.append(overlay);
     // 打开就落焦：电视端没有鼠标，不落焦的话遥控器的"确定"会先被底下那层面板吃掉。
     // ⚠️ 电视端+危险确认（删除一类）默认落到**「取消」**上：遥控器上"多按一下确定"就是真删，
@@ -71,12 +86,22 @@ export function choiceDialog(options) {
       if (done) return;
       done = true;
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener(TEARDOWN_EVENT, onTeardown);
       overlay.remove();
       resolve(value === undefined ? null : value);
     }
 
     function onKey(event) {
       if (event.key === "Escape") { event.preventDefault(); close(null); }
+    }
+
+    // 同 confirmDialog：路由切换把浮层摘掉时按"取消"（null）收尾，别让 await 永远挂着。
+    function onTeardown() {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener(TEARDOWN_EVENT, onTeardown);
+      resolve(null);
     }
 
     const actions = el("div", { class: "actions modal-actions" },
@@ -96,6 +121,7 @@ export function choiceDialog(options) {
       actions));
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(null); });
     document.addEventListener("keydown", onKey);
+    document.addEventListener(TEARDOWN_EVENT, onTeardown);
     document.body.append(overlay);
     // 打开就落焦：电视端没有鼠标，不落焦的话遥控器的"确定"会先被底下那层面板吃掉
     const firstBtn = actions.querySelector("button");

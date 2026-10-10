@@ -5,6 +5,7 @@ import { el, fmtDate, fmtBytes, clear, banner, setBanner } from "./dom.js";
 import { api } from "./api.js";
 import { session } from "./auth.js";
 import { videoCard } from "./cards.js";
+import { confirmDialog } from "./confirm.js";
 
 function kv(label, value) {
   return el("div", { class: "kv" },
@@ -195,10 +196,17 @@ export function mountCached(view, options) {
   function cachedCard(item) {
     const del = el("button", { class: "btn small danger", type: "button", text: "删除缓存",
       dataset: { role: "cached-delete", media: item.id } });
-    del.addEventListener("click", (event) => {
+    del.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!window.confirm("删掉这一集的离线缓存？（只删手机上的文件）")) return;
+      // ⚠️ 不能用浏览器原生 confirm：App/电视的 WebChromeClient 没 override onJsConfirm，
+      //    返回值恒假 ⇒ 在 App/电视上"删除缓存"点了没反应。用项目自己的确认框（异步）。
+      const ok = await confirmDialog({
+        title: "删除这一集的离线缓存",
+        message: "只删手机上的文件，服务器上的视频不受影响。",
+        confirmText: "删除缓存",
+      });
+      if (!ok) return;
       try { bridge.deleteCached(item.id); } catch (err) { /* 老版本 App 没有这个口 */ }
       render();
     });

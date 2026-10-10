@@ -154,7 +154,9 @@ export function mountUploadsTab(root) {
 
   // 转码任务进度（复用任务中心 /admin/tasks/{id} 的 percent）
   let transcodeTimer = 0;
+  let stopped = false; // 卸载了就别再起新的轮询（见下面 cleanup）
   function pollTranscode(jobId) {
+    if (stopped) return; // 卸载后才从 await 里回来（"通过并转码"可能刚走完）：不能再起定时器
     if (transcodeTimer) clearInterval(transcodeTimer);
     const line = transcodeLine;
     const tick = async () => {
@@ -176,13 +178,34 @@ export function mountUploadsTab(root) {
       line.textContent = (task.status === "success" ? "转码完成：" : "转码有失败：") +
         "成功 " + (Number(summary.succeeded) || 0) + " / 失败 " + (Number(summary.failed) || 0) +
         (task.error ? "；" + task.error : "");
+      if (stopped) return; // 已经切页/换路由了：不用再刷列表
       await reload();
     };
     transcodeTimer = setInterval(tick, 1200);
     tick();
   }
 
-  async function reload() {
+  // 单飞：reload 是"清空 listBox + 重拉 + 重建行"，两个并发调用会互相踩（A 清空、B 清空、A 填、B 填
+  // ⇒ 待审行翻倍）。同一时刻只准一次，飞行期间又来的请求合并成"跑完再补一次"，
+  // 并且**等结果的调用方等的是补的那一次** —— 否则 await 之后看到的是补刷之前的旧列表，
+  // 而且调用方设的提示会被补刷的 setBanner("") 擦掉。
+  let reloadChain = null;
+  let reloadAgain = false;
+  function reload() {
+    if (reloadChain) {
+      reloadAgain = true;
+      return reloadChain;
+    }
+    reloadChain = doReload().then(() => {}, () => {}).then(() => {
+      const again = reloadAgain;
+      reloadAgain = false;
+      reloadChain = null;
+      return again ? reload() : undefined;
+    });
+    return reloadChain;
+  }
+
+  async function doReload() {
     clear(listBox);
     picked.clear();
     paintBatch();
@@ -364,5 +387,10 @@ export function mountUploadsTab(root) {
       onclick: () => { runBatchReject().catch((err) => setBanner(note, err && err.message ? err.message : "批量驳回失败")); } }));
   listBox.after(batchBar2);
   loadLibraries().then(reload);
-  return null;
+  // 这一页有 1.2s 的转码进度轮询（转码可能几十分钟）：没有 cleanup 的话，切到别的版块/别的路由
+  // 它还在后台一直拉接口（mountAdmin 会收下这个返回值并在切页签时调用，见 admin.js 的 select()）。
+  return function cleanup() {
+    stopped = true;
+    if (transcodeTimer) { clearInterval(transcodeTimer); transcodeTimer = 0; }
+  };
 }

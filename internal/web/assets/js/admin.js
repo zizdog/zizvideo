@@ -8,6 +8,7 @@ import { mountSeriesTab } from "./admin-series.js";
 import { mountUploadsTab } from "./uploads-tab.js";
 import { videoCard, stopInlinePlayers } from "./cards.js";
 import { icon } from "./icons.js";
+import { confirmDialog } from "./confirm.js";
 
 function button(label, onclick, extraClass) {
   return el("button", {
@@ -306,7 +307,14 @@ function mountLibraries(root) {
   }
 
   async function renameGroup(group) {
-    const next = window.prompt("分组名", group.name || "");
+    // ⚠️ 不能用浏览器原生的 prompt/confirm：App/电视的 WebChromeClient 没 override
+    //    onJsPrompt/onJsConfirm，返回值恒假 ⇒ 危险操作在这两种端上静默失效（点删除没反应）。
+    const next = await confirmDialog({
+      title: "重命名分组",
+      message: "只改分组名，组内的库和文件都不动。",
+      input: { value: group.name || "", placeholder: "分组名" },
+      confirmText: "保存", danger: false,
+    });
     if (next === null) return;
     const trimmed = next.trim();
     if (!trimmed || trimmed === group.name) return;
@@ -319,8 +327,13 @@ function mountLibraries(root) {
   }
 
   async function removeGroup(group) {
-    if (!window.confirm("删除分组「" + group.name + "」？组内 " + group.library_count +
-      " 个库会回到未分组，库和文件都保留。")) return;
+    // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+    const okDel = await confirmDialog({
+      title: "删除分组「" + group.name + "」",
+      message: "组内 " + group.library_count + " 个库会回到未分组，库和文件都保留。",
+      confirmText: "删除分组",
+    });
+    if (!okDel) return;
     try {
       const data = await api.deleteLibraryGroup(group.id);
       await refresh();
@@ -389,7 +402,13 @@ function mountLibraries(root) {
       button("扫描", () => startScan(library, line)),
       button("编辑", () => { setEditing(library); nameInput.focus(); }),
       button("删除", async () => {
-        if (!window.confirm("删除媒体库「" + (library.name || library.id) + "」？")) return;
+        // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+        const okDel = await confirmDialog({
+          title: "删除媒体库「" + (library.name || library.id) + "」",
+          message: "库和库里的媒体记录会一起删掉（磁盘上的文件保留）。",
+          confirmText: "删除媒体库",
+        });
+        if (!okDel) return;
         try { await api.deleteLibrary(library.id); await refresh(); }
         catch (err) { setBanner(note, err && err.message ? err.message : "删除失败"); }
       }, "danger"));
@@ -529,7 +548,13 @@ function mountRoots(root) {
   }
 
   async function remove(item) {
-    if (!window.confirm("删除允许根「" + item.path + "」？")) return;
+    // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+    const okDel = await confirmDialog({
+      title: "删除允许根「" + item.path + "」",
+      message: "只是从这个列表里移除，磁盘上的文件不会删。",
+      confirmText: "移除",
+    });
+    if (!okDel) return;
     setBanner(note, "");
     try {
       await api.removeMediaRoot(item.path);
@@ -794,8 +819,14 @@ function mountMedia(root) {
     const libID = librarySelect.value;
     if (!libID) return;
     const libName = names.get(String(libID)) || libID;
-    if (!window.confirm("清理「" + libName + "」里所有「文件已不在磁盘上」的记录？\n" +
-      "只删数据库记录，不删除任何文件；已被清理的视频会从首页消失（下次扫描若文件回来了会重新入库）。")) return;
+    // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+    const okPurge = await confirmDialog({
+      title: "清理「" + libName + "」的缺失记录",
+      message: "只删数据库里「文件已不在磁盘上」的记录，不删除任何文件；被清理的视频会从首页消失" +
+        "（下次扫描若文件回来了会重新入库）。",
+      confirmText: "清理记录",
+    });
+    if (!okPurge) return;
     setBanner(note, "");
     purgeBtn.disabled = true;
     try {
@@ -1324,7 +1355,13 @@ function mountDuplicates(root) {
     const ids = Array.from(selected);
     if (!ids.length) { setBanner(note, "请先勾选要删的（每组默认保留一条）"); return; }
     if (groupWouldEmpty()) { setBanner(note, "每组至少要留一条，别把整组都删了"); return; }
-    if (!window.confirm("只删面板记录，磁盘文件保留。继续？")) return;
+    // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+    const okRecords = await confirmDialog({
+      title: "删除 " + ids.length + " 条重复记录",
+      message: "只删面板记录，磁盘文件保留。",
+      confirmText: "删除记录",
+    });
+    if (!okRecords) return;
     setBanner(note, "");
     try {
       const data = await api.request("POST", "/api/v1/admin/duplicates/delete-records", { ids });
@@ -1341,7 +1378,13 @@ function mountDuplicates(root) {
     if (groupWouldEmpty()) { setBanner(note, "每组至少要留一条，别把整组都删了"); return; }
     const typed = confirmInput.value.trim();
     if (typed !== "删除文件") { setBanner(note, "请手动输入「删除文件」确认"); return; }
-    if (!window.confirm("永久删除磁盘上的 " + ids.length + " 个文件，不可恢复。继续？")) return;
+    // 见 renameGroup 的说明：确认框一律用项目自己的（App/电视上原生 confirm 恒假）
+    const okFiles = await confirmDialog({
+      title: "永久删除 " + ids.length + " 个文件",
+      message: "永久删除磁盘上的 " + ids.length + " 个文件，不可恢复。",
+      confirmText: "永久删除",
+    });
+    if (!okFiles) return;
     setBanner(note, "");
     try {
       const data = await api.request("POST", "/api/v1/admin/duplicates/delete-files",

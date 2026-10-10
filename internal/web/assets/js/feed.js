@@ -195,6 +195,17 @@ export function mountFeed(view, options = {}) {
   document.body.classList.add("playing");
 
   const gate = createGestureGate();
+  // 请求世代（generation）：切库（resetFeed）与卸载（cleanup）时 +1。
+  // 所有"请求回来后写 state"的地方都要先比对这个值：旧库的在飞响应要是写进新库的列表，
+  // 观感就是**内容串库**（切库时 resetFeed 把 loading 清 0 后立刻又发一箭，两条响应谁后到谁写）。
+  // ⚠️ 必须用世代计数，不能只靠 AbortController：老 WebView（Chrome 70–86）上它可能根本不存在，
+  //    而且 abort 是"尽力而为"——请求已经到达服务端时，响应照样可能回来。
+  let feedGen = 0;
+  // 另一条独立的世代：播放设置（见 saveSettings）。连点开关时只有最后一次的响应算数。
+  let settingsGen = 0;
+  // 还挂载着吗？只给"与当前库无关"的响应当判据（见 loadLibraries）：这类数据不属于任何世代，
+  // 拿世代去卡它反而会把**有效**的响应丢掉（比如首屏视频比库列表先到、用户点了卡片上的「来自 X」）。
+  let alive = true;
   const state = {
     // ⚠️ items 必须**从空开始**：数据统一由 appendItems 追加（它按 state.items.length 决定下标与
     // 外壳 top）。播放列表模式若在这里预填，appendItems 会再加一遍 ⇒ 外壳下标/位置错位，
@@ -454,7 +465,9 @@ export function mountFeed(view, options = {}) {
     if (!state.items.length) return;
     if (index > state.items.length - 1 && state.hasMore) {
       const before = state.items.length;
-      loadMore().then(() => { if (state.items.length > before) goTo(index, animate); });
+      const gen = feedGen;
+      // 翻页回来要是已经切过库/卸载了，这个下标是旧列表的，不能拿去 goTo（同类竞态）
+      loadMore().then(() => { if (gen === feedGen && state.items.length > before) goTo(index, animate); });
       return;
     }
     const target = Math.max(0, Math.min(state.items.length - 1, index));
@@ -762,6 +775,10 @@ export function mountFeed(view, options = {}) {
     if (entry.ops && entry.ops.parentNode) entry.ops.remove();
     if (entry.layer && entry.layer.parentNode) entry.layer.remove();
     state.built.delete(index);
+    // 面板是 entry 的 DOM 子节点：销毁 entry 就等于面板没了。holdCurrent(true) 曾把所有在册条目的
+    // loop 写死成 true，这里按销毁后的真实情况重算一次 —— 不复位的话剩下的条目会一直循环下去，
+    // 播完也不连播（见 panelVisible 的不变量）。
+    holdCurrent(panelVisible());
   }
 
   function syncWindow(index) {
@@ -835,7 +852,8 @@ export function mountFeed(view, options = {}) {
         if (!(gain < 0)) return;
         item.gain_db = gain;
         const entry = state.built.get(index);
-        if (entry && entry.video) {
+        // 同一下标可能已经换成别的视频了（切库/换挂载，同类竞态）：只认"还在这个位置上的那一条"
+        if (entry && entry.item === item && entry.video) {
           entry.video.volume = Math.max(0, Math.min(1, Math.pow(10, gain / 20)));
         }
       }).catch(() => { /* 查不到就算了，下次打开页面还有机会 */ });
@@ -1020,7 +1038,7 @@ export function mountFeed(view, options = {}) {
   function onEnded(entry) {
     flushProgress(entry.index, false);
     // 面板开着时：只循环当前这条，不连播、不换条（用户 2026-09-24 的改进 3）
-    if (state.panelOpen) return;
+    if (panelVisible()) return;
     if (playlist) {
       // 剧场：自动连播（不可设置）；播完最后一集停止并说明，绝不循环回第一集。
       if (entry.index + 1 < state.items.length) {
@@ -1390,12 +1408,27 @@ export function mountFeed(view, options = {}) {
 
   // 面板开着时：当前这条一直循环，绝不自动下一个（用户 2026-09-24 的改进 3）。
   // 收起后怎么播由用户的设置决定：开了连播/循环就照旧，都没开就播完暂停。
+  //
+  // ⚠️ 不变量：**"面板开着"绝不缓存成布尔值**，一律用 panelVisible() 现查 DOM。
+  //    面板节点是 entry 的 DOM 子节点：dropItem（从设置面板删掉当前视频）和 zvResumeNative
+  //    （原生收回播放、网页跳到别的条目）都会销毁 entry 却不走 closePanels()，缓存下来的 true
+  //    就永远复位不了 —— onEnded 里那句"面板开着就早退"从此对**所有**条目生效，
+  //    本条及之后每条视频播完都停在最后一帧（不连播、不循环、也没有播放按钮）。
   function holdCurrent(on) {
-    state.panelOpen = !!on;
     const loop = on ? true : loopEnabled();
     for (const entry of state.built.values()) {
       if (entry.video) entry.video.loop = loop;
     }
+  }
+
+  // 当前这条（active）的面板**真的可见**吗？判据就是 DOM（见上面 holdCurrent 的不变量）。
+  // 只看 active：别的条目的 layer 在翻页轨道里（手机端）或收在列表行里（电视端），它们的面板
+  // 就算没 .hidden 也压根不在屏幕上 —— 那种残留不许再把播放按死在"只循环当前这条"上。
+  function panelVisible() {
+    const entry = state.built.get(state.active);
+    if (!entry) return false;
+    if (entry.panel && !entry.panel.classList.contains("hidden")) return true;
+    return !!(entry.epsPanel && !entry.epsPanel.classList.contains("hidden"));
   }
 
   // 有面板开着吗？（返回手势/App 返回键先关它，再管全屏）
@@ -1420,7 +1453,7 @@ export function mountFeed(view, options = {}) {
     const loop = loopEnabled();
     for (const entry of state.built.values()) {
       if (entry.video) {
-        entry.video.loop = state.panelOpen ? true : loop;
+        entry.video.loop = panelVisible() ? true : loop;
         // 正在长按快进时不要被设置刷新覆盖（松手时按新倍速还原）
         if (!entry.fastForward) entry.video.playbackRate = state.settings.playback_rate;
       }
@@ -1429,17 +1462,21 @@ export function mountFeed(view, options = {}) {
   }
 
   async function saveSettings(partial) {
+    // 同一个"世代"判据：用户连点两个开关时，先发的那一箭可能后回来 —— 让它把后发的结果盖掉就
+    // 是"设置自己跳回去"。所以只有**最后**一次保存的响应允许写 state.settings（乐观更新照旧先落）。
+    const gen = settingsGen += 1;
     const before = state.settings;
     state.settings = normalizeFeedSettings(Object.assign({}, state.settings, partial));
     applySettings();
     try {
       const result = await api.patchFeedSettings(partial);
-      if (result) state.settings = normalizeFeedSettings(result);
+      if (gen === settingsGen && result) state.settings = normalizeFeedSettings(result);
     } catch (err) {
+      if (gen !== settingsGen) return; // 旧的那次失败了：别拿它回滚用户后来改的东西
       state.settings = before;
       showToast(err && err.message ? err.message : "设置保存失败");
     }
-    applySettings();
+    if (gen === settingsGen) applySettings();
   }
 
   /* ---------- 清屏播放 / 旋转全屏（用户 2026-09-23） ---------- */
@@ -1798,7 +1835,11 @@ export function mountFeed(view, options = {}) {
         // 危险操作的后端口令（缺了会被后端按"没确认"拒绝，不是摆设）
         confirm: choice === "file" ? "删除文件" : "",
       });
-      dropItem(entry.index);
+      // 等接口回来的这段时间用户可能已经切库/换挂载了：entry.index 是**旧列表**的下标，
+      // 直接 dropItem 会把新列表里恰好占着这个位置的另一条删掉（同类竞态）。只有"这个位置上
+      // 还是刚删掉的那条视频"才允许按它下架。
+      const here = state.items[entry.index];
+      if (here && String(here.id) === String(item.id)) dropItem(entry.index);
       showToast(choice === "file" ? "已删除记录和文件" : "已删除记录（文件保留）");
     } catch (err) {
       showToast(err && err.message ? err.message : "删除失败");
@@ -1945,6 +1986,7 @@ export function mountFeed(view, options = {}) {
   async function loadMore() {
     if (playlist) return false; // 剧场：数据是一次性给的，没有翻页
     if (state.loading || !state.hasMore) return false;
+    const gen = feedGen; // 发请求前记下世代：回来后不是这一代 ⇒ 属于旧库/旧挂载，整份丢弃
     state.loading = true;
     setLoading(true);
     try {
@@ -1953,6 +1995,8 @@ export function mountFeed(view, options = {}) {
         cursor: state.nextCursor || undefined,
         limit: BATCH,
       });
+      // 旧库的在飞响应：绝不 appendItems、绝不写 nextCursor（否则内容串库）
+      if (gen !== feedGen) return false;
       const list = result && result.data && Array.isArray(result.data.list) ? result.data.list : [];
       const meta = (result && result.meta) || {};
       state.nextCursor = meta.next_cursor || "";
@@ -1960,14 +2004,20 @@ export function mountFeed(view, options = {}) {
       appendItems(list, { has_more: !!meta.has_more && list.length > 0, settings: meta.settings });
       return true;
     } catch (err) {
+      // 旧库的报错也别糊到新库的页面上
+      if (gen !== feedGen) return false;
       // 用 detail()（带上接口与状态码）：这才是"能定位"的报错
       const message = err && typeof err.detail === "function" ? err.detail() : (err && err.message ? err.message : "加载失败");
       showFeedError(message);
       if (!tvMode()) showToast(message); // 手机上 Toast 够用；电视上靠那张卡
       return false;
     } finally {
-      state.loading = false;
-      setLoading(false);
+      // 只有"还是当前世代"才允许收 loading：否则会把新库刚发出去那一箭的 loading 清掉，
+      // 于是新库可以再发一箭，两条响应又开始打架（resetFeed 里那句 state.loading = false 是给新世代让路的）。
+      if (gen === feedGen) {
+        state.loading = false;
+        setLoading(false);
+      }
     }
   }
 
@@ -2019,9 +2069,13 @@ export function mountFeed(view, options = {}) {
 
   async function loadLibraries() {
     if (playlist) return; // 剧场没有切库
+    // 可访问库与"当前是哪个库"无关 ⇒ 只按"还挂载着"判（世代判据会把有效的响应丢掉，见 alive 的说明）。
     try {
-      state.libraries = asArray(await api.myLibraries());
+      const list = asArray(await api.myLibraries());
+      if (!alive) return;
+      state.libraries = list;
     } catch (err) {
+      if (!alive) return;
       state.libraries = [];
     }
     state.librariesLoaded = true;
@@ -2042,6 +2096,9 @@ export function mountFeed(view, options = {}) {
   }
 
   function resetFeed(libraryID, libraryName) {
+    // 换代：从这一刻起，旧库所有在飞请求的响应都作废（见 feedGen 的说明）。
+    // 必须在 loadMore() 之前 +1 —— 否则两条响应会同时往同一个 state.items 里写。
+    feedGen += 1;
     // 电视端：整批行要销毁重建，焦点会先"掉"一下 —— 先把焦点压到列表容器上（能编程聚焦、又不在
     // 空间导航的焦点图里），免得 tv.js 的"节点没了就补焦点"把焦点随便丢到底栏或某个按钮上。
     if (tvLayout) { try { tvList.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ } }
@@ -2051,6 +2108,8 @@ export function mountFeed(view, options = {}) {
     state.shells = [];
     state.active = -1;
     state.hasMore = true;
+    // 给新世代让路：不清它，下面那一箭会被 loadMore 自己的"已在加载"挡掉。
+    // 旧世代那次请求回来时不会再碰 loading（见 loadMore 的 finally 判据）。
     state.loading = false;
     state.nextCursor = "";
     state.scope = libraryID;
@@ -2575,6 +2634,8 @@ export function mountFeed(view, options = {}) {
   document.addEventListener("fullscreenchange", onFullscreenChange);
 
   return function cleanup() {
+    alive = false;
+    feedGen += 1; // 卸载后旧世代的一切在飞响应都作废（见 feedGen 的说明）
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     try { delete window.__zvExitFullscreen; } catch (err) { window.__zvExitFullscreen = null; }
     try { delete window.__zvBackHandler; } catch (err) { window.__zvBackHandler = null; }

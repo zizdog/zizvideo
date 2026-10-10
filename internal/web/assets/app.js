@@ -44,11 +44,27 @@ function canGoBack() { return trail.length > 0 || currentPath !== "/feed"; }
 let needsSetup = false;
 let current = null;
 
+// 浮层（侧栏/抽屉/目录选择器/确认框/上传面板/预览…）全部 append 到 **document.body**，不在 viewEl 里：
+// 路由切换的 clear(viewEl) 清不到它们，而它们又只靠用户点「关闭」才消失 ⇒ 上一页的浮层活到下一页。
+// 电视端更糟：tv.js 的 overlayRoots() 会把遥控器焦点锁进残留浮层里，用户得反复按返回才出得来。
+// 所以路由切换统一在这里清一次。名单与 tv.js 的 overlayRoots() 是同一份"什么算浮层"的判据。
+const OVERLAY_SELECTOR = ".side-panel, .side-mask, .modal-overlay, .picker-overlay";
+
+function closeOverlays() {
+  // 先通知一声再摘节点：等确认框结果的 await 得有个结果 —— 节点被摘掉的话那个 Promise 永远不 settle，
+  // 调用方就永远停在中间（confirm.js 收到这个事件当"用户取消"处理）。
+  try {
+    document.dispatchEvent(new CustomEvent("zv:overlay-teardown"));
+  } catch (err) { /* 极老的 WebView 没有 CustomEvent 也不影响下面的清理 */ }
+  for (const node of Array.from(document.querySelectorAll(OVERLAY_SELECTOR))) node.remove();
+}
+
 function teardown() {
   if (current && typeof current.cleanup === "function") {
     try { current.cleanup(); } catch (err) { /* 视图清理失败不阻塞路由 */ }
   }
   current = null;
+  closeOverlays();
 }
 
 // 播放页（首页/剧场播放/记录播放）：顶栏浮在视频上（菜单 + 搜索）。
