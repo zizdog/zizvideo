@@ -56,9 +56,9 @@ class Client:
         self.cookies = {}
         self.opener = urllib.request.build_opener()
 
-    def call(self, method, path, body=None, raw=False):
+    def call(self, method, path, body=None, raw=False, extra_headers=None):
         data = None
-        headers = {}
+        headers = dict(extra_headers or {})
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
@@ -164,8 +164,11 @@ def main():
     # 真视频：短视频库 2 条；短剧库 1 部剧（Season 1 两集 + 剧目录下散一集）
     shorts = os.path.join(media, "shorts")
     drama = os.path.join(media, "drama")
+    # 带空格+中文的路径：真实用户（外置盘名、NAS 共享名）几乎都长这样
+    spaced = os.path.join(media, "shorts 带空格 库")
     make_video(os.path.join(shorts, "散片一.mp4"))
     make_video(os.path.join(shorts, "散片二.mp4"))
+    make_video(os.path.join(spaced, "散片 三 号.mp4"))
     make_video(os.path.join(drama, "某剧", "Season 1", "01.mp4"))
     make_video(os.path.join(drama, "某剧", "Season 1", "02.mp4"))
     make_video(os.path.join(drama, "某剧", "剧集03.mp4"))
@@ -191,11 +194,12 @@ def main():
             return body["data"]
 
         short_lib = make_library("散片库", shorts, "short")
+        spaced_lib = make_library("带空格 的库", spaced, "short")
         drama_lib = make_library("短剧库", drama, "drama")
         if short_lib.get("kind") != "short" or drama_lib.get("kind") != "drama":
             fail("库类型没有如实返回：%s / %s" % (short_lib.get("kind"), drama_lib.get("kind")))
 
-        for lib in (short_lib, drama_lib):
+        for lib in (short_lib, spaced_lib, drama_lib):
             code, body = client.call("POST", "/api/v1/libraries/%s/scan" % lib["id"])
             if code not in (200, 202):
                 fail("触发扫描失败 %s: %s" % (code, body), tail(log))
@@ -213,10 +217,25 @@ def main():
         items = (body.get("data") or {}).get("list") or []
         titles = {it.get("title") or "" for it in items}
         libs = {it.get("library_id") for it in items}
-        if libs != {short_lib["id"]}:
+        if libs != {short_lib["id"], spaced_lib["id"]}:
             fail("首页出现了非短视频库的内容：%s（标题 %s）" % (libs, titles))
-        if len(items) != 2:
-            fail("首页应有短视频库的 2 条，实际 %d 条：%s" % (len(items), titles))
+        if len(items) != 3:
+            fail("首页应有短视频库的 3 条（含带空格库那条），实际 %d 条：%s" % (len(items), titles))
+
+        # ①b **带空格路径**那条：能列出来、且能按 Range 取到字节（扫描/探元数据/流式读取三段都不能栽在空格上）
+        spaced_item = next((it for it in items if it.get("library_id") == spaced_lib["id"]), None)
+        if not spaced_item:
+            fail("带空格库的条目没进首页：%s" % titles)
+        if not spaced_item.get("stream_url"):
+            fail("带空格库条目没有 stream_url：%s" % spaced_item)
+        code, raw = client.call("GET", spaced_item["stream_url"], raw=True,
+                                extra_headers={"Range": "bytes=0-1023"})
+        if code not in (200, 206):
+            fail("带空格路径的流式读取失败 %s：%s" % (code, raw[:200]), tail(log))
+        if code == 206 and len(raw) != 1024:
+            fail("Range 请求应回 1024 字节，实际 %d" % len(raw))
+        if not raw:
+            fail("带空格路径的流式读取返回了 0 字节")
 
         # ② 短剧库的媒体都在，且不在首页
         code, body = client.call("GET", "/api/v1/media?per_page=50&kind=drama")
@@ -256,8 +275,9 @@ def main():
                (((client.call("GET", "/api/v1/series")[1].get("data") or {}).get("list")) or [])):
             fail("短视频库里被建出了剧场 —— 库类型没有隔离")
 
-        print("✓ 端到端冒烟通过：首页只出短视频库（2 条）／短剧库 3 条不进首页／"
-              "目录自动建剧 1 部 3 集／季号在自动识别后仍在（S1E1、S1E2、散集季号空）")
+        print("✓ 端到端冒烟通过：首页只出短视频库（3 条，含**带空格路径**那条且能 Range 读取）／"
+              "短剧库 3 条不进首页／目录自动建剧 1 部 3 集／"
+              "季号在自动识别后仍在（S1E1、S1E2、散集季号空）")
     finally:
         proc.terminate()
         try:
