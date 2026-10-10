@@ -1,0 +1,19 @@
+[
+  {
+    "stepTitle": "zizvideo 安装设置",
+    "items": [
+      {
+        "type": "tips",
+        "label": "数据会放在应用私有目录（卸载时默认保留）。要放视频，请把文件放进共享目录 zizvideo/media，或在网页后台里把媒体根指到应用用户读得到的位置。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_extra_root",
+        "label": "额外的媒体根目录（可留空，例如 /vol1/1000/视频）",
+        "rules": [
+          { "pattern": "^$|^/.*", "message": "留空，或以 / 开头的绝对路径" }
+        ]
+      }
+    ]
+  }
+]

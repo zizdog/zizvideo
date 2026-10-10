@@ -1,0 +1,173 @@
+#!/bin/sh
+# ============================================================================
+#  zizvideo 飞牛 fnOS 应用的生命周期脚本（fnOS 用 /bin/sh 调它）
+#
+#  调用约定（官方文档 core-concepts/framework）：
+#    cmd/main start   启动服务；已在跑就直接返回 0（幂等）
+#    cmd/main stop    优雅停止，清理 pid/socket
+#    cmd/main status  在跑 → 0；没跑 → **3**；其它错误 → 1
+#    未知参数 → 1
+#
+#  路径一律走环境变量（**绝不硬编码 /var/apps/zizvideo**）：官方文档明确要求用
+#    TRIM_APPDEST / TRIM_PKGETC / TRIM_PKGVAR / TRIM_PKGTMP / TRIM_PKGHOME
+#  端口：TRIM_SERVICE_PORT（manifest 里的 service_port 由系统分配/校验）。
+#
+#  数据布局：
+#    $TRIM_PKGVAR        zizvideo.db / covers / inbox（重启保留；uninstall 默认不动）
+#    $TRIM_PKGETC/config.json   配置（不存在才生成；升级不动用户改过的）
+#    $TRIM_APPDEST/bin/zizvideo 二进制（打包时放进去的那个）
+# ============================================================================
+set -eu
+
+APPNAME="zizvideo"
+BIN_NAME="zizvideo"
+
+# 官方环境变量的**本地兜底**：只为了"能在开发机上跑逻辑/被门禁 source"，
+# 在真机上这些一定由 fnOS 提供（所以不写死成 /var/apps/...）。
+: "${TRIM_APPDEST:=${ZV_TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}}"
+: "${TRIM_PKGETC:=${ZV_TRIM_PKGETC:-$TRIM_APPDEST/etc}}"
+: "${TRIM_PKGVAR:=${ZV_TRIM_PKGVAR:-$TRIM_APPDEST/var}}"
+: "${TRIM_PKGTMP:=${ZV_TRIM_PKGTMP:-$TRIM_APPDEST/tmp}}"
+: "${TRIM_SERVICE_PORT:=${ZV_TRIM_SERVICE_PORT:-7799}}"
+: "${TRIM_TEMP_LOGFILE:=${ZV_TRIM_TEMP_LOGFILE:-}}"
+
+BIN="$TRIM_APPDEST/bin/$BIN_NAME"
+[ -x "$BIN" ] || BIN="$TRIM_APPDEST/$BIN_NAME"
+CONFIG="$TRIM_PKGETC/config.json"
+PIDFILE="$TRIM_PKGVAR/$APPNAME.pid"
+LOGFILE="$TRIM_PKGVAR/$APPNAME.log"
+
+log() { printf '%s\n' "$*"; }
+fail() { # 用户可见的错误先写进 TRIM_TEMP_LOGFILE（官方要求），再以非零退出
+  printf '%s\n' "$*" >&2
+  if [ -n "$TRIM_TEMP_LOGFILE" ]; then printf '%s\n' "$*" >>"$TRIM_TEMP_LOGFILE" 2>/dev/null || true; fi
+}
+
+running_pid() {
+  [ -f "$PIDFILE" ] || return 1
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s' "$pid"
+}
+
+write_config_if_missing() {
+  [ -f "$CONFIG" ] && return 0
+  mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$CONFIG" "$TRIM_SERVICE_PORT" "$TRIM_PKGVAR" "${wizard_extra_root:-}" <<'PYEOF'
+import json, os, sys
+cfg_path, port, var, extra = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+roots = [os.path.join(var, "media")]
+if extra and extra.startswith("/"):
+    roots.append(extra)
+cfg = {
+    "listen": "0.0.0.0:%s" % port,
+    "data_dir": var,
+    "database_path": os.path.join(var, "zizvideo.db"),
+    "media_allow_roots": roots,
+    "allow_register": False,
+}
+tmp = cfg_path + ".tmp"
+with open(tmp, "w") as handle:
+    json.dump(cfg, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+os.replace(tmp, cfg_path)
+PYEOF
+  else
+    # 没有 python3 也能装上（配置是纯 JSON，照着 schema 写一份）
+    cat >"$CONFIG" <<JSONEOF
+{
+  "listen": "0.0.0.0:$TRIM_SERVICE_PORT",
+  "data_dir": "$TRIM_PKGVAR",
+  "database_path": "$TRIM_PKGVAR/zizvideo.db",
+  "media_allow_roots": ["$TRIM_PKGVAR/media"],
+  "allow_register": false
+}
+JSONEOF
+  fi
+  return 0
+}
+
+cmd_start() {
+  if pid="$(running_pid)"; then
+    log "$APPNAME 已在运行（pid $pid）"
+    return 0
+  fi
+  [ -x "$BIN" ] || { fail "找不到可执行文件：$BIN"; return 1; }
+  mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC" "$TRIM_PKGTMP"
+  write_config_if_missing
+  # 后台常驻：官方要求长期服务**降权**运行（run-as=package，这里不做 sudo/root）
+  nohup "$BIN" --config "$CONFIG" >>"$LOGFILE" 2>&1 &
+  pid=$!
+  printf '%s' "$pid" >"$PIDFILE"
+  # 等它真起来（最多 ~15s），起不来就如实失败并把日志尾部给用户
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      fail "$APPNAME 启动后立刻退出，看日志：$LOGFILE"
+      tail -n 20 "$LOGFILE" 2>/dev/null >&2 || true
+      rm -f "$PIDFILE"
+      return 1
+    fi
+    if [ "$i" -ge 4 ] && curl -fsS --max-time 2 "http://127.0.0.1:$TRIM_SERVICE_PORT/readyz" >/dev/null 2>&1; then
+      log "$APPNAME 已启动（pid $pid，端口 $TRIM_SERVICE_PORT）"
+      return 0
+    fi
+    sleep 0.5; i=$((i + 1))
+  done
+  log "$APPNAME 已启动（pid $pid；/readyz 还没就绪，可能需要更久）"
+  return 0
+}
+
+cmd_stop() {
+  if ! pid="$(running_pid)"; then
+    log "$APPNAME 没有在运行"
+    rm -f "$PIDFILE" 2>/dev/null || true
+    return 0
+  fi
+  kill "$pid" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 40 ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.25; i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PIDFILE"
+  log "$APPNAME 已停止"
+  return 0
+}
+
+cmd_status() {
+  if pid="$(running_pid)"; then
+    log "$APPNAME 在运行（pid $pid）"
+    return 0
+  fi
+  log "$APPNAME 没有在运行"
+  return 3
+}
+
+# 安装/升级/卸载钩子（官方要求幂等；卸载**不擅自删用户数据**）
+case "${1:-}" in
+  install_callback)
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP"
+    exit 0 ;;
+  upgrade_callback)
+    # 只做兼容检查/迁移，不覆盖用户配置：配置不存在时才会由 start 生成
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR"
+    exit 0 ;;
+  uninstall_init)
+    "$0" stop >/dev/null 2>&1 || true
+    exit 0 ;;
+  uninstall_callback)
+    exit 0 ;;
+esac
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  status) cmd_status ;;
+  *) printf '用法: %s {start|stop|status}\n' "$0" >&2; exit 1 ;;
+esac

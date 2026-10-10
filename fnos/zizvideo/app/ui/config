@@ -1,0 +1,23 @@
+{
+  ".url": {
+    "zizvideo.main": {
+      "title": "zizvideo",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "7799",
+      "url": "/",
+      "allUsers": true
+    },
+    "zizvideo.admin": {
+      "title": "zizvideo 管理（后台）",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "7799",
+      "url": "/#/admin",
+      "allUsers": false,
+      "control.accessPerm": "readonly"
+    }
+  }
+}

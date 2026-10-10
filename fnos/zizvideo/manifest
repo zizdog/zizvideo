@@ -1,0 +1,16 @@
+appname=zizvideo
+version=0.6.5
+display_name=zizvideo
+desc=自托管短视频/短剧：一个二进制 + SQLite，自带网页端与电视端，手机 App 可选。
+source=thirdparty
+platform=x86
+maintainer=zizdog
+maintainer_url=https://github.com/zizdog/zizvideo
+os_min_version=1.0.0
+desktop_uidir=ui
+desktop_applaunchname=zizvideo.main
+service_port=7799
+checkport=true
+ctl_stop=true
+install_type=
+changelog=首个飞牛版本：独立端口服务，数据放在应用私有目录，卸载默认保留数据。

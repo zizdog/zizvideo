@@ -345,6 +345,88 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 飞牛 fnOS 应用包（`.fpk` 源目录）：结构 + 生命周期脚本的退出码 + 最小权限
+#
+# 为什么结构也要门禁：fnOS 的包格式（manifest / config/privilege / config/resource /
+# cmd/main / app/ui/config / 图标尺寸）是**外部契约**，装错键名或漏文件，用户那边只会
+# 看到"安装失败"，跟我们的源码毫无关系、极难查。这里只做**能用文件判定的部分**；
+# 真正的 `fnpack build` 与真机安装要在有 fnpack / 飞牛设备的地方做（脚本会如实说）。
+printf '==> 飞牛 fnOS 包（.fpk 源目录）：结构 + 生命周期 + 最小权限\n'
+FNOS="$ROOT/fnos/zizvideo"
+for f in manifest ICON.PNG ICON_256.PNG cmd/main config/privilege config/resource app/ui/config; do
+  [ -e "$FNOS/${f}" ] && ok "存在 ${f}" || bad "缺 ${f}（fnOS 判定包不完整）"
+done
+# manifest：键值格式（不是 JSON）+ 必需键 + 第三方来源 + 架构不是 all（我们带原生二进制）
+if awk -F= 'NF<2 || $1=="" {exit 1}' "$FNOS/manifest"; then
+  ok "manifest 是 key=value 格式（不是 JSON）"
+else
+  bad "manifest 有坏行（fnOS 的 manifest 不是 JSON，每行必须 key=value）"
+fi
+for k in appname version display_name desc source platform service_port desktop_applaunchname; do
+  grep -q "^${k}=" "$FNOS/manifest" && ok "manifest 有 ${k}" || bad "manifest 缺 ${k}"
+done
+grep -q '^source=thirdparty$' "$FNOS/manifest" && ok "source=thirdparty" || bad "source 必须是 thirdparty"
+grep -q '^platform=all$' "$FNOS/manifest" && bad "platform=all 但包里带原生二进制（应该 x86/arm）" || ok "platform 不是 all（带原生二进制时必须分架构）"
+# 权限：不许 root、必须 run-as=package
+if grep -q '"run-as"[[:space:]]*:[[:space:]]*"package"' "$FNOS/config/privilege"; then
+  ok "config/privilege 用 run-as=package（最小权限）"
+else
+  bad "config/privilege 没有 run-as=package"
+fi
+grep -qE '"run-as"[[:space:]]*:[[:space:]]*"root"' "$FNOS/config/privilege" && bad "不该用 root 常驻" || ok "没有用 root 常驻"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/privilege" && ok "privilege 是合法 JSON" || bad "privilege 不是合法 JSON"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/resource" && ok "resource 是合法 JSON" || bad "resource 不是合法 JSON"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/app/ui/config" && ok "app/ui/config 是合法 JSON" || bad "app/ui/config 不是合法 JSON"
+
+# 生命周期脚本：status 在没跑时必须是 3、未知参数必须 1（官方硬要求），且不许硬编码安装路径
+syntaxless="$FNOS/cmd/main"
+sh -n "$syntaxless" && ok "cmd/main 通过 sh -n" || bad "cmd/main 语法错"
+tmpd="$(mktemp -d)"
+if TRIM_APPDEST="$tmpd/app" TRIM_PKGETC="$tmpd/etc" TRIM_PKGVAR="$tmpd/var" \
+   TRIM_SERVICE_PORT=7799 sh "$syntaxless" status >/dev/null 2>&1; then
+  bad "没在跑时 status 竟然返回 0（官方要求 3）"
+else
+  rc=$?
+  [ "$rc" = "3" ] && ok "没在跑时 status 返回 3（官方要求）" || bad "status 返回 ${rc}，应为 3"
+fi
+if TRIM_APPDEST="$tmpd/app" TRIM_PKGETC="$tmpd/etc" TRIM_PKGVAR="$tmpd/var" sh "$syntaxless" bogus >/dev/null 2>&1; then
+  bad "未知参数竟然返回 0（官方要求非零）"
+else
+  ok "未知参数返回非零"
+fi
+rm -rf "$tmpd"
+if grep -v '^[[:space:]]*#' "$FNOS/cmd/main" | grep -q '/var/apps/'; then
+  bad "cmd/main 硬编码了 /var/apps/…（官方要求走 TRIM_* 变量）"
+else
+  ok "cmd/main 没有硬编码安装路径（用 TRIM_*）"
+fi
+# 图标尺寸（fnOS 要求 64x64 与 256x256）
+for spec in "ICON.PNG 64" "ICON_256.PNG 256"; do
+  set -- $spec
+  dim=$(python3 - "$FNOS/$1" <<'PYI'
+import struct, sys
+with open(sys.argv[1], "rb") as f:
+    head = f.read(24)
+if head[:8] != b"\x89PNG\r\n\x1a\n":
+    print("notpng"); raise SystemExit
+print(struct.unpack(">II", head[16:24])[0])
+PYI
+)
+  [ "$dim" = "$2" ] && ok "$1 是 ${2}x${2}" || bad "$1 是 ${dim}，应为 $2（fnOS 要求）"
+done
+# 打包脚本：没有 fnpack 时必须**如实失败**，不许伪造 .fpk
+if bash "$ROOT/tools/make-fnos-pkg.sh" --stage-only >/dev/null 2>&1; then
+  ok "make-fnos-pkg.sh --stage-only 能准备出待打包目录"
+else
+  bad "make-fnos-pkg.sh --stage-only 失败（待打包目录都出不来）"
+fi
+if command -v fnpack >/dev/null 2>&1; then
+  ok "本机有 fnpack，可以出真 .fpk（make-fnos-pkg.sh）"
+else
+  ok "本机没有 fnpack：脚本会如实报错而**不**伪造 .fpk（真机打包待有 fnpack 的机器）"
+fi
+
+# ---------------------------------------------------------------------------
 fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
   (
     export HOME="$SB/home-fda"

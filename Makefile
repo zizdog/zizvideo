@@ -5,6 +5,7 @@
 GO        ?= go
 VERSION   ?= 0.6.5-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
+FPK_ARCH  ?= amd64              # 飞牛 .fpk 的架构（x86 设备居多）
 # Linux 产物（用户 2026-10-11："完善独立部署…含 Linux/systemd 路径"、飞牛 NAS 用得上）。
 # 与 darwin 分开：**不签名**（Linux 没有 codesign），也**不进 manifest.json** —— 那份是面板的
 # 契约，只认 darwin 且按 arch 选包，同 arch 塞两个平台会让面板装错平台。Linux 走独立的
@@ -136,6 +137,10 @@ publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini
 # 2026-10-11 审计抓到：操作者以为做了字节级复验。现在真传下去。
 DEEP ?= 0
 export VERIFY_DEEP = $(DEEP)
+
+# ⚠️ 目标名不能叫 `fnos`：仓库里有个**目录** fnos/，make 会认为目标已存在而跳过配方。
+fpk: ## 打飞牛（fnOS）应用包：准备待打包目录 + 有 fnpack 就出 .fpk（FPK_ARCH=amd64|arm64）
+	@bash tools/make-fnos-pkg.sh --arch $(FPK_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 
 smoke: ## 端到端冒烟：真二进制 + 真 ffmpeg + 临时数据目录，跑一遍短视频/短剧全链路
 	@python3 tools/smoke-e2e.py
