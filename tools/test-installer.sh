@@ -818,6 +818,65 @@ else
   note_skip "没有 dist/zizvideo，跳过真实例自查"
 fi
 
+# --as-daemon：在**守护进程上下文**里探媒体根（macOS 一次性 launchd 作业；全用假 sudo/launchctl）
+printf '==> 部署自查脚本的 --as-daemon（守护进程上下文探测）\n'
+DA="$(mktemp -d)"; mkdir -p "$DA/daemons" "$DA/data" "$DA/media"
+printf '#!/bin/sh\nexec "$@"\n' >"$DA/fake-sudo"; chmod 0755 "$DA/fake-sudo"
+cat >"$DA/fake-launchctl" <<'FAKELC'
+#!/bin/sh
+if [ "$1" = "bootstrap" ]; then
+  plist=""
+  for a in "$@"; do case "$a" in *.plist) plist="$a" ;; esac; done
+  if [ -n "$plist" ]; then
+    outp=$(awk '/StandardOutPath/{getline; gsub(/.*<string>|<\/string>.*/,""); print; exit}' "$plist")
+    if [ -n "$outp" ]; then printf '%s\n' "$ZV_FAKE_PROBE_JSON" >"$outp"; fi
+  fi
+fi
+exit 0
+FAKELC
+chmod 0755 "$DA/fake-launchctl"
+printf '{"listen":"127.0.0.1:7797","data_dir":"%s/data","database_path":"%s/data/zizvideo.db","media_allow_roots":["%s/media"]}\n' "$DA" "$DA" "$DA" >"$DA/config.json"
+da_run() { ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN="$DA/fake-sudo" ZV_FAKE_LAUNCHCTL="$DA/fake-launchctl" \
+  ZV_SYSTEM_DAEMON_DIR="$DA/daemons" ZV_ACCESS_PROBE_WAIT=0 ZV_FAKE_PROBE_JSON="$1" \
+  bash "$ROOT/tools/verify-deploy.sh" --config "$DA/config.json" --bin /bin/echo --no-service --as-daemon 2>&1; }
+out="$(da_run '{"path":"x","readable":true}')"
+case "$out" in
+  *"✓ 守护进程读得到"*) ok "守护进程上下文读得到时如实报 ✓" ;;
+  *) bad "--as-daemon 没报成功：$(printf '%s' "$out" | tail -2)" ;;
+esac
+out="$(da_run '{"path":"x","readable":false,"reason":"未授予"}')"
+case "$out" in
+  *"✗ 守护进程读不到"*) ok "守护进程上下文读不到时如实报 ✗" ;;
+  *) bad "--as-daemon 没报读不到：$(printf '%s' "$out" | tail -2)" ;;
+esac
+case "$out" in
+  *"完全磁盘访问"*) ok "读不到时给出「完全磁盘访问」的处置指引" ;;
+  *) bad "读不到时没有处置指引" ;;
+esac
+left="$(ls -1 "$DA/daemons" 2>/dev/null | wc -l | tr -d ' ')"
+[ "$left" = "0" ] && ok "一次性探测作业的 plist 没残留" || bad "残留了 $left 个探测 plist"
+# 拿不到 sudo 时必须**如实拒绝**（不能猜一个"读不到/读得到"给用户）。
+# ⚠️ 用一个**只会失败**的 sudo 垫片来模拟"没有 sudo"——决不能让门禁去调真 sudo（铁律 1）。
+mkdir -p "$DA/shim"
+printf '#!/bin/sh\nexit 1\n' >"$DA/shim/sudo"; chmod 0755 "$DA/shim/sudo"
+# ⚠️ 门禁在别处 `export ZV_FAKE_SUDO=1` 了 ⇒ 这里必须显式 -u 摘掉，才真的走到"没有 sudo"分支
+out="$(env -u ZV_FAKE_SUDO -u ZV_FAKE_SUDO_BIN PATH="$DA/shim:$PATH" ZV_SYSTEM_DAEMON_DIR="$DA/daemons" \
+  ZV_FAKE_LAUNCHCTL="$DA/fake-launchctl" \
+  bash "$ROOT/tools/verify-deploy.sh" --config "$DA/config.json" --bin /bin/echo --no-service --as-daemon 2>&1 || true)"
+case "$out" in
+  *"拿不到 sudo"*) ok "没有 sudo 时明确说"无法在守护进程上下文里探"（不猜结论）" ;;
+  *"✓ 守护进程读得到"*|*"✗ 守护进程读不到"*) bad "没有 sudo 却给出了守护进程上下文的结论（凭空猜）" ;;
+  *) bad "没有 sudo 时应当如实说「拿不到 sudo」；实际输出：$(printf '%s' "$out" | sed -n '/媒体目录/,$p' | head -6 | tr '\n' ' ')" ;;
+esac
+# 不带 --as-daemon 时要明确提示"这只是当前身份"
+out="$(ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN="$DA/fake-sudo" ZV_FAKE_LAUNCHCTL="$DA/fake-launchctl" \
+  ZV_SYSTEM_DAEMON_DIR="$DA/daemons" bash "$ROOT/tools/verify-deploy.sh" --config "$DA/config.json" --bin /bin/echo --no-service 2>&1)"
+case "$out" in
+  *"当前身份"*"--as-daemon"*) ok "默认明确标注"当前身份 ≠ 守护进程"并指向 --as-daemon" ;;
+  *) bad "默认没有把"身份不同"讲清楚" ;;
+esac
+rm -rf "$DA"
+
 # 发行目录里的 linux 产物：必须是**静态** ELF 且架构对（极简 NAS 上没有 ld.so/glibc）
 RELVER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 for pair in "amd64 62" "arm64 183"; do

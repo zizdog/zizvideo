@@ -19,6 +19,7 @@ CONFIG=""
 BIN=""
 PORT=""
 NO_SERVICE=0
+AS_DAEMON=0
 OS="$(uname -s)"
 # 容器里没有 launchd/systemd：不显式给 --no-service 时也自动跳过（否则会误报一条 ✗）
 if [ -f /.dockerenv ] || grep -qa 'docker\|containerd\|kubepods' /proc/1/cgroup 2>/dev/null; then
@@ -33,6 +34,7 @@ while [ $# -gt 0 ]; do
     --bin) BIN="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --no-service) NO_SERVICE=1; shift ;;   # 容器/无 init 系统的环境（或不想管服务状态时）
+    --as-daemon) AS_DAEMON=1; shift ;;     # 在**守护进程自己的上下文**里探媒体根（macOS 需 sudo）
     --help|-h) usage; exit 0 ;;
     *) echo "!! 未知参数：$1（--help 看用法）" >&2; exit 2 ;;
   esac
@@ -194,6 +196,58 @@ fi
 
 # ---------------------------------------------------------------------------
 hdr "媒体目录可读性（扫描能不能看到你的视频）"
+# 在守护进程上下文里探一个路径（macOS）：写一个**一次性** launchd 作业让 launchd 直接执行
+# `zizvideo check-access <路径>`，读它写出的那行 JSON，然后 bootout + 删 plist。
+# 为什么必须绕这一下：TCC 把访问权归给**发起进程** —— 我们在用户的终端里跑，终端可能已授权（或根本没有），
+# 用它读测出来的**不是守护进程的权限**。
+# 需要 sudo（要写 /Library/LaunchDaemons 并 bootstrap 系统域）；拿不到就**如实拒绝**，不猜。
+probe_in_daemon_context() { # $1 = 路径；回显一行 JSON（失败回显空）
+  root="$1"
+  command -v launchctl >/dev/null 2>&1 || return 1
+  if [ "${ZV_FAKE_SUDO:-}" != "1" ] && ! sudo -n true 2>/dev/null; then
+    return 2   # 需要密码/没有 sudo：交由调用方如实告知
+  fi
+  SUDO="sudo"
+  [ "${ZV_FAKE_SUDO:-}" = "1" ] && SUDO="${ZV_FAKE_SUDO_BIN:-sudo}"
+  LC_BIN="${ZV_FAKE_LAUNCHCTL:-launchctl}"
+  label="com.zizvideo.accessprobe.$$"
+  daemon_dir="$(dirname "${ZV_SYSTEM_DAEMON_DIR:-/Library/LaunchDaemons}/x")"
+  tmp="$(mktemp)"
+  plist="$daemon_dir/${label}.plist"
+  cat >"$tmp.plist" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array>
+    <string>${BIN}</string><string>check-access</string><string>${root}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>${tmp}</string>
+  <key>StandardErrorPath</key><string>${tmp}</string>
+</dict></plist>
+PLISTEOF
+  if [ "$SUDO" = "sudo" ]; then
+    # 复制失败 = 拿不到权限（sudo 需要密码 / 被策略拒），与"作业跑了但没产出"是两回事
+    sudo cp "$tmp.plist" "$plist" 2>/dev/null || { rm -f "$tmp" "$tmp.plist"; return 2; }
+    sudo "$LC_BIN" bootstrap system "$plist" >/dev/null 2>&1 || true
+    sleep "${ZV_ACCESS_PROBE_WAIT:-2}"
+    sudo "$LC_BIN" bootout "system/${label}" >/dev/null 2>&1 || true
+    out="$(sudo cat "$tmp" 2>/dev/null | grep '^{' | head -1 || true)"
+    sudo rm -f "$plist" >/dev/null 2>&1 || true
+  else
+    cp "$tmp.plist" "$plist" 2>/dev/null || { rm -f "$tmp" "$tmp.plist"; return 1; }
+    "$LC_BIN" bootstrap system "$plist" >/dev/null 2>&1 || true
+    sleep "${ZV_ACCESS_PROBE_WAIT:-2}"
+    "$LC_BIN" bootout "system/${label}" >/dev/null 2>&1 || true
+    out="$(cat "$tmp" 2>/dev/null | grep '^{' | head -1 || true)"
+    rm -f "$plist" >/dev/null 2>&1 || true
+  fi
+  rm -f "$tmp" "$tmp.plist"
+  printf '%s' "$out"
+  [ -n "$out" ]
+}
+
 probe_one() { # $1 = 路径；回显 "readable reason"
   if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && id -u zizvideo >/dev/null 2>&1; then
     # 以**服务身份**探（最接近真实运行时；不是在 root 身份下自欺欺人）
@@ -212,8 +266,23 @@ if [ -x "$BIN" ] && [ -n "${roots:-}" ] && [ "${roots:-}" != "?" ]; then
       *) bad "读不到：$r —— $line" ;;
     esac
   done
-  if [ "$OS" = "Darwin" ]; then
-    note "以上是**当前身份**的探测结果；守护进程的身份未必相同（安装器的权限阶段会在守护进程上下文里再探一次）"
+  if [ "$OS" = "Darwin" ] && [ "$AS_DAEMON" = "1" ]; then
+    printf '\n  以**守护进程上下文**复探（一次性 launchd 作业）：\n'
+    for r in "${root_arr[@]}"; do
+      dline="$(probe_in_daemon_context "$r")"
+      drc=$?
+      case "$drc" in
+        2) note "拿不到 sudo，无法在守护进程上下文里探（**这不是"读不到"**）。请自己跑一次：
+           sudo bash $0 --config \"$CONFIG\" --bin \"$BIN\" --as-daemon" ;;
+      esac
+      case "$dline" in
+        *'"readable":true'*) ok "守护进程读得到：$r" ;;
+        '') [ "$drc" = "2" ] || bad "守护进程上下文没有产出结果：${r}（看 /var/log 或重跑）" ;;
+        *) bad "守护进程读不到：${r} —— ${dline}（去「系统设置 → 隐私与安全性 → 完全磁盘访问」把 ${BIN} 加进去）" ;;
+      esac
+    done
+  elif [ "$OS" = "Darwin" ]; then
+    note "以上是**当前身份**的探测结果；守护进程的身份未必相同 —— 要**可信**答案就加 --as-daemon（macOS 需 sudo，会写一次性 launchd 作业）"
     fda="$("$BIN" check-access --fda 2>/dev/null | head -1)"
     case "$fda" in
       *'"readable":true'*) note "完全磁盘访问探测：${fda}（启发式，别当判决）" ;;
