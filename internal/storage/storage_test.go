@@ -423,3 +423,62 @@ func TestResetStaleTranscodes(t *testing.T) {
 		t.Fatalf("第二次不应再有可清项，实际 %v", again)
 	}
 }
+
+// TestListProgressReturnsFullMediaRow：三条查询路径（MediaByPath / mediaJoin / ListProgress）
+// 必须返回**同样的** Media —— 2026-10-10 审计发现 ListProgress 手抄的列清单漏了
+// transcode_state/transcode_note/loudness_lufs，于是"历史"里这两条新功能的字段恒为空。
+func TestListProgressReturnsFullMediaRow(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "db", "zizvideo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	lib := newLib("lib_1", "库", t.TempDir())
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	user := &domain.User{ID: "usr_1", Username: "u", DisplayName: "U", Role: domain.RoleUser,
+		Status: domain.StatusActive, PasswordHash: "x", CreatedAt: domain.NowString()}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatal(err)
+	}
+	m := &domain.Media{ID: "med_1", LibraryID: lib.ID, Path: "/lib/a.mp4", Title: "A", Size: 10,
+		Container: "mov", Codecs: domain.Codecs{Video: "h264", Audio: "aac"},
+		Width: 640, Height: 360, DurationMS: 1000, Status: domain.MediaReady}
+	if err := db.InsertMedia(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetMediaTranscode("med_1", domain.TranscodeFailed, "编码器不支持"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateMediaLoudness("med_1", -17.5); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertProgress(&domain.Progress{UserID: user.ID, MediaID: "med_1",
+		PositionMS: 4200, DurationMS: 1000, UpdatedAt: domain.NowString()}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, medias, err := db.ListProgress(domain.LibraryScope{All: true}, user.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(medias) != 1 {
+		t.Fatalf("应返回 1 条，实际 %d", len(medias))
+	}
+	got := medias[0]
+	if got.TranscodeState != domain.TranscodeFailed || got.TranscodeNote != "编码器不支持" {
+		t.Fatalf("ListProgress 丢了转码字段：state=%q note=%q（列清单漂移）", got.TranscodeState, got.TranscodeNote)
+	}
+	if got.LoudnessLUFS != -17.5 {
+		t.Fatalf("ListProgress 丢了响度字段：%v", got.LoudnessLUFS)
+	}
+	// 与单条读路径逐字段对齐（同一份列清单 ⇒ 必须一致）
+	ref, err := db.GetMediaIn(domain.LibraryScope{All: true}, "med_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *ref != got {
+		t.Fatalf("两条路径返回的 Media 不一致：\n单条=%+v\n历史=%+v", *ref, got)
+	}
+}

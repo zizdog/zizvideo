@@ -68,11 +68,11 @@ func (db *DB) ListProgress(scope domain.LibraryScope, userID string, limit int) 
 	w, sargs := scopeWhere(scope, "m.library_id")
 	args := append([]any{userID}, sargs...)
 	args = append(args, limit)
+	// ⚠️ media 那段列**必须**用 mediaColsQ：这里以前手抄了一份（少了
+	// transcode_state/transcode_note/loudness_lufs）⇒ "历史"列表拿到的 Media 缺字段。
+	// 加列时只改 mediaCols/mediaColsQ 与 mediaScanTargets（审计结构性 #1）。
 	rows, err := db.Query(`SELECT p.media_id, p.position_ms, p.duration_ms, p.completed, p.updated_at,
-			m.id, m.library_id, m.path, m.title, m.size, m.mtime_ns, m.container,
-			m.video_codec, m.audio_codec, m.width, m.height, m.duration_ms, m.bitrate, m.fps,
-			m.status, m.error_class, m.error_message, COALESCE(m.missing_since,''),
-			m.created_at, m.updated_at
+			`+mediaColsQ+`
 		FROM watch_progress p JOIN media m ON m.id = p.media_id
 		WHERE p.user_id = ? AND m.deleted_at IS NULL`+w+`
 		ORDER BY p.updated_at DESC LIMIT ?`, args...)
@@ -86,11 +86,9 @@ func (db *DB) ListProgress(scope domain.LibraryScope, userID string, limit int) 
 		var p domain.Progress
 		var m domain.Media
 		var completed int
-		if err := rows.Scan(&p.MediaID, &p.PositionMS, &p.DurationMS, &completed, &p.UpdatedAt,
-			&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
-			&m.Codecs.Video, &m.Codecs.Audio, &m.Width, &m.Height, &m.DurationMS, &m.Bitrate,
-			&m.FPS, &m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince,
-			&m.CreatedAt, &m.UpdatedAt); err != nil {
+		targets := append([]any{&p.MediaID, &p.PositionMS, &p.DurationMS, &completed, &p.UpdatedAt},
+			mediaScanTargets(&m)...)
+		if err := rows.Scan(targets...); err != nil {
 			return nil, nil, err
 		}
 		p.UserID = userID

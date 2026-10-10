@@ -24,12 +24,23 @@ const mediaColsQ = `m.id, m.library_id, m.path, m.title, m.size, m.mtime_ns, m.c
 	m.status, m.error_class, m.error_message, COALESCE(m.missing_since,''), m.created_at, m.updated_at,
 	m.transcode_state, m.transcode_note, m.loudness_lufs`
 
-func scanMedia(s interface{ Scan(...any) error }) (*domain.Media, error) {
-	var m domain.Media
-	if err := s.Scan(&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
+// mediaScanTargets 返回与 mediaCols/mediaColsQ **同序**的扫描目标。
+//
+// ⚠️ 存在的理由（2026-10-10 审计的结构性问题 #1）：列清单以前在三处手写
+// （mediaCols / mediaColsQ / social.go 的 ListProgress 内联），加一列就会漏改一处 ——
+// 事实上 ListProgress 已经漏了 transcode_state/transcode_note/loudness_lufs，
+// 于是"历史"列表拿到的 Media 缺这两条新功能的字段。以后加列只改 mediaCols(+Q) 与这里，
+// 并且有一条测试（TestListProgressReturnsFullMediaRow）盯着三条查询路径返回同样的值。
+func mediaScanTargets(m *domain.Media) []any {
+	return []any{&m.ID, &m.LibraryID, &m.Path, &m.Title, &m.Size, &m.MtimeNS, &m.Container,
 		&m.Codecs.Video, &m.Codecs.Audio, &m.Width, &m.Height, &m.DurationMS, &m.Bitrate, &m.FPS,
 		&m.Status, &m.ErrorClass, &m.ErrorMessage, &m.MissingSince, &m.CreatedAt, &m.UpdatedAt,
-		&m.TranscodeState, &m.TranscodeNote, &m.LoudnessLUFS); err != nil {
+		&m.TranscodeState, &m.TranscodeNote, &m.LoudnessLUFS}
+}
+
+func scanMedia(s interface{ Scan(...any) error }) (*domain.Media, error) {
+	var m domain.Media
+	if err := s.Scan(mediaScanTargets(&m)...); err != nil {
 		return nil, err
 	}
 	return &m, nil
