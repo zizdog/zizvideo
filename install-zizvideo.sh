@@ -96,6 +96,7 @@ zizvideo 独立部署安装器
   install-zizvideo.sh --upgrade   [--system|--user] [--dry-run]
   install-zizvideo.sh --uninstall [--system|--user] [--dry-run]
   install-zizvideo.sh --purge     [--system|--user] [--dry-run]
+  install-zizvideo.sh --verify    [--system|--user]     # 只体检当前部署，不改任何东西
   install-zizvideo.sh --version | --help
 
 模式：
@@ -111,6 +112,9 @@ zizvideo 独立部署安装器
   签名：镜像同目录有 zizvideo-codesign.crt 时导入系统钥匙串并复核签名，外置盘完全磁盘访问授权一次跨升级有效；
         证书指纹写死在本脚本里，对不上直接拒绝（不把来路不明的根证书装进系统）；
         镜像没有 crt 则降级为未签名部署，每次升级都要重新授权。
+  --verify：不安装、不升级，只把当前部署体检一遍 —— 二进制能不能跑、配置能不能解析、服务在不在
+        跑、/readyz 通不通、**每个媒体根在守护进程上下文里读不读得到**（复用安装时那套一次性
+        launchd 作业，结论可信；拿不到 sudo 会如实说不给结论）。退出码 0=全过、1=有 ✗。
   完全磁盘访问（TCC）：装完会**在守护进程自己的上下文里**（一次性 launchd 作业）去读你在 config 里配的
         媒体根；读不到就打印「系统设置 → 隐私与安全性 → 完全磁盘访问」的引导、在 Finder 里选中二进制，
         并等你授权后复验（默认最多 60s；`ZV_ACCESS_PROBE_WAIT=0` 只报告不等待，供无人值守）。
@@ -130,6 +134,7 @@ parse_args() {
       --upgrade) ACTION="upgrade" ;;
       --uninstall) ACTION="uninstall" ;;
       --purge) ACTION="purge" ;;
+      --verify) ACTION="verify" ;;
       --mirror) shift; [ $# -gt 0 ] || die "--mirror 缺参数"; MIRROR="$1" ;;
       --mirror=*) MIRROR="${1#--mirror=}" ;;
       --listen) shift; [ $# -gt 0 ] || die "--listen 缺参数"; LISTEN="$1"; LISTEN_GIVEN=1 ;;
@@ -1301,6 +1306,105 @@ do_uninstall() {
   say "卸载完成。"
 }
 
+# --verify：只体检，不改任何东西。复用安装时那套"在守护进程上下文里探"的实现，
+# 所以结论与安装时一致；两处实现（本函数与 tools/verify-deploy.sh --as-daemon）应给出同样的判定。
+do_verify() {
+  VERIFY_PASS=0; VERIFY_FAIL=0
+  vok()  { VERIFY_PASS=$((VERIFY_PASS + 1)); say "  ✓ $*"; }
+  vbad() { VERIFY_FAIL=$((VERIFY_FAIL + 1)); say "  ✗ $*"; }
+
+  say "== 二进制"
+  if [ -x "$BIN" ]; then
+    vok "可执行：$BIN"
+    vv="$("$BIN" --version 2>&1 | head -1)"
+    case "$vv" in *"zizvideo "*) vok "--version：$vv" ;; *) vbad "--version 输出异常：$vv" ;; esac
+  else
+    vbad "找不到可执行文件：${BIN}（装过吗？还是换过 --user/--system？）"
+  fi
+
+  say "== 配置"
+  if [ -f "$CONFIG_PATH" ]; then
+    vok "配置存在：$CONFIG_PATH"
+    if command -v python3 >/dev/null 2>&1; then
+      if cfg_out="$(python3 - "$CONFIG_PATH" <<'PYCFG' 2>&1
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+roots = [r for r in (cfg.get("media_allow_roots") or []) if isinstance(r, str) and r.startswith("/")]
+# 一行一个字段：路径里可能有空格（macOS 的 "Application Support" 就是），用空格分隔会被切碎
+print(cfg.get("listen") or "")
+print(cfg.get("data_dir") or "")
+print(",".join(roots))
+PYCFG
+)"; then
+        vok "配置能解析"
+        VLISTEN="$(printf '%s\n' "$cfg_out" | sed -n 1p)"
+        VDATA="$(printf '%s\n' "$cfg_out" | sed -n 2p)"
+        VROOTS="$(printf '%s\n' "$cfg_out" | sed -n 3p)"
+        [ -n "$VLISTEN" ] && vok "listen=$VLISTEN" || vbad "配置里没有 listen"
+        if [ -n "$VDATA" ] && [ -d "$VDATA" ]; then
+          [ -w "$VDATA" ] && vok "数据目录可写：$VDATA" || say "  · 数据目录当前用户不可写（守护进程身份可能可以）：$VDATA"
+        else
+          vbad "数据目录不存在：${VDATA:-（配置里没写）}"
+        fi
+        [ -n "$VROOTS" ] && vok "媒体根：$VROOTS" || vbad "media_allow_roots 是空的（建不了媒体库）"
+      else
+        vbad "配置不是合法 JSON：$cfg_out"
+      fi
+    else
+      say "  · 没有 python3，跳过配置内容检查"
+    fi
+  else
+    vbad "配置不存在：$CONFIG_PATH"
+  fi
+
+  say "== 服务"
+  vstate="$(lc print "$DOMAIN/$LABEL" 2>/dev/null | awk -F' = ' '/state =/{print $2; exit}')"
+  case "$vstate" in
+    running) vok "launchd $DOMAIN/$LABEL 在 running" ;;
+    "") vbad "launchd 里没有 $DOMAIN/${LABEL}（没装上 / plist 坏了 / 装的是另一种模式？）" ;;
+    *) vbad "launchd $DOMAIN/$LABEL 状态是 ${vstate}（不是 running）" ;;
+  esac
+
+  say "== 健康端点"
+  if [ -n "${VLISTEN:-}" ]; then
+    vhost="${VLISTEN%:*}"; vport="${VLISTEN##*:}"
+    case "$vhost" in ""|"0.0.0.0"|"::"|"[::]") vhost="127.0.0.1" ;; esac
+    if curl -fsS --max-time 5 "http://$vhost:$vport/readyz" >/dev/null 2>&1; then
+      vok "http://$vhost:$vport/readyz 回 200"
+    else
+      vbad "http://$vhost:$vport/readyz 没回 200（服务没起 / 端口不对 / 只绑了别的地址）"
+    fi
+  else
+    say "  · 读不到 listen，跳过"
+  fi
+
+  say "== 媒体根可读性（在**守护进程上下文**里探，这个结论才可信）"
+  if [ -n "${VROOTS:-}" ]; then
+    oldifs="$IFS"; IFS=','; set -f   # 关掉通配展开：路径里出现 * 也不该被 glob 吃掉
+    for r in $VROOTS; do
+      line="$(probe_access_in_daemon_context "$r")"
+      prc=$?
+      case "$prc" in
+        2) say "  · 拿不到 sudo，无法在守护进程上下文里探 ${r}（**这不等于读不到**）—— 请 sudo 重跑 --verify" ;;
+        *) case "$line" in
+             *'"readable":true'*) vok "守护进程读得到：$r" ;;
+             '') vbad "守护进程上下文没有产出结果：$r" ;;
+             *) vbad "守护进程读不到：${r}（去「系统设置 → 隐私与安全性 → 完全磁盘访问」把 $BIN 加进去）" ;;
+           esac ;;
+      esac
+    done
+    IFS="$oldifs"; set +f
+  else
+    say "  · 没有配置媒体根，跳过"
+  fi
+
+  say ""
+  say "== 结论：$VERIFY_PASS 项通过，$VERIFY_FAIL 项失败"
+  [ "$VERIFY_FAIL" -eq 0 ] || { say "有 ✗ 项：按上面每条的提示处理后重跑 --verify"; return 1; }
+  say "当前部署看起来是好的。"
+  return 0
+}
+
 main() {
   parse_args "$@"
   derive_paths                      # FAKE_SUDO 已在加载时按 ZV_FAKE_SUDO 定好（见文件头变量区）
@@ -1308,6 +1412,7 @@ main() {
     install|upgrade) do_install_or_upgrade ;;
     uninstall) do_uninstall keep-data ;;
     purge) do_uninstall purge ;;
+    verify) do_verify ;;
     *) die "未知动作：$ACTION" ;;
   esac
 }

@@ -759,6 +759,75 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 安装器 --verify 与自查脚本 --as-daemon：两个**独立实现**在同一场景下必须给出同样判定
+#
+# 这两处都会回答"守护进程到底读不读得到媒体根"（安装器复用安装时那套一次性 launchd 作业，
+# 自查脚本是另一份实现）。两份实现给出不同答案 = 用户会拿到互相矛盾的结论，比只有一份更糟。
+printf '==> 安装器 --verify（单文件体检）+ 与自查脚本结论一致\n'
+VA="$(mktemp -d)"; mkdir -p "$VA/home/Library/Application Support/zizvideo" "$VA/bin" "$VA/daemons" "$VA/media"
+printf '{"listen":"127.0.0.1:7796","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/media"]}\n' "$VA" "$VA" "$VA" \
+  >"$VA/home/Library/Application Support/zizvideo/config.json"
+printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }; exit 0\n' >"$VA/bin/zizvideo"
+chmod 0755 "$VA/bin/zizvideo"
+cat >"$VA/lc" <<'FAKELC2'
+#!/bin/sh
+if [ "$1" = "print" ]; then echo "	state = running"; exit 0; fi
+if [ "$1" = "bootstrap" ]; then
+  plist=""
+  for a in "$@"; do case "$a" in *.plist) plist="$a" ;; esac; done
+  if [ -n "$plist" ]; then
+    outp=$(awk '/StandardOutPath/{getline; gsub(/.*<string>|<\/string>.*/,""); print; exit}' "$plist")
+    if [ -n "$outp" ]; then printf '%s\n' "$ZV_FAKE_PROBE_JSON" >"$outp"; fi
+  fi
+fi
+exit 0
+FAKELC2
+chmod 0755 "$VA/lc"
+inst_verify() {
+  HOME="$VA/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VA/lc" \
+    ZV_SYSTEM_DAEMON_DIR="$VA/daemons" ZV_INSTALL_ROOT="$VA" ZV_ACCESS_PROBE_WAIT=0 \
+    ZV_FAKE_PROBE_JSON="$1" bash "$ROOT/install-zizvideo.sh" --verify 2>&1
+}
+vd_verify() {
+  ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VA/lc" \
+    ZV_SYSTEM_DAEMON_DIR="$VA/daemons" ZV_ACCESS_PROBE_WAIT=0 ZV_FAKE_PROBE_JSON="$1" \
+    bash "$ROOT/tools/verify-deploy.sh" --config "$VA/home/Library/Application Support/zizvideo/config.json" \
+      --bin "$VA/bin/zizvideo" --as-daemon --no-service 2>&1
+}
+cfg_before="$(cat "$VA/home/Library/Application Support/zizvideo/config.json")"
+out_i="$(inst_verify '{"path":"x","readable":true}')"
+out_v="$(vd_verify '{"path":"x","readable":true}')"
+case "$out_i" in
+  *"守护进程读得到"*) ok "安装器 --verify 报「守护进程读得到」（可读场景）" ;;
+  *) bad "安装器 --verify 没报读得到：$(printf '%s' "$out_i" | grep -E '读|✗' | head -2)" ;;
+esac
+case "$out_i" in
+  *"守护进程读不到"*) bad "安装器 --verify 在可读场景也报了读不到（自相矛盾）" ;;
+  *) ok "安装器 --verify 可读场景没有误报读不到" ;;
+esac
+case "$out_v" in
+  *"✓ 守护进程读得到"*) ok "自查脚本 --as-daemon 在**同一场景**报读得到（两份实现一致）" ;;
+  *) bad "自查脚本在同一场景给出不同结论：$(printf '%s' "$out_v" | grep -E '守护进程' | head -2)" ;;
+esac
+out_i="$(inst_verify '{"path":"x","readable":false}')"
+inst_rc=$?
+out_v="$(vd_verify '{"path":"x","readable":false}')"
+case "$out_i" in
+  *"守护进程读不到"*) ok "安装器 --verify 报「守护进程读不到」（不可读场景）" ;;
+  *) bad "安装器 --verify 没报读不到：$(printf '%s' "$out_i" | grep -E '读|✗' | head -2)" ;;
+esac
+case "$out_v" in
+  *"✗ 守护进程读不到"*) ok "自查脚本在同一场景也报读不到（两份实现一致）" ;;
+  *) bad "自查脚本给出不同结论：$(printf '%s' "$out_v" | grep -E '守护进程' | head -2)" ;;
+esac
+# --verify 必须"只读"：不改配置、不在 LaunchDaemons 里留东西
+[ "$cfg_before" = "$(cat "$VA/home/Library/Application Support/zizvideo/config.json")" ] \
+  && ok "--verify 不改动配置（只体检）" || bad "--verify 动了配置文件"
+[ "$(ls -1 "$VA/daemons" 2>/dev/null | wc -l | tr -d ' ')" = "0" ] \
+  && ok "--verify 没在 LaunchDaemons 里留东西" || bad "--verify 留了 plist 残渣"
+rm -rf "$VA"
+
+# ---------------------------------------------------------------------------
 # 部署自查脚本（tools/verify-deploy.sh）+ 发布件的 Linux 二进制必须真是静态 ELF
 # ---------------------------------------------------------------------------
 # 脚本开头的注释块里混进一行"代码"会**自我递归**（我这一轮真踩了：用法块里漏写一个 `#`，
