@@ -8,6 +8,9 @@ set -euo pipefail
 INSTALLER_VERSION="1.1.0"
 DEFAULT_MIRROR="https://mirror.zizdog.com:8888"
 DEFAULT_LABEL="com.zizvideo.server"
+# ⚠️ 面板托管的 label 只在这里出现一次，互斥检查就靠它（见 check_conflicts）：
+# **面板若改托管 label，这里必须同步**，否则两条作业会同时抢 7766（面板侧文档
+# `../zizpanel/docs/zizvideo-接入契约.md` §6.1-2 / §6.2 / §8⑨）。
 PANEL_LABEL="cn.zizpanel.zizvideo"
 APP_ID="zizvideo"
 HEALTH_PATH="/healthz"
