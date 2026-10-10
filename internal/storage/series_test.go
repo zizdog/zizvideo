@@ -272,3 +272,32 @@ func TestApplySeriesEpisodesNeverErasesKnownNumbers(t *testing.T) {
 		t.Fatalf("手动集号被识别器覆盖了：%+v", eps[0])
 	}
 }
+
+// TestSeriesRefsSkipSoftDeletedMedia：软删的媒体会留下 series_media 悬挂链接（有意保留：
+// 文件回来时手动归入的剧场关系还在），但"这条在哪个剧场"必须只算活着的媒体，
+// 否则调用方会拿到一个已经不存在的归属。
+func TestSeriesRefsSkipSoftDeletedMedia(t *testing.T) {
+	db := openFeedDB(t)
+	lib := newLib("lib_1", "剧库", "/tmp/drama")
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	_, ids := seedSeries(t, db, lib.ID, "某剧", 1)
+	refs, err := db.SeriesRefsByMedia(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs[ids[0]]) != 1 {
+		t.Fatalf("活着时应能查到归属，实际 %+v", refs)
+	}
+	if _, err := db.SoftDeleteMedia([]string{ids[0]}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err = db.SeriesRefsByMedia(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs[ids[0]]) != 0 {
+		t.Fatalf("软删后不该再报告归属，实际 %+v", refs)
+	}
+}

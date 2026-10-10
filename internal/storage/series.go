@@ -55,8 +55,12 @@ func (db *DB) SeriesRefsByMedia(mediaIDs []string) (map[string][]SeriesRef, erro
 		for _, id := range chunk {
 			args = append(args, id)
 		}
+		// media 也要 JOIN：软删的媒体会留下 series_media 悬挂链接（扫描只软删 media 行，
+		// 不动归属记录 —— 这是**有意**的：文件回来时手动归入的剧场关系还在）。但对外回答
+		// "这条在哪个剧场"时必须只算活着的媒体，否则调用方会拿到一个已经不存在的归属。
 		rows, err := db.Query(`SELECT sm.media_id, s.id, s.title FROM series_media sm
 			JOIN series s ON s.id = sm.series_id AND s.deleted_at IS NULL
+			JOIN media m ON m.id = sm.media_id AND m.deleted_at IS NULL
 			WHERE sm.media_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`)`, args...)
 		if err != nil {
 			return nil, err
