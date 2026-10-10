@@ -129,7 +129,11 @@ index: ## 只按现有版本目录重算索引（产物没重编时用）
 publish-app: ## 只发安卓客户端（APK + android.json），不动服务端（改的只有安卓代码时用）
 	@bash tools/publish-mirror.sh --app-only
 
+release-check: ## 发版前自检 dist 里的索引与产物是否对得平（sha256/size/签名/静态 ELF）
+	@bash tools/check-release-dir.sh
+
 publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini 面板接口）
+	@bash tools/check-release-dir.sh
 	@bash tools/publish-mirror.sh
 
 # DEEP=1 走整包下载复算（快验只比 Content-Length，发现不了"同长度被换过"）。

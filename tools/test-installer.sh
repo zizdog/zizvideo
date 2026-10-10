@@ -542,6 +542,72 @@ PYE
 done
 
 # ---------------------------------------------------------------------------
+# 发版前自检（tools/check-release-dir.sh）：索引与产物对不平时**必须**红
+printf '==> 发版前自检（索引 ↔ 产物）\n'
+CRD="$ROOT/tools/check-release-dir.sh"
+bash -n "$CRD" && ok "check-release-dir.sh 通过语法检查" || bad "check-release-dir.sh 语法错"
+# 造一个最小"发布目录"：正确时通过、把 sha 改坏后必须失败
+FAKE="$(mktemp -d)"; mkdir -p "$FAKE/apps/zizvideo/v9.9.9" "$FAKE/rel/v9.9.9"
+printf '#!/bin/sh\necho "zizvideo 9.9.9"\n' >"$FAKE/rel/v9.9.9/zizvideo_9.9.9_darwin_arm64"
+chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_darwin_arm64"
+# linux 那条必须放**真的静态 ELF**（否则"静态性"检查会替索引检查背锅，测出来的红不是我们要的红）
+REAL_LINUX="$ROOT/dist/apps/zizvideo/$RELVER/zizvideo_${RELVER}_linux_amd64"
+if [ -f "$REAL_LINUX" ]; then
+  cp "$REAL_LINUX" "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_amd64"
+  chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_amd64"
+  cp "$ROOT/dist/apps/zizvideo/$RELVER/zizvideo_${RELVER}_linux_arm64" "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_arm64"
+  chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_arm64"
+else
+  note_skip "没有 ${REAL_LINUX}，跳过发布目录自检的假目录用例"
+fi
+python3 - "$FAKE/rel/v9.9.9" <<'PYM'
+import hashlib, json, os, sys
+vdir = sys.argv[1]
+def row(name, arch):
+    p = os.path.join(vdir, name)
+    with open(p, "rb") as h:
+        d = hashlib.sha256(h.read()).hexdigest()
+    return {"name": name, "version": "9.9.9", "arch": arch, "sha256": d, "size": os.path.getsize(p)}
+rows = [row("zizvideo_9.9.9_darwin_arm64", "arm64")]
+json.dump({"app": "zizvideo", "version": "9.9.9", "assets": rows}, open(os.path.join(vdir, "manifest.json"), "w"))
+json.dump({"app": "zizvideo", "latest": "9.9.9", "assets": rows}, open(os.path.join(vdir, "..", "manifest.json"), "w"))
+linux = [row("zizvideo_9.9.9_linux_amd64", "amd64"), row("zizvideo_9.9.9_linux_arm64", "arm64")]
+json.dump({"app": "zizvideo", "platform": "linux", "latest": "9.9.9", "assets": linux},
+          open(os.path.join(vdir, "..", "linux.json"), "w"))
+PYM
+# 把 linux.json 里的 sha 改坏：**必须**红（这正是"发出去用户装不上"的那种事故）
+python3 - "$FAKE/rel/linux.json" <<'PYB'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["assets"][0]["sha256"] = "0" * 64
+json.dump(d, open(p, "w"))
+PYB
+crout="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
+case "$crout" in
+  *"sha256 不符"*) ok "索引 sha256 与产物不符时自检如实报错（指名道姓）" ;;
+  *) bad "sha 不符没有被点名报错：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
+esac
+# 顶层索引 latest 与版本目录不一致：也要红（面板会去装一个不存在的版本）
+python3 - "$FAKE/rel/manifest.json" <<'PYC'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["latest"] = "0.0.1"
+json.dump(d, open(p, "w"))
+PYC
+crout="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
+case "$crout" in
+  *"latest"*) ok "顶层 latest 与版本目录不符时自检如实报错" ;;
+  *) bad "latest 不符没有被报出来：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
+esac
+rm -rf "$FAKE"
+# 真实 dist（存在就顺手验一遍；不存在不阻塞）
+if [ -d "$ROOT/dist/apps/zizvideo/$RELVER" ]; then
+  bash "$CRD" >/dev/null 2>&1 && ok "当前 dist 的发布目录自检通过" || bad "当前 dist 的发布目录自检没过（跑 make release-check 看细节）"
+fi
+
+# ---------------------------------------------------------------------------
 fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
   (
     export HOME="$SB/home-fda"
