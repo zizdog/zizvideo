@@ -1309,7 +1309,8 @@ do_uninstall() {
 # --verify：只体检，不改任何东西。复用安装时那套"在守护进程上下文里探"的实现，
 # 所以结论与安装时一致；两处实现（本函数与 tools/verify-deploy.sh --as-daemon）应给出同样的判定。
 do_verify() {
-  VERIFY_PASS=0; VERIFY_FAIL=0
+  VERIFY_PASS=0; VERIFY_FAIL=0; VREADY="unknown"
+  VERIFY_READYZ="$(mktemp -t zv-verify-readyz.XXXXXX)"; trap 'rm -f "$VERIFY_READYZ"' EXIT
   vok()  { VERIFY_PASS=$((VERIFY_PASS + 1)); say "  ✓ $*"; }
   vbad() { VERIFY_FAIL=$((VERIFY_FAIL + 1)); say "  ✗ $*"; }
 
@@ -1369,11 +1370,42 @@ PYCFG
   if [ -n "${VLISTEN:-}" ]; then
     vhost="${VLISTEN%:*}"; vport="${VLISTEN##*:}"
     case "$vhost" in ""|"0.0.0.0"|"::"|"[::]") vhost="127.0.0.1" ;; esac
-    if curl -fsS --max-time 5 "http://$vhost:$vport/readyz" >/dev/null 2>&1; then
-      vok "http://$vhost:$vport/readyz 回 200"
-    else
-      vbad "http://$vhost:$vport/readyz 没回 200（服务没起 / 端口不对 / 只绑了别的地址）"
-    fi
+    vrcode="$(curl -s -o "$VERIFY_READYZ" -w '%{http_code}' --max-time 5 "http://$vhost:$vport/readyz" 2>/dev/null || true)"
+    [ -n "$vrcode" ] || vrcode=000
+    case "$vrcode" in
+      200) VREADY="ok"; vok "http://$vhost:$vport/readyz 回 200" ;;
+      503) VREADY="unready"
+           vbad "http://$vhost:$vport/readyz 回 503 —— **服务在跑，但自检没过**（不是服务没起来）"
+           # 逐项翻译（用户看到 503 的第一反应是重启服务，方向错）
+           if command -v python3 >/dev/null 2>&1; then
+             python3 - "$VERIFY_READYZ" <<'PYRZ2' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+checks = (d.get("data") or {}).get("checks") or {}
+hints = {"media_roots": "媒体根不存在或读不到：**目录不存在（挂盘了吗？）或权限不够**（用 `zizvideo check-access <目录>` 复核）",
+         "ffmpeg": "找到不 ffmpeg/ffprobe：装上（macOS: brew install ffmpeg；Debian: apt install ffmpeg）",
+         "db": "数据库打不开：数据目录不可写，或库文件损坏（看数据目录里的 pre-upgrade 备份）",
+         "disk": "磁盘空间不足：清理数据目录或扩容"}
+for k, v in checks.items():
+    if isinstance(v, dict) and "ok" in v:
+        bad = not (v.get("ok") or v.get("ready"))
+    elif isinstance(v, dict):
+        bad = any(str(st) != "ok" for st in v.values())
+    else:
+        bad = False
+    if bad:
+        print("  · 没过的一项：%s → %s" % (k, hints.get(k, "看 /readyz 原始输出")))
+        if isinstance(v, dict) and "ok" not in v:
+            for sub, st in v.items():
+                if str(st) != "ok":
+                    print("       %s：%s" % (sub, st))
+PYRZ2
+           fi ;;
+      *) VREADY="down"; vbad "http://$vhost:$vport/readyz 没有响应（服务没起 / 端口不对 / 只绑了别的地址）" ;;
+    esac
   else
     say "  · 读不到 listen，跳过"
   fi
@@ -1400,9 +1432,17 @@ PYCFG
 
   say ""
   say "== 结论：$VERIFY_PASS 项通过，$VERIFY_FAIL 项失败"
-  [ "$VERIFY_FAIL" -eq 0 ] || { say "有 ✗ 项：按上面每条的提示处理后重跑 --verify"; return 1; }
-  say "当前部署看起来是好的。"
-  return 0
+  if [ "$VERIFY_FAIL" -eq 0 ]; then
+    say "关键项全过（服务在跑且已就绪）。"
+    return 0
+  fi
+  # **区分"服务坏了"和"服务在跑但没就绪"**：这两件事该做的不一样（前者查日志/端口，后者挂盘/装 ffmpeg）。
+  # 退出码：0 全过 / 3 在跑但没就绪（可修） / 1 其它失败（见上与 tools/verify-deploy.sh 对齐）
+  case "${VREADY:-unknown}" in
+    unready) say "结论：**服务在跑，但没就绪**（按上面没过的那几项处理即可；不是服务坏了，先别重启）"; return 3 ;;
+    down) say "结论：**健康端点没有响应** —— 服务没起来 / 端口不对，先查服务状态与日志"; return 1 ;;
+    *) say "有 ✗ 项：按上面每条的提示处理后重跑 --verify"; return 1 ;;
+  esac
 }
 
 main() {

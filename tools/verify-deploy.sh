@@ -105,15 +105,23 @@ hdr "配置"
 if [ ! -f "$CONFIG" ]; then
   bad "找不到配置：$CONFIG"
 else
-  read -r listen data_dir db_path roots <<EOF
-$(python3 - "$CONFIG" <<'PYEOF' 2>/dev/null || echo "? ? ? ?"
+  # ⚠️ 一个字段一行：路径里可能有空格（macOS 的 "Application Support" 就是）。用空格分隔会把
+  # data_dir 切成 "/…/Library/Application"、把 media_allow_roots 和 database_path 粘在一起 ——
+  # 表现出来是"数据目录不存在 / 媒体根不存在"，看着像部署坏了，其实是这里读错了（坑 107 的同类）。
+  cfg_lines="$(python3 - "$CONFIG" <<'PYEOF' 2>/dev/null || printf '?\n?\n?\n?\n'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
-roots = ",".join(cfg.get("media_allow_roots") or [])
-print(cfg.get("listen") or "?", cfg.get("data_dir") or "?", cfg.get("database_path") or "?", roots or "?")
+roots = ",".join(r for r in (cfg.get("media_allow_roots") or []) if isinstance(r, str))
+print(cfg.get("listen") or "?")
+print(cfg.get("data_dir") or "?")
+print(cfg.get("database_path") or "?")
+print(roots or "?")
 PYEOF
-)
-EOF
+)"
+  listen="$(printf '%s\n' "$cfg_lines" | sed -n 1p)"
+  data_dir="$(printf '%s\n' "$cfg_lines" | sed -n 2p)"
+  db_path="$(printf '%s\n' "$cfg_lines" | sed -n 3p)"
+  roots="$(printf '%s\n' "$cfg_lines" | sed -n 4p)"
   ok "配置可解析：$CONFIG"
   [ -n "${listen:-}" ] && [ "$listen" != "?" ] && ok "listen=$listen" || bad "配置里读不到 listen"
   [ -n "$PORT" ] || PORT="${listen##*:}"
@@ -167,8 +175,10 @@ if [ -n "${PORT:-}" ]; then
   rcode="$(curl -s -o "$READYZ_BODY" -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
   body="$(cat "$READYZ_BODY" 2>/dev/null || true)"
   if [ "$rcode" = "000" ] || [ -z "$body" ]; then
+    READY="down"
     bad "$url 没有响应（服务没起来 / 端口不对 / 只绑了别的地址）"
   elif [ "$rcode" = "200" ]; then
+    READY="ok"
     ok "$url 回 200"
     printf '%s' "$body" | python3 -c 'import json,sys
 try:
@@ -197,6 +207,7 @@ for k, v in checks.items():
   else
     # 503 不是"服务坏了" —— 是"服务在跑，但自检没过"。逐条把没过的原因翻成人话，
     # 否则用户会去重启服务（方向错），实际要做的往往是"挂盘 / 建目录 / 装 ffmpeg"。
+    READY="unready"
     bad "$url 回 $rcode —— **服务在跑，但自检没过**（不是服务没起来）"
     printf '%s' "$body" | python3 -c 'import json,sys
 try:
@@ -339,8 +350,19 @@ fi
 # ---------------------------------------------------------------------------
 printf '\n== 结论：%d 项通过，%d 项失败，%d 条提醒\n' "$PASS" "$FAIL" "$NOTE"
 if [ "$FAIL" -gt 0 ]; then
-  printf '有 ✗ 项：先按上面每条括号里的提示处理，再重跑本脚本。\n' >&2
-  exit 1
+  # **区分"服务坏了"和"服务在跑但没就绪"**：这两件事用户该做的不一样（前者查日志/端口，后者挂盘/装 ffmpeg），
+  # 只报"有 ✗ 项"等于把判断推回给用户。退出码：0 全过 / 3 在跑但没就绪（可修） / 1 服务不可用 / 2 参数错。
+  case "${READY:-unknown}" in
+    unready)
+      printf '结论：**服务在跑，但没就绪**（按上面没过的那几项处理即可；不是服务坏了，先别重启）\n'
+      exit 3 ;;
+    down)
+      printf '结论：**健康端点没有响应** —— 服务没起来 / 端口不对 / 只绑了别的地址，先查服务状态与日志\n' >&2
+      exit 1 ;;
+    *)
+      printf '有 ✗ 项：先按上面每条括号里的提示处理，再重跑本脚本。\n' >&2
+      exit 1 ;;
+  esac
 fi
-printf '关键项全过。\n'
+printf '关键项全过（服务在跑且已就绪）。\n'
 exit 0

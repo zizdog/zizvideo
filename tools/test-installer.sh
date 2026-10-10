@@ -1098,6 +1098,70 @@ case "$fout" in
 esac
 kill "$msrv" 2>/dev/null || true; wait "$msrv" 2>/dev/null || true
 rm -rf "$FR"
+# 结论必须能区分"服务在跑但没就绪"（退出码 3）与"服务没起来"（1）：两件事该做的不一样。
+# 两个实现（安装器 --verify 与自查脚本）在**同一场景**要给出同样的退出码。
+VH="$(mktemp -d)"; mkdir -p "$VH/media" "$VH/home/Library/Application Support/zizvideo" "$VH/bin" "$VH/daemons"
+printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/media"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
+  >"$VH/home/Library/Application Support/zizvideo/config.json"
+# 假二进制要能回答 verifier 的两种调用：--version 与 check-access <路径>
+cat >"$VH/bin/zizvideo" <<'FAKEBIN'
+#!/bin/sh
+case "$1" in
+  --version) echo "zizvideo 9.9.9"; exit 0 ;;
+  check-access) printf '{"path":"%s","readable":true,"reason":"假二进制"}\n' "$2"; exit 0 ;;
+  *) exit 0 ;;
+esac
+FAKEBIN
+chmod 0755 "$VH/bin/zizvideo"
+cat >"$VH/lc" <<'FAKELC3'
+#!/bin/sh
+if [ "$1" = "print" ]; then echo "	state = running"; exit 0; fi
+if [ "$1" = "bootstrap" ]; then
+  plist=""
+  for a in "$@"; do case "$a" in *.plist) plist="$a" ;; esac; done
+  if [ -n "$plist" ]; then
+    outp=$(awk '/StandardOutPath/{getline; gsub(/.*<string>|<\/string>.*/,""); print; exit}' "$plist")
+    if [ -n "$outp" ]; then printf '%s\n' "${ZV_FAKE_PROBE_JSON:-{\"path\":\"x\",\"readable\":true}}" >"$outp"; fi
+  fi
+fi
+exit 0
+FAKELC3
+chmod 0755 "$VH/lc"
+# ① 健康场景（真服务在跑、媒体根存在）：两个实现都应给 0
+"$ROOT/dist/zizvideo" --config "$VH/home/Library/Application Support/zizvideo/config.json" >"$VH/srv.log" 2>&1 &
+vsrv=$!
+i=0; until curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null | grep -q 200 || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
+HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+rc_i=$?
+vout_ok="$(bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
+  --bin "$VH/bin/zizvideo" --no-service 2>&1)"
+rc_v=$?
+[ "$rc_i" = "0" ] && ok "健康场景：安装器 --verify 退出码 0" || bad "健康场景安装器 --verify 退出码 ${rc_i}（期望 0）"
+[ "$rc_v" = "0" ] && ok "健康场景：自查脚本退出码 0（两实现一致）" \
+  || bad "健康场景自查脚本退出码 ${rc_v}（期望 0）：$(printf '%s' "$vout_ok" | grep '✗' | head -3 | tr '\n' ' ')"
+kill "$vsrv" 2>/dev/null || true; wait "$vsrv" 2>/dev/null || true
+# ② 在跑但没就绪（媒体根不存在）：两个实现都应给 **3**（≠1，因为服务确实在跑）
+printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
+  >"$VH/home/Library/Application Support/zizvideo/config.json"
+"$ROOT/dist/zizvideo" --config "$VH/home/Library/Application Support/zizvideo/config.json" >"$VH/srv2.log" 2>&1 &
+vsrv2=$!
+i=0; until [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null || echo 000)" = "503" ] || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
+HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+rc_i2=$?
+bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
+  --bin "$VH/bin/zizvideo" --no-service >/dev/null 2>&1
+rc_v2=$?
+[ "$rc_i2" = "3" ] && ok "没就绪场景：安装器 --verify 退出码 3（在跑但没就绪，≠1）" || bad "安装器 --verify 退出码 ${rc_i2}（期望 3）"
+[ "$rc_v2" = "3" ] && ok "没就绪场景：自查脚本退出码 3（两实现一致）" || bad "自查脚本退出码 ${rc_v2}（期望 3）"
+kill "$vsrv2" 2>/dev/null || true; wait "$vsrv2" 2>/dev/null || true
+# ③ 服务没起来（把服务停掉再验）：应给 1（"服务不可用"，与"没就绪"区分开）
+HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+rc_i3=$?
+[ "$rc_i3" = "1" ] && ok "服务不可用场景：安装器 --verify 退出码 1（与"没就绪"区分）" || bad "安装器 --verify 退出码 ${rc_i3}（期望 1）"
+rm -rf "$VH"
 rm -rf "$CW"
 
 # ---------------------------------------------------------------------------
