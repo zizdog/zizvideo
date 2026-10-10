@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -14,7 +15,10 @@ import (
 
 // assetsFS holds the no-build frontend: plain ESM, hand-written CSS.
 //
-//go:embed all:assets
+// 明确列出要嵌的东西，**不用 `all:assets`**：`all:` 会把 .DS_Store 这类垃圾也嵌进二进制
+// 并对外 200（用户机器上生成的文件不该跟着发出去）。目录模式本身已经排除 . 和 _ 开头的文件。
+//
+//go:embed assets/index.html assets/app.css assets/app.js assets/favicon.svg assets/js
 var assetsFS embed.FS
 
 // Router builds the full handler tree: API first, static assets last.
@@ -200,12 +204,15 @@ func staticHandler(s *api.Server) http.Handler {
 	if err != nil {
 		panic(err)
 	}
+	// rootFS 用来 Stat（判断目录/有没有 index.html）；fsys 给 http.FileServer 用。
+	rootFS := fs.FS(sub)
 	fsys := http.FS(sub)
 	devMode := false
 	if dir := strings.TrimSpace(s.Cfg.AssetsDir); dir != "" {
 		// 目录不可用就退回内嵌（绝不因为一个调试开关把界面弄成 404）。
 		if st, serr := os.Stat(filepath.Join(dir, "index.html")); serr == nil && !st.IsDir() {
-			fsys = http.FS(os.DirFS(dir))
+			disk := os.DirFS(dir)
+			rootFS, fsys = disk, http.FS(disk)
 			devMode = true
 			s.Log.Warn("前端从磁盘读取（调试模式：改 CSS 刷新即生效，别在生产开）", "dir", dir)
 		} else {
@@ -214,6 +221,15 @@ func staticHandler(s *api.Server) http.Handler {
 	}
 	fileServer := http.FileServer(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 没有 index.html 的目录请求直接 404：http.FileServer 会回目录列表（把内部文件名摆出去）。
+		if rel := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/"); rel != "" {
+			if st, serr := fs.Stat(rootFS, rel); serr == nil && st.IsDir() {
+				if idx, ierr := fs.Stat(rootFS, path.Join(rel, "index.html")); ierr != nil || idx.IsDir() {
+					http.NotFound(w, r)
+					return
+				}
+			}
+		}
 		if devMode {
 			// 调试模式：不缓存、不发版本 ETag（本地文件会立刻变，缓存只会添乱）
 			w.Header().Set("Cache-Control", "no-store")

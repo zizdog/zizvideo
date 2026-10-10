@@ -425,7 +425,8 @@ func (s *Server) ensureSeriesDir(lib *domain.Library, title string) (string, err
 // Content-Range 给断点位置时可续传；读失败/超限/大小不符一律删掉 .part。
 func (s *Server) HandleUploadPut(w http.ResponseWriter, r *http.Request) {
 	// 大文件要跑很久：按面板同名思路把读截止时间往后推（保留上限，不清零）。
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(longUploadWindow))
+	// 这一步必须真到达 ResponseWriter（statusWriter 有 Unwrap），失败会记日志而不是被吞。
+	s.extendReadDeadline(w)
 
 	session, ok := s.Uploads.get(r.PathValue("id"))
 	if !ok {

@@ -19,6 +19,8 @@ import (
 // 规矩（都是踩过坑之后的结论）：
 //   - **先给清单再动手**：默认 dry run，界面把"要移动哪个文件、落到哪"摆出来，确认后才真移；
 //   - 只动**库根之内**的文件（ValidateMediaFile 同一套判据），库根外的原样不动；
+//   - **绝不覆盖**：目标名冲突（同一剧场两集都叫 01.mp4、目标目录里已有同名文件）就加序号避让，
+//     计划阶段算一遍、执行前再算一遍（dry run 与 apply 之间文件可能变）；覆盖 = 丢一个视频文件；
 //   - 同一卷直接 rename（快、原子）；跨卷才复制 + 回读大小一致 + 删源，任何一步失败都保留原文件；
 //   - 移完先 os.Stat 回读新路径，**确认文件真在那儿**才改数据库指向（RepointMediaPath 保留 id，
 //     所以进度/收藏/剧场关系都跟着走）。
@@ -37,6 +39,9 @@ type organizeItem struct {
 	Action string `json:"action"`
 	Moved  bool   `json:"moved,omitempty"`
 	Error  string `json:"error,omitempty"`
+	// want 是"按集名算出来的原始目标名"，只给执行阶段重算用，不进接口
+	// （it.To 可能已经被避让加过序号，必须从原始名再算一次，否则会越加越长）。
+	want string
 }
 
 // safeSegment 把剧场名变成安全的目录名：去掉路径分隔符和容易出事的字符，
@@ -55,20 +60,33 @@ func safeSegment(name string) string {
 	return out
 }
 
-// freePath 在目标已存在时找一个不冲突的名字：name (2).mp4 / name (3).mp4 …
-func freePath(path string) string {
-	if _, err := os.Stat(path); err != nil {
-		return path
-	}
+// reservePath 返回本次整理真正可用的目标名，并把它记进 used（本次已经排给谁了）。
+//
+// 两个坑一起堵（否则 os.Rename 会**静默覆盖**，一个视频文件就这么没了）：
+//   - 磁盘上已经有同名文件（库里有旧文件、或两次整理之间别人落了文件）⇒ 退到 name (2).mp4；
+//   - 本次计划/执行里已经排给别的集数（同一剧场两集都叫 01.mp4 就是这样）⇒ 同样要退号。
+//
+// 它在"移动之前"被调用，所以这个 os.Stat 同时就是移动前的存在性复核。
+func reservePath(path string, used map[string]bool) string {
 	ext := filepath.Ext(path)
 	base := strings.TrimSuffix(path, ext)
-	for i := 2; i < 1000; i++ {
-		cand := base + " (" + itoa(i) + ")" + ext
-		if _, err := os.Stat(cand); err != nil {
-			return cand
+	for i := 1; i < 1000; i++ {
+		cand := path
+		if i > 1 {
+			cand = base + " (" + itoa(i) + ")" + ext
 		}
+		if used[cand] {
+			continue
+		}
+		if _, err := os.Stat(cand); err == nil {
+			continue
+		}
+		used[cand] = true
+		return cand
 	}
-	return base + " (" + domain.NewID("x") + ")" + ext
+	cand := base + " (" + domain.NewID("x") + ")" + ext
+	used[cand] = true
+	return cand
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -108,6 +126,8 @@ func (s *Server) HandleOrganizeSeries(w http.ResponseWriter, r *http.Request) {
 	targetDir := filepath.Join(lib.RootPath, safeSegment(series.Title))
 	items := make([]organizeItem, 0, len(medias))
 	plan := make([]organizeItem, 0, len(medias))
+	// planned 记住本次清单里已经排出去的目标名：同一剧场两集同名时，第二个从这里退号。
+	planned := map[string]bool{}
 	for i := range medias {
 		m := medias[i]
 		it := organizeItem{MediaID: m.ID, Title: m.Title, From: m.Path}
@@ -128,7 +148,8 @@ func (s *Server) HandleOrganizeSeries(w http.ResponseWriter, r *http.Request) {
 				it.To = m.Path
 				break
 			}
-			it.To = freePath(want)
+			it.want = want
+			it.To = reservePath(want, planned)
 			it.Action = "move"
 			plan = append(plan, it)
 		}
@@ -153,9 +174,24 @@ func (s *Server) HandleOrganizeSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	moved, failed := 0, 0
+	// used 是"这次执行已经用掉的目标名"：dry run 与 apply 是两个请求，中间可能有别的整理/上传
+	// 落了同名文件，所以每条 move 之前都要重算一次目标名（reservePath 里顺带做存在性复核）。
+	used := map[string]bool{}
 	for i := range items {
 		it := &items[i]
 		if it.Action != "move" {
+			continue
+		}
+		want := it.want
+		if want == "" {
+			want = it.To
+		}
+		it.To = reservePath(want, used)
+		if _, err := os.Stat(it.From); err != nil {
+			// 计划之后源文件没了：如实报，不静默跳过（否则用户以为整理成功了）
+			it.Error = "原文件不在了：" + err.Error()
+			failed++
+			s.Log.Warn("整理剧场目录失败", "media", it.MediaID, "from", it.From, "error", it.Error)
 			continue
 		}
 		if err := s.moveMediaFile(it.From, it.To); err != nil {
@@ -209,7 +245,8 @@ func (s *Server) moveMediaFile(from, to string) error {
 		return err
 	}
 	defer src.Close()
-	dst, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	// O_EXCL：跨卷这条路径也不许盖掉同名文件（目标名刚复核过，真撞上就如实报错，别覆盖）
+	dst, err := os.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

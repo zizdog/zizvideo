@@ -134,3 +134,55 @@ func TestSeriesOrganizeMovesIntoSubdirAndRepoints(t *testing.T) {
 		t.Fatalf("库根外的文件应标成 outside：%+v", res2.Items)
 	}
 }
+
+// 同名集数门禁：同一剧场两集都叫 01.mp4（S01/01.mp4、S02/01.mp4），整理后目标文件名撞车。
+//
+// 判据：两个文件都必须还在、内容各自正确、两条 DB 记录指向**不同**路径。
+// 这条门禁存在的理由：os.Rename 遇到同名目标是静默覆盖 —— 一个视频文件丢掉、
+// 两条记录指向同一路径，而接口还报"两条都成功"，用户根本看不出丢了东西。
+func TestSeriesOrganizeNeverOverwritesSameNameEpisode(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	lib := e.newLibrary("剧库", e.Root)
+	a := e.newMedia(lib.ID, filepath.Join(e.Root, "S01", "01.mp4"), []byte("AAA"))
+	b := e.newMedia(lib.ID, filepath.Join(e.Root, "S02", "01.mp4"), []byte("BBB"))
+	series := e.createSeriesIn("同名剧", lib.ID)
+	if added, _ := e.addSeriesMediaDetailed(series.ID, a.ID, b.ID); added != 2 {
+		t.Fatalf("应该加入 2 集，实际 %d", added)
+	}
+
+	done := e.organize(series.ID, true)
+	if done.Moved != 2 || done.Failed != 0 {
+		t.Fatalf("两集都该移动成功：%+v", done)
+	}
+	wantDir := filepath.Join(e.Root, "同名剧")
+	paths := map[string]string{}
+	for _, item := range e.seriesDetail(series.ID).List {
+		paths[item.Media.ID] = item.Media.Path
+	}
+	if paths[a.ID] == "" || paths[b.ID] == "" {
+		t.Fatalf("剧场详情里缺记录（记录被换了）：%v", paths)
+	}
+	if paths[a.ID] == paths[b.ID] {
+		t.Fatalf("两条记录指向同一路径（有一个文件被覆盖了）：%s", paths[a.ID])
+	}
+	for _, c := range []struct{ id, want string }{{a.ID, "AAA"}, {b.ID, "BBB"}} {
+		got := paths[c.id]
+		if filepath.Dir(got) != wantDir {
+			t.Fatalf("没整理进目标目录：%s", got)
+		}
+		raw, err := os.ReadFile(got)
+		if err != nil {
+			t.Fatalf("文件不在了 %s: %v", got, err)
+		}
+		if string(raw) != c.want {
+			t.Fatalf("文件内容被串了：%s = %q，期望 %q", got, raw, c.want)
+		}
+	}
+	if _, err := os.Stat(a.Path); err == nil {
+		t.Fatalf("原位置还有残留：%s", a.Path)
+	}
+	if _, err := os.Stat(b.Path); err == nil {
+		t.Fatalf("原位置还有残留：%s", b.Path)
+	}
+}

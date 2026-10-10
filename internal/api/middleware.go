@@ -141,6 +141,21 @@ func (w *statusWriter) Flush() {
 	}
 }
 
+// Unwrap 是 http.ResponseController 的透传口：没有它，NewResponseController(w) 就停在包装层，
+// SetReadDeadline 直接返回 ErrNotSupported —— 大文件上传的"延长读超时"整个变成死代码
+// （ReadTimeout=15s 管住整个请求体，任何总时长 >15s 的上传必断）。
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// extendReadDeadline 给大文件上传把读截止时间往后推（保留上限，不清零）。
+// 推不动时**不能吞掉**：真服务器上这等于把长上传交给 ReadTimeout 砍掉，
+// 所以至少留一条日志，退回"按分片超时"（每片都得在 ReadTimeout 内结束）。
+func (s *Server) extendReadDeadline(w http.ResponseWriter) {
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(longUploadWindow)); err != nil {
+		s.Log.Warn("上传：延长读超时失败，退回按分片超时（单片超过 ReadTimeout 会被截断）",
+			"error", err.Error())
+	}
+}
+
 func newRequestID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])

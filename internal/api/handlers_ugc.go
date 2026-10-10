@@ -299,7 +299,7 @@ func (s *Server) HandleUGCCancel(w http.ResponseWriter, r *http.Request) {
 // HandleUGCPut 边收边写：offset 必须与磁盘上已有字节数一致，收够 size 才算完成。
 // 网络中断不清 .zvpart（这正是续传的意义），错误里带上真实进度。
 func (s *Server) HandleUGCPut(w http.ResponseWriter, r *http.Request) {
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(longUploadWindow))
+	s.extendReadDeadline(w)
 	it, err := s.ugcItemFor(r, r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)

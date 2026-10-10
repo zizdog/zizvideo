@@ -30,7 +30,13 @@ type taskRowBody struct {
 
 func (e *env) taskList() []taskRowBody {
 	e.t.Helper()
-	res, env, raw := e.do(http.MethodGet, "/api/v1/admin/tasks", nil)
+	return e.taskListQuery("")
+}
+
+// taskListQuery 带查询串拉任务列表（limit 门禁用）。
+func (e *env) taskListQuery(query string) []taskRowBody {
+	e.t.Helper()
+	res, env, raw := e.do(http.MethodGet, "/api/v1/admin/tasks"+query, nil)
 	if res.StatusCode != http.StatusOK {
 		e.t.Fatalf("任务列表失败 %d: %s", res.StatusCode, raw)
 	}
@@ -39,6 +45,36 @@ func (e *env) taskList() []taskRowBody {
 	}
 	decodeInto(e.t, env.Data, &out)
 	return out.List
+}
+
+// limit 门禁：/admin/tasks 的 limit 必须在本接口夹住（1..200，缺省 50）。
+//
+// 这条门禁存在的理由：这条列表口是唯一直接吃 Atoi 结果的（没走 queryInt），
+// 全靠 storage 兜底 —— 而兜底是">200 就退回 50"，与"夹到 200"语义不同，
+// 客户端要 999 条会静默拿到 50 条。判据用真实行数：先塞 205 条任务。
+func TestTaskListLimitClamped(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	for i := 0; i < 205; i++ {
+		if err := e.DB.CreateJobTask(&domain.JobTask{
+			ID: domain.NewID("job"), Kind: domain.JobKindTranscode,
+			Trigger: domain.JobTriggerManualMedia, Total: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(e.taskListQuery("?limit=999")); got != 200 {
+		t.Fatalf("limit=999 应当夹到上限 200，实际 %d 条", got)
+	}
+	if got := len(e.taskListQuery("?limit=0")); got != 1 {
+		t.Fatalf("limit=0 应当夹到下限 1，实际 %d 条", got)
+	}
+	if got := len(e.taskListQuery("?limit=-5")); got != 1 {
+		t.Fatalf("limit=-5 应当夹到下限 1，实际 %d 条", got)
+	}
+	if got := len(e.taskListQuery("?limit=abc")); got != 50 {
+		t.Fatalf("limit 不合法应当用缺省 50，实际 %d 条", got)
+	}
 }
 
 func (e *env) enqueueTranscode(mediaID string) string {

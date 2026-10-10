@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zizdog/zizvideo/internal/config"
 )
@@ -403,5 +405,46 @@ func TestUploadSameNamePolicyAndIdempotent(t *testing.T) {
 	}
 	if n := mediaTotal(t, e); n != 2 {
 		t.Fatalf("重复上传后媒体总数 = %d, 期望 2", n)
+	}
+}
+
+// fakeDeadlineWriter 模拟"支持 SetReadDeadline 的连接"（http.ResponseWriter 的真实实现，
+// 比如 *http.response，都有这个方法）。包装层不透传时，调用根本到不了这里。
+type fakeDeadlineWriter struct {
+	*httptest.ResponseRecorder
+	seen bool
+	got  time.Time
+}
+
+func (f *fakeDeadlineWriter) SetReadDeadline(t time.Time) error {
+	f.seen, f.got = true, t
+	return nil
+}
+
+// 读超时门禁：全局中间件把 ResponseWriter 包成 statusWriter 之后，
+// http.NewResponseController 必须还能透传到真正的 ResponseWriter。
+//
+// 这条门禁存在的理由：statusWriter 少了 Unwrap()，SetReadDeadline 就直接返回
+// ErrNotSupported 而被 `_ =` 吞掉 —— ReadTimeout=15s 会管住整个请求体，
+// 任何总时长超过 15s 的大文件上传都会被腰斩（两个 PUT 口都依赖这一步）。
+func TestUploadReadDeadlineReachesRealWriter(t *testing.T) {
+	e := newEnv(t)
+	fw := &fakeDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	var innerErr error
+	h := e.S.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 与 HandleUploadPut / HandleUGCPut 里的 s.extendReadDeadline 是同一条调用
+		innerErr = http.NewResponseController(w).SetReadDeadline(time.Now().Add(time.Hour))
+	}))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/uploads/up_x/0", nil)
+	h.ServeHTTP(fw, req)
+
+	if innerErr != nil {
+		t.Fatalf("经中间件后 SetReadDeadline 失败（statusWriter 没透传）：%v", innerErr)
+	}
+	if !fw.seen {
+		t.Fatal("SetReadDeadline 没有到达真正的 ResponseWriter：延长读超时是死代码")
+	}
+	if fw.got.IsZero() || fw.got.Before(time.Now()) {
+		t.Fatalf("读截止时间没有被往后推：%v", fw.got)
 	}
 }

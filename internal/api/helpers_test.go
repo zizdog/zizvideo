@@ -374,6 +374,10 @@ func (e *env) newLibrary(name, root string) *domain.Library {
 // newMedia writes a real file and registers it as a ready media row.
 func (e *env) newMedia(libID, path string, content []byte) *domain.Media {
 	e.t.Helper()
+	// 必须是绝对路径：相对路径会把测试垃圾写进源码树（internal/api/a.mp4 就这么被误提交过）。
+	if !filepath.IsAbs(path) {
+		e.t.Fatalf("newMedia 需要绝对路径，收到相对路径 %q —— 会写进源码树", path)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		e.t.Fatal(err)
 	}

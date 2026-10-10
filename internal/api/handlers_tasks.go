@@ -49,13 +49,10 @@ func runningStatus(s string) bool {
 }
 
 // HandleListTasks 合并列出最近的后台任务（新的在前）。
+// limit 在这里就夹住（1..200，缺省 50）：storage 的兜底是">200 就退回 50"，
+// 语义与"夹到 200"不同，不能靠它当唯一一道（那是兜底，不是本接口的契约）。
 func (s *Server) HandleListTasks(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
-		}
-	}
+	limit := queryInt(r, "limit", 50, 1, 200)
 	names := map[string]string{}
 	if libs, err := s.DB.ListLibraries(); err == nil {
 		for i := range libs {

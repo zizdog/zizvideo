@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,5 +71,56 @@ func TestAssetsDirServesDiskFrontendInDevMode(t *testing.T) {
 				t.Fatalf("ETag 存在性 = %v，期望 %v", hasETag, c.wantETag)
 			}
 		})
+	}
+}
+
+// 静态层门禁：内嵌清单 + 目录请求。三件事一起盯：
+// 点文件（.DS_Store 之流）不许进二进制、更不许对外 200（embed 用明确清单，不是 all:）；
+// 没有 index.html 的目录请求直接 404（http.FileServer 默认回目录列表，等于把内部文件名摆出去）；
+// 清单式的 embed 不能漏东西 —— 源码树里每个非隐藏资产都必须真的能从二进制里取到。
+//
+// 这条门禁存在的理由：①泄露用户机器上的垃圾文件，②暴露目录结构，③漏一个 JS 就是整页白屏。
+func TestStaticLayerServesAssetsOnly(t *testing.T) {
+	e := newEnv(t)
+
+	res, _ := e.callRaw(http.MethodGet, "/.DS_Store", "", nil, nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /.DS_Store = %d，期望 404（点文件不该嵌进二进制）", res.StatusCode)
+	}
+	res, raw := e.callRaw(http.MethodGet, "/js/", "", nil, nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /js/ = %d，期望 404（不许回目录列表）：%s", res.StatusCode, raw[:min(120, len(raw))])
+	}
+	res, raw = e.callRaw(http.MethodGet, "/", "", nil, nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(raw), "<html") {
+		t.Fatalf("GET / = %d，首页必须还在：%s", res.StatusCode, raw[:min(120, len(raw))])
+	}
+
+	err := filepath.WalkDir(assetsDir(), func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		name := d.Name()
+		if name != "." && strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(assetsDir(), p)
+		if rerr != nil {
+			return rerr
+		}
+		res, _ := e.callRaw(http.MethodGet, "/"+filepath.ToSlash(rel), "", nil, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("资产 %s 取不到（HTTP %d）—— 内嵌清单漏了它", rel, res.StatusCode)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

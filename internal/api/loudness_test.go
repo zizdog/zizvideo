@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"net/http"
+	"path/filepath"
 	"testing"
 )
 
@@ -11,7 +12,8 @@ func TestMediaGainDBExposed(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	lib := e.newLibrary("标配库", t.TempDir())
-	m := e.newMedia(lib.ID, "a.mp4", []byte("x"))
+	// 绝对路径：相对路径会把测试文件写进源码树（internal/api/a.mp4 就是这么被提交的）。
+	m := e.newMedia(lib.ID, filepath.Join(lib.RootPath, "a.mp4"), []byte("x"))
 
 	// 没量过：gain_db 必须是 0（不许凭空调音量）
 	_, env, raw := e.do(http.MethodGet, "/api/v1/media/"+m.ID, nil)
