@@ -21,6 +21,9 @@ import pw from "/tmp/node_modules/playwright/index.js"; // tools/ui-test.sh 的�
 const { chromium } = pw;
 
 const BASE = process.env.ZV_UI_BASE || "http://127.0.0.1:7799";
+// 素材目录也要能换：脚本原来把 /tmp/zv-ui/media 写死了，换个实例跑就会被
+// "路径不在允许的媒体根目录内"挡下来（2026-10-11 踩到）。默认仍是老路径。
+const MEDIA = process.env.ZV_UI_MEDIA || "/tmp/zv-ui/media";
 const USER = "smokeadmin";
 const PASS = "smoke-pass-123";
 
@@ -72,8 +75,8 @@ async function seed() {
     }
     throw new Error("建库 " + name + " 失败 " + res.status + " " + res.text);
   };
-  const shortLib = await mk("散片库", "/tmp/zv-ui/media/shorts", "short");
-  const dramaLib = await mk("短剧库", "/tmp/zv-ui/media/drama", "drama");
+  const shortLib = await mk("散片库", MEDIA + "/shorts", "short");
+  const dramaLib = await mk("短剧库", MEDIA + "/drama", "drama");
   for (const lib of [shortLib, dramaLib]) {
     const started = await authed("/api/v1/libraries/" + lib.id + "/scan", { method: "POST" });
     if (started.status !== 202 && started.status !== 200) throw new Error("扫描失败 " + started.status + " " + started.text);
