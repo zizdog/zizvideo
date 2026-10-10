@@ -23,6 +23,7 @@ SB="$(mktemp -d -t zv-installer-test.XXXXXX)"
 trap 'rm -rf "$SB"' EXIT
 
 FAIL=0
+note_skip() { printf '   · %s\n' "$*"; }
 
 # ⚠️ 这个脚本会把 HOME 指到沙箱里（见下方 export HOME），而 Go 的模块缓存默认跟着 HOME 走
 # ⇒ 交叉编译会去空缓存里找依赖、然后去联网。这里在伪造之前把**真实**缓存位置记下来，
@@ -425,6 +426,71 @@ if command -v fnpack >/dev/null 2>&1; then
 else
   ok "本机没有 fnpack：脚本会如实报错而**不**伪造 .fpk（真机打包待有 fnpack 的机器）"
 fi
+
+# ---------------------------------------------------------------------------
+# 部署自查脚本（tools/verify-deploy.sh）+ 发布件的 Linux 二进制必须真是静态 ELF
+printf '==> 部署自查脚本 + Linux 发行件静态性\n'
+VD="$ROOT/tools/verify-deploy.sh"
+sh -n "$VD" 2>/dev/null || bash -n "$VD"
+if bash -n "$VD" 2>/dev/null; then ok "verify-deploy.sh 通过语法检查" ; else bad "verify-deploy.sh 语法错" ; fi
+# 配置不存在时必须**如实报 ✗ 且非零退出**（不许把"文件都没有"说成通过）
+if out=$(bash "$VD" --config "$SB/nope/config.json" --bin /bin/echo 2>&1); then
+  bad "配置文件不存在时竟然返回成功：$out"
+else
+  case "$out" in
+    *"找不到配置"*) ok "配置缺失时如实报 ✗ 并非零退出" ;;
+    *) bad "配置缺失时报错不清：$out" ;;
+  esac
+fi
+# 拿一个**真**实例自查：健康端点/媒体根可读性/数据目录都要能过（服务状态那条允许 ✗ —— 这是临时进程）
+VDTMP="$SB/vd"; mkdir -p "$VDTMP/data" "$VDTMP/media"
+cat >"$VDTMP/config.json" <<JSONEOF
+{"listen":"127.0.0.1:7794","data_dir":"$VDTMP/data","database_path":"$VDTMP/data/zizvideo.db","media_allow_roots":["$VDTMP/media"],"allow_register":false}
+JSONEOF
+if [ -x "$ROOT/dist/zizvideo" ]; then
+  "$ROOT/dist/zizvideo" --config "$VDTMP/config.json" >"$VDTMP/server.log" 2>&1 &
+  vdpid=$!
+  i=0; until curl -fsS --max-time 2 http://127.0.0.1:7794/readyz >/dev/null 2>&1 || [ "$i" -ge 20 ]; do sleep 0.3; i=$((i+1)); done
+  out=$(bash "$VD" --config "$VDTMP/config.json" --bin "$ROOT/dist/zizvideo" 2>&1)
+  kill "$vdpid" 2>/dev/null || true; wait "$vdpid" 2>/dev/null || true
+  case "$out" in
+    *"回 200"*) ok "自查脚本打通了健康端点（真实例）" ;;
+    *) bad "自查脚本没打通健康端点：$(printf '%s' "$out" | tail -3)" ;;
+  esac
+  case "$out" in
+    *"读得到：$VDTMP/media"*) ok "自查脚本验到媒体根可读（真实例）" ;;
+    *) bad "自查脚本没验到媒体根：$(printf '%s' "$out" | tail -3)" ;;
+  esac
+  case "$out" in
+    *"readyz.status = ready"*) ok "自查脚本解析 /readyz 的 status" ;;
+    *) bad "自查脚本没解析出 readyz.status" ;;
+  esac
+else
+  note_skip "没有 dist/zizvideo，跳过真实例自查"
+fi
+
+# 发行目录里的 linux 产物：必须是**静态** ELF 且架构对（极简 NAS 上没有 ld.so/glibc）
+RELVER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+for pair in "amd64 62" "arm64 183"; do
+  set -- $pair
+  f="$ROOT/dist/apps/zizvideo/$RELVER/zizvideo_${RELVER}_linux_$1"
+  if [ ! -f "$f" ]; then note_skip "没有 ${f}（先 make release）"; continue; fi
+  res=$(python3 - "$f" "$2" <<'PYE'
+import struct, sys
+path, want = sys.argv[1], int(sys.argv[2])
+data = open(path, "rb").read()
+if data[:4] != b"\x7fELF": print("不是 ELF"); raise SystemExit
+if struct.unpack("<H", data[18:20])[0] != want: print("架构不对"); raise SystemExit
+off = struct.unpack("<Q", data[32:40])[0]
+sz = struct.unpack("<H", data[54:56])[0]
+num = struct.unpack("<H", data[56:58])[0]
+if 3 in [struct.unpack("<I", data[off+i*sz:][:4])[0] for i in range(num)]:
+    print("动态链接（需要 ld.so）"); raise SystemExit
+print("ok")
+PYE
+)
+  [ "$res" = "ok" ] && ok "linux/$1 发行件是静态 ELF 且架构正确" || bad "linux/$1 发行件有问题：$res"
+done
 
 # ---------------------------------------------------------------------------
 fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
