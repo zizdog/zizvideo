@@ -42,6 +42,8 @@ EXPECTED_CRT_SHA256="fd5f485a1a7269efa65c120b02cba92576a8c176ff8a84281eda590f2e0
 #    ZV_ASSUME_YES=1       非交互确认（只给 --purge 用）
 #    ZV_ALLOW_PURGE_ROOT   额外允许 --purge 删除的根（默认只允许 $HOME/Library/Application Support）
 #    ZV_LIB_ONLY=1         只定义函数、不跑 main（必须 source 本脚本；tools/test-installer.sh 用）
+#    ZV_FAKE_OPEN          假 open 可执行文件（沙箱不打开真系统设置/Finder）
+#    ZV_ACCESS_PROBE_WAIT  等待用户授权的秒数（默认 60；0 = 只报不改，供无人值守/发版流水线）
 # ---------------------------------------------------------------------------
 
 MIRROR="$DEFAULT_MIRROR"
@@ -109,6 +111,11 @@ zizvideo 独立部署安装器
   签名：镜像同目录有 zizvideo-codesign.crt 时导入系统钥匙串并复核签名，外置盘完全磁盘访问授权一次跨升级有效；
         证书指纹写死在本脚本里，对不上直接拒绝（不把来路不明的根证书装进系统）；
         镜像没有 crt 则降级为未签名部署，每次升级都要重新授权。
+  完全磁盘访问（TCC）：装完会**在守护进程自己的上下文里**（一次性 launchd 作业）去读你在 config 里配的
+        媒体根；读不到就打印「系统设置 → 隐私与安全性 → 完全磁盘访问」的引导、在 Finder 里选中二进制，
+        并等你授权后复验（默认最多 60s；`ZV_ACCESS_PROBE_WAIT=0` 只报告不等待，供无人值守）。
+        这一步**不会让安装失败** —— 缺授权只影响受保护目录里的媒体能不能被扫到。
+        独立部署没有面板替你申请权限，所以这一步是给完全没装面板的机器准备的。
 EOF
 }
 
@@ -162,6 +169,13 @@ if [ -n "${ZV_FAKE_LAUNCHCTL:-}" ]; then
   LAUNCHCTL_BIN="$ZV_FAKE_LAUNCHCTL"
 fi
 lc() { "$LAUNCHCTL_BIN" "$@"; }
+
+# open 包装（ZV_FAKE_OPEN 仅测试用：沙箱里绝不去打开真系统设置或 Finder）。
+OPEN_BIN="/usr/bin/open"
+if [ -n "${ZV_FAKE_OPEN:-}" ]; then
+  OPEN_BIN="$ZV_FAKE_OPEN"
+fi
+open_ui() { "$OPEN_BIN" "$@" >/dev/null 2>&1 || true; }
 
 # 特权命令：system 模式写 /Library/LaunchDaemons 与 bootstrap 系统域需要 sudo。
 run_priv() {
@@ -931,6 +945,9 @@ do_install_or_upgrade() {
     fail_with_rollback "签名复核未通过：这可能是镜像被换过，请联系维护者。已回滚本次改动（服务与二进制恢复为改动前）。"
   fi
 
+  # 权限阶段：不阻断安装，只如实报告 + 引导（用户 2026-10-11："独立申请全盘权限"）
+  check_full_disk_access
+
   INSTALL_DONE=1
   trap - EXIT
   rm -f "$bin_tmp" "$crt_tmp"
@@ -952,6 +969,177 @@ do_install_or_upgrade() {
   if [ "$MODE" = "user" ]; then
     warn "提醒：--user 模式的作业只在有人登录后运行；无头机器请改用默认 --system 模式重装"
   fi
+}
+
+# ---------------------------------------------------------------------------
+#  完全磁盘访问（TCC）：独立部署时没人替我们申请，得让用户自己加，还要**验证**加没加上
+# ---------------------------------------------------------------------------
+# 为什么必须"在守护进程自己的上下文里探"：TCC 把访问权归给**发起进程**。安装器是在用户的
+# 终端里跑的，终端多半已经授权（或者根本没有）—— 用安装器自己去读受保护目录，测出来的不是
+# 守护进程的权限，会给出**假结论**。所以这里写一个**一次性 launchd 作业**，让 launchd 直接执行
+# `zizvideo check-access <路径>`：那个进程的 TCC 归属就是二进制本身，与真实运行时一致。
+#
+# 探什么：**用户实际配置的媒体根**（config 里的 media_allow_roots）—— 这才是有意义的判据；
+# 没有媒体根时才退回 `--fda`（哨兵启发式，可能假阳性，见 check_access.go 的说明）。
+access_probe_targets() {
+  # 输出一行一个要探的路径；探不到媒体根时输出特殊标记 --fda
+  roots=""
+  if [ -f "$CONFIG_PATH" ]; then
+    roots=$(python3 - "$CONFIG_PATH" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(0)
+for r in cfg.get("media_allow_roots") or []:
+    if isinstance(r, str) and r.startswith("/"):
+        print(r)
+PYEOF
+)
+  fi
+  if [ -n "$roots" ]; then printf '%s\n' "$roots"; else printf '%s\n' "--fda"; fi
+}
+
+# 跑一次性作业拿结果：回显 check-access 的那行 JSON；失败/超时回显空串（调用方据此说"没法判定"）。
+probe_access_in_daemon_context() {
+  target="$1"
+  label="${LABEL}.accessprobe.$$"
+  plist="$SYSTEM_DAEMON_DIR/${label}.plist"
+  out="$(mktemp -t zv-accessprobe.XXXXXX)"
+  if [ "$MODE" = "user" ]; then plist="$HOME_DIR/Library/LaunchAgents/${label}.plist"; mkdir -p "$(dirname "$plist")"; fi
+  {
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$(xml_escape "$label")</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(xml_escape "$BIN")</string>
+        <string>check-access</string>
+        <string>$(xml_escape "$target")</string>
+    </array>
+EOF
+    if [ "$MODE" = "system" ]; then
+      printf '    <key>UserName</key>\n    <string>%s</string>\n' "$(xml_escape "$TARGET_USER")"
+    fi
+    cat <<EOF
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>WorkingDirectory</key>
+    <string>$(xml_escape "$HOME_DIR")</string>
+    <key>StandardOutPath</key>
+    <string>$(xml_escape "$out")</string>
+    <key>StandardErrorPath</key>
+    <string>$(xml_escape "$out").err</string>
+</dict>
+</plist>
+EOF
+  } >"$plist.zv-tmp.$$" 2>/dev/null || { rm -f "$out"; return 0; }
+  if [ "$MODE" = "system" ]; then
+    run_priv cp -f "$plist.zv-tmp.$$" "$plist" >/dev/null 2>&1 || { rm -f "$plist.zv-tmp.$$" "$out"; return 0; }
+    run_priv rm -f "$plist.zv-tmp.$$" >/dev/null 2>&1 || true
+    lc bootstrap system "$plist" >/dev/null 2>&1 || true
+  else
+    mv -f "$plist.zv-tmp.$$" "$plist" 2>/dev/null || { rm -f "$out"; return 0; }
+    lc bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+  fi
+  # 等结果：作业是短命的，通常 <1s；最多等 8 秒
+  i=0
+  while [ $i -lt 80 ]; do
+    if [ -s "$out" ]; then break; fi
+    sleep 0.1; i=$((i + 1))
+  done
+  if [ "$MODE" = "system" ]; then
+    run_priv "$LAUNCHCTL_BIN" bootout "system/$label" >/dev/null 2>&1 || true
+    run_priv rm -f "$plist" >/dev/null 2>&1 || true
+  else
+    lc bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    rm -f "$plist" 2>/dev/null || true
+  fi
+  line=$(grep -m1 '^{' "$out" 2>/dev/null || true)
+  rm -f "$out" "$out.err" 2>/dev/null || true
+  printf '%s' "$line"
+}
+
+# 权限阶段：探 → 缺就引导 + 等待 → 复探。**绝不因此让安装失败**（如实报告即可）。
+check_full_disk_access() {
+  say ""
+  say "==> 完全磁盘访问检查（独立部署没有面板替你申请，这一步要你自己点两下）"
+  targets=$(access_probe_targets)
+  missing=""
+  probed=0
+  for target in $targets; do
+    probed=$((probed + 1))
+    line=$(probe_access_in_daemon_context "$target")
+    case "$line" in
+      *'"readable":true'*)
+        say "  ✓ 守护进程读得到：$target"
+        ;;
+      '')
+        warn "  无法判定：${target}（一次性探测作业没有产出结果；可手动跑 $BIN check-access $target 看看）"
+        missing="${missing}${target} "
+        ;;
+      *)
+        warn "  ✗ 守护进程读不到：$target"
+        missing="${missing}${target} "
+        ;;
+    esac
+  done
+  if [ "$probed" = "0" ] || [ -z "$missing" ]; then
+    if [ "$probed" != "0" ]; then say "  全部可读：受保护位置里的媒体能正常扫描"; fi
+    return 0
+  fi
+
+  # 缺授权：把"为什么/怎么做"讲清楚，并把人带到该去的地方（不代按、不假装已授权）。
+  say ""
+  warn "有 $probed 个位置里，至少一个现在的守护进程读不到。"
+  say "  影响：那些目录里的视频**不会被扫描到**（TCC 拦的就是「读」这个动作，权限位看着是好的也没用）。"
+  say "  修法（一次授权，跨升级有效，因为二进制是签名的）："
+  say "    ① 系统设置 → 隐私与安全性 → 完全磁盘访问"
+  say "    ② 点 + ，选择：$BIN"
+  say "    ③ 打开右边的开关，然后回到这里按回车"
+  # Finder 里选中二进制 + 打开对应设置面板（沙箱用 ZV_FAKE_OPEN 拦掉）
+  open_ui -R "$BIN"
+  open_ui "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+
+  wait_secs="${ZV_ACCESS_PROBE_WAIT:-60}"
+  if [ "$wait_secs" = "0" ]; then
+    warn "（ZV_ACCESS_PROBE_WAIT=0：不等待。授权后重跑本脚本即可复验）"
+    return 0
+  fi
+  say "  等你授权……（最多 ${wait_secs}s；授权完按回车立即复验，Ctrl-C 跳过）"
+  waited=0
+  while [ "$waited" -lt "$wait_secs" ]; do
+    read -r -t 5 _ 2>/dev/null || true
+    waited=$((waited + 5))
+    still=""
+    for target in $missing; do
+      line=$(probe_access_in_daemon_context "$target")
+      case "$line" in
+        *'"readable":true'*) say "  ✓ 现在读得到了：$target" ;;
+        *) still="${still}${target} " ;;
+      esac
+    done
+    if [ -z "$still" ]; then
+      say "  权限检查通过：目录里的媒体能被扫描"
+      return 0
+    fi
+    missing="$still"
+    if [ "$waited" = "5" ] || [ $((waited % 20)) = "0" ]; then
+      say "  （还没生效：TCC 有时要几秒。已等 ${waited}s / ${wait_secs}s；仍未授权的位置：${missing}）"
+    fi
+  done
+  say ""
+  warn "仍未授权的位置：$missing"
+  say "  服务已经装好并在跑；这些目录要等你在「完全磁盘访问」里加上 $BIN 之后才会被扫到。"
+  say "  授权之后不用重装：跑一次「扫描媒体库」或重启服务即可（升级也不会丢这个授权）。"
+  return 0
 }
 
 # ---------------------------------------------------------------------------

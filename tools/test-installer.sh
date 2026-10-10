@@ -53,10 +53,39 @@ cat >"$FAKE_LC" <<EOF
 #!/bin/sh
 echo "\$*" >>"$LC_LOG"
 [ "\$1" = "print" ] && exit 1
+# 模拟"一次性探测作业"：bootstrap 时按 plist 里的 StandardOutPath 写一份 check-access 的 JSON。
+# 这样安装器的权限阶段走的是**真实代码路径**（写 plist → bootstrap → 读结果 → bootout → 删 plist），
+# 只是 launchd 是假的、不会真去跑二进制。
+if [ "\$1" = "bootstrap" ]; then
+  plist=""
+  for a in "\$@"; do case "\$a" in *.plist) plist="\$a" ;; esac; done
+  if [ -n "\$plist" ] && [ -f "\$plist" ]; then
+    outp=\$(sed -n 's:.*<key>StandardOutPath</key>.*:\1:p' "\$plist" | head -n1)
+    if [ -z "\$outp" ]; then
+      outp=\$(awk '/StandardOutPath/{getline; gsub(/.*<string>|<\/string>.*/,""); print; exit}' "\$plist")
+    fi
+    if [ -n "\$outp" ]; then
+      printf '%s\n' "\${ZV_FAKE_PROBE_JSON:-{\"path\":\"/probe\",\"readable\":true}}" >"\$outp"
+    fi
+  fi
+fi
 exit 0
 EOF
 chmod 0755 "$FAKE_LC"
 export ZV_FAKE_LAUNCHCTL="$FAKE_LC"
+
+# 假 open：安装器的权限阶段会调 `open -R` 与 `open x-apple.systempreferences:...`，
+# 沙箱里绝不许真去开系统设置/Finder。记一行日志，末尾断言"确实被调用过"。
+OPEN_LOG="$SB/open.log"
+FAKE_OPEN="$SB/open"
+: >"$OPEN_LOG"
+cat >"$FAKE_OPEN" <<EOF
+#!/bin/sh
+echo "\$*" >>"$OPEN_LOG"
+exit 0
+EOF
+chmod 0755 "$FAKE_OPEN"
+export ZV_FAKE_OPEN="$FAKE_OPEN"
 
 # sudo 垫片（铁律 1）：PATH 最前面放一个只会失败的假 sudo。真走了 sudo 这条路，
 # 它立刻失败并记一行日志，末尾断言日志为空 —— 测试绝不许碰真 sudo。
@@ -214,6 +243,83 @@ if [ -n "$N_PREP" ] && [ -n "$N_MV" ] && [ "$N_PREP" -lt "$N_MV" ]; then
   ok "prepare_signature（第 $N_PREP 行）早于 mv 二进制（第 $N_MV 行）"
 else
   bad "顺序不对或读不到：prepare_signature=${N_PREP}，mv bin=$N_MV"
+fi
+
+# ---------------------------------------------------------------------------
+fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
+  (
+    export HOME="$SB/home-fda"
+    mkdir -p "$HOME/Library/Application Support/zizvideo"
+    export ZV_LIB_ONLY=1
+    # shellcheck disable=SC1090
+    . "$SCRIPT"
+    derive_paths
+    printf '%b' "$1" >"$CONFIG_PATH"
+    BIN="$SB/bin/zizvideo"; mkdir -p "$SB/bin"; : >"$BIN"; chmod 0755 "$BIN"
+    MODE=system; TARGET_USER="$(id -un)"
+    ZV_FAKE_PROBE_JSON="$2" ZV_ACCESS_PROBE_WAIT="$3" check_full_disk_access
+  )
+}
+printf '==> 完全磁盘访问阶段（在守护进程上下文里探媒体根；缺授权要引导且不阻断安装）\n'
+CFG_ROOT='{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s"]\n}\n'
+
+# ① 读得到：如实报告、不打扰用户
+: >"$OPEN_LOG"
+out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/Library/Application Support/zizvideo" "$SB/media")" \
+  '{"path":"PROBE","readable":true}' 0 2>&1)
+case "$out" in
+  *"✓ 守护进程读得到"*) ok "探测到可读时如实报告" ;;
+  *) bad "可读时没有报告成功：$out" ;;
+esac
+case "$out" in
+  *"隐私与安全性"*) bad "可读时不该打印授权引导" ;;
+  *) ok "可读时不打扰用户（没有引导块）" ;;
+esac
+
+# ② 读不到：必须引导（系统设置 + 二进制路径 + 影响），ZV_ACCESS_PROBE_WAIT=0 时不等待、不失败
+: >"$OPEN_LOG"
+if out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/Library/Application Support/zizvideo" "$SB/media")" \
+     '{"path":"PROBE","readable":false,"reason":"未授予"}' 0 2>&1); then
+  ok "缺授权时**不阻断安装**（返回 0，如实报告）"
+else
+  bad "缺授权不该让安装失败"
+fi
+case "$out" in
+  *"隐私与安全性"*) ok "缺授权时给出「系统设置 → 隐私与安全性 → 完全磁盘访问」的指引" ;;
+  *) bad "缺授权时没有指引：$out" ;;
+esac
+case "$out" in
+  *"$SB/bin/zizvideo"*) ok "指引里写清了要授权的二进制路径" ;;
+  *) bad "指引里没写二进制路径：$out" ;;
+esac
+case "$out" in
+  *"不会被扫描到"*) ok "讲清了影响（那些目录里的媒体扫不到）" ;;
+  *) bad "没讲清影响：$out" ;;
+esac
+case "$out" in
+  *"不等待"*) ok "ZV_ACCESS_PROBE_WAIT=0 时不等待" ;;
+  *) bad "0 秒等待没有明说不等待：$out" ;;
+esac
+if grep -q "Privacy_AllFiles" "$OPEN_LOG" && grep -q -- "-R" "$OPEN_LOG"; then
+  ok "用假 open 打开了完全磁盘访问面板并在 Finder 里选中二进制"
+else
+  bad "没有调用 open 打开设置面板/选中二进制：$(cat "$OPEN_LOG")"
+fi
+
+# ③ 没有配媒体根时退回 --fda 哨兵探测
+: >"$OPEN_LOG"
+out=$(fda_case '{\n  "data_dir": "%s"\n}\n' '{"path":"PROBE","readable":true,"mode":"fda"}' 0 2>&1)
+case "$out" in
+  *"--fda"*|*"哨兵"*|*"✓ 守护进程读得到"*) ok "没配媒体根时退回 --fda 探测" ;;
+  *) bad "没有退回 --fda：$out" ;;
+esac
+
+# ④ 探测用的临时 plist 必须清干净（不许留在 LaunchDaemons 里）
+leftover=$(find "$SB/LaunchDaemons" -name '*.accessprobe.*' 2>/dev/null | wc -l | tr -d ' ')
+if [ "$leftover" = "0" ]; then
+  ok "一次性探测作业的 plist 已清理（没有残留）"
+else
+  bad "残留了 $leftover 个探测 plist：$(find "$SB/LaunchDaemons" -name '*.accessprobe.*')"
 fi
 
 # ---------------------------------------------------------------------------
