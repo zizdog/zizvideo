@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""check-docs.py —— 文档 ↔ 实现一致性检查（文档腐烂是长期风险）
+
+检查三件事（都是"写死了必腐"或"改名后没人改文档"的典型）：
+  ① 文档里提到的仓库内路径（tools/… 、docker/… 、fnos/… 、install-*.sh…）必须存在；
+  ② 文档里写的 `make <目标>` 必须在 Makefile 里真的有；
+  ③ 文档**不许写死门禁条数**（例如"覆盖（92 条 ok）"）—— 条数会涨，写死了必腐，
+     应该写"条数见 make check 输出"。
+
+用法：python3 tools/check-docs.py       退出码 0=一致，1=有不一致
+"""
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 只检查"**描述当前用法**"的活文档。以下刻意**不查**（写了原因，免得以后有人顺手加回来）：
+#   · docs/坑清单.md        —— 它记录的是"过去的错"，里面**故意**写着 `make docker`、`android/xxx.apk`
+#                              这类已被修掉的旧名字；查它等于把历史当成腐烂。
+#   · docs/ITERATION-*.md   —— 历史设计基线，写的是当时的路径（现在可能已不存在）。
+#   · docs/给面板的*.md      —— 面向面板仓库的接口说明，引用的路径在**面板仓库**里。
+#   · AGENTS.md             —— 工作区规则，里面是示意（`docs/ITERATION-` 前缀等）。
+LIVING = ["docs/独立部署.md", "docs/验收清单.md", "README.md"]
+SKIP = ("坑清单.md", "给面板的")
+DOCS = [os.path.join(ROOT, p) for p in LIVING if os.path.isfile(os.path.join(ROOT, p))]
+
+# 只认"仓库根下的实际路径"（tree 图里的相对路径如 `cmd/main` 不算 —— 它是 fnos 包内的相对路径）
+PATH_RE = re.compile(
+    r"(?<![\w./])((?:tools|docker|fnos|docs)/[A-Za-z0-9_./\u4e00-\u9fff\-]+"
+    r"|install-zizvideo[a-z\-]*\.sh)"
+)
+MAKE_RE = re.compile(r"\bmake ([a-z][a-z0-9\-]*)")
+COUNT_RE = re.compile(r"[0-9]+\s*条\s*ok")
+IGNORE_MAKE = {"install", "release"}   # 文档里偶尔写"make install"是通用说法，不要求是本仓库目标
+
+
+def main() -> int:
+    known_targets = set(re.findall(r"^([a-zA-Z][a-zA-Z0-9_\-]*):",
+                                   open(os.path.join(ROOT, "Makefile"), encoding="utf-8").read(), re.M))
+    problems = []
+    checked = 0
+    for doc in DOCS:
+        text = open(doc, encoding="utf-8").read()
+        text_no_placeholder = re.sub(r"<[^>]*>", "", text)   # 去掉 <版本>/<arch> 这类占位
+        for m in PATH_RE.finditer(text_no_placeholder):
+            p = m.group(1).rstrip(".,;)`'\"")
+            checked += 1
+            full = os.path.join(ROOT, p)
+            if p.endswith("/"):
+                if not os.path.isdir(full):
+                    problems.append("%s: 目录不存在 %s" % (os.path.basename(doc), p))
+            elif not os.path.exists(full):
+                problems.append("%s: 路径不存在 %s" % (os.path.basename(doc), p))
+        for t in sorted(set(MAKE_RE.findall(text))):
+            checked += 1
+            if t not in known_targets and t not in IGNORE_MAKE:
+                problems.append("%s: `make %s` 在 Makefile 里没有" % (os.path.basename(doc), t))
+        if COUNT_RE.search(text):
+            problems.append("%s: 写死了门禁条数（应改成「条数见 make check 输出」）" % os.path.basename(doc))
+    if problems:
+        print("文档与实现不一致（%d 处）：" % len(problems))
+        for p in problems:
+            print("  ✗ " + p)
+        return 1
+    print("✓ 检查了 %d 份文档、%d 条路径/目标引用，全部对得上；且没有写死门禁条数" % (len(DOCS), checked))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

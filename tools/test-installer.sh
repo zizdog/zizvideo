@@ -814,6 +814,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 文档 ↔ 实现一致性（文档腐烂是长期风险：命令改名/文件搬家/门禁条数写死后，文档开始骗人）
+# 具体检查放在 tools/check-docs.py 里 —— 用 python 写比在 bash 里塞 heredoc 靠谱
+# （我第一版就是在门禁里套 heredoc 做命令替换，直接把门禁语法搞坏了）
+printf '==> 文档与实现是否还对得上（路径 / make 目标 / 别写死门禁条数）\n'
+if dout="$(python3 "$ROOT/tools/check-docs.py" 2>&1)"; then
+  ok "文档与实现一致：$(printf '%s' "$dout" | tail -1)"
+else
+  bad "文档与实现不一致：$(printf '%s' "$dout" | grep -v '^✓' | head -4 | tr '\n' ' ')"
+fi
+
+# ---------------------------------------------------------------------------
 # 发布前总检（tools/preflight.sh）：步骤清单 + 镜像漂移的两条判据（正常待发布 vs 真漂移）
 printf '==> 发布前总检 preflight.sh\n'
 PF="$ROOT/tools/preflight.sh"
