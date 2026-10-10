@@ -107,15 +107,118 @@ for (const file of walk(root)) {
   });
 }
 
+// 老 WebView 的 flex gap 兜底：**两个方向都要管**
+//   ① 兜底里写的选择器，主 CSS 里必须真的还有 gap（否则兜底过期/是死的）；
+//   ② 主 CSS 里凡是**电视端命名的容器**（.tv/.ov-/.sheet-/.set-panel/.set-row/.overlay/.ep-/
+//      .center-/.imm-）用了 gap，就**必须**有对应的兜底（否则老电视上那片间距直接塌）。
+// 第二方向靠命名前缀动态判定，所以以后新增这类容器会自动被要求补兜底 —— 不用人记得。
+// 电视端真正依赖 gap 的清单是**实测**出来的（真浏览器扫 computed style），见 app.css 的注释。
+const TV_GAP_PREFIXES = [".tv", ".ov-", ".overlay", ".sheet-", ".set-panel", ".set-row",
+  ".ep-", ".center-", ".imm-"];
+
+// 返回 [{selector, gap}]：gap 的**数值**也要取出来 —— 兜底的 margin 必须与它相等
+// （用像素距离比是错的：子元素自己的 margin 会混进来，我第一版就这么被骗过一次）。
+function parseGapRules(cssText) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(cssText)) !== null) {
+    const sel = m[1].trim();
+    if (!sel || sel.startsWith("@")) continue;
+    const hit = /\bgap\s*:\s*([0-9.]+)px/.exec(m[2]);
+    if (hit) out.push({ selector: sel, gap: Number(hit[1]) });
+  }
+  return out;
+}
+
+function parseFallbackMargins(cssText) {
+  const out = new Map();
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(cssText)) !== null) {
+    const sel = m[1].trim();
+    const hit = /\bmargin-(top|left)\s*:\s*([0-9.]+)px/.exec(m[2]);
+    if (hit) out.set(sel, Number(hit[2]));
+  }
+  return out;
+}
+
+function checkGapFallback(cssText, file) {
+  const at = cssText.indexOf("@supports not (gap: 1px)");
+  const mainCss = at >= 0 ? cssText.slice(0, at) : cssText;
+  if (at < 0) {
+    bad += 1;
+    console.log(`  ✗ ${file}  缺少 \`@supports not (gap: 1px)\` 兜底块（老电视上 flex gap 会全塌）`);
+    return;
+  }
+  const open = cssText.indexOf("{", at);
+  let depth = 0;
+  let end = cssText.length;
+  for (let i = open; i < cssText.length; i += 1) {
+    if (cssText[i] === "{") depth += 1;
+    else if (cssText[i] === "}") {
+      depth -= 1;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  const body = cssText.slice(open + 1, end).replace(/\/\*[\s\S]*?\*\//g, "");
+  const fbSels = body.split("}").map((chunk) => chunk.split("{")[0].trim()).filter(Boolean);
+  if (fbSels.length === 0) {
+    bad += 1;
+    console.log(`  ✗ ${file}  \`@supports not (gap: 1px)\` 是空块 —— 等于没有兜底`);
+    return;
+  }
+  const base = (sel) => sel.replace(/\s*>\s*\*\s*\+\s*\*$/, "").trim();
+  const fbBases = fbSels.map(base);
+
+  // ① 兜底不许过期
+  const mainRules = parseGapRules(mainCss);
+  const fbMargins = parseFallbackMargins(body);
+  for (const sel of fbSels) {
+    const b = base(sel);
+    if (!mainRules.some((r) => r.selector === b)) {
+      bad += 1;
+      console.log(`  ✗ ${file}  gap 兜底里的 \`${sel}\` 在主 CSS 里已经没有对应的 gap 声明` +
+        `（兜底过期了：删掉这条兜底，或主 CSS 少了 gap 却忘了删兜底）`);
+    }
+  }
+  // ② 电视端命名的 gap 容器必须有兜底，而且**兜底的 margin 必须等于 gap 的数值**
+  for (const rule of mainRules) {
+    const sel = rule.selector;
+    if (!TV_GAP_PREFIXES.some((p) => sel.startsWith(p))) continue;
+    if (!fbBases.includes(sel)) {
+      bad += 1;
+      console.log(`  ✗ ${file}  \`${sel}\` 用了 gap 但没有老 WebView 兜底` +
+        `（电视端容器：Chrome<84 上间距会塌）⇒ 在 @supports not (gap: 1px) 里给它补一个 margin`);
+      continue;
+    }
+    const margin = fbMargins.get(sel + " > * + *");
+    if (margin === undefined) {
+      bad += 1;
+      console.log(`  ✗ ${file}  \`${sel}\` 的兜底没有可解析的 margin-*（应为 \`${sel} > * + *\`）`);
+    } else if (margin !== rule.gap) {
+      bad += 1;
+      console.log(`  ✗ ${file}  \`${sel}\` 兜底与 gap 数值不一致：gap ${rule.gap}px vs 兜底 margin ${margin}px` +
+        `（老电视与现代浏览器上的间距会不一样）`);
+    }
+  }
+}
+
 // CSS 兼容（棘轮）：统计每个文件的命中的"可棘轮"写法，与基线比只许多减少
 let cssFiles = 0;
 const counts = {};
 for (const file of CSS_FILES) {
   cssFiles += 1;
   const text = readFileSync(file, "utf8");
+  // 兜底块本身要写 `gap: 1px`（@supports 条件），那是**修法**不是债 ⇒ 棘轮与禁用项只在
+  // "兜底块之前的主 CSS"里统计。注释也先剥掉（注释里写了 gap: 会被误计）。
+  const stripped = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  const fbAt = stripped.indexOf("@supports not (gap: 1px)");
+  const mainCss = fbAt >= 0 ? stripped.slice(0, fbAt) : stripped;
+  checkGapFallback(stripped, file);
   for (const rule of CSS_BANNED) {
     const { re, what, ratchet, key } = rule;
-    const hits = text.split("\n").reduce((n, line) => (re.test(line) ? n + 1 : n), 0);
+    const hits = mainCss.split("\n").reduce((n, line) => (re.test(line) ? n + 1 : n), 0);
     if (!hits) continue;
     if (!ratchet) {
       bad += 1;

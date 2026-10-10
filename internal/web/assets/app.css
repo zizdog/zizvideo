@@ -950,3 +950,25 @@ html.tv .layer.tv-focus { background-color: transparent; outline-color: rgba(62,
 }
 .qr-code { display: block; width: min(58vw, 240px); height: auto; image-rendering: pixelated; }
 .tv .qr-code { width: min(34vh, 260px); }
+
+/* ── 老 WebView 的 flex gap 兜底（Chrome < 84 没有 gap） ────────────────────────
+   为什么只写这几个容器：**实测**（真浏览器里扫 computed style，`make smoke` 那套临时实例 +
+   `tools/ui/gap-audit.mjs`）电视端（?tv=1）真正依赖 gap 的只有下面 6 个容器 ——
+   TV 专属的三栏（.tv-list/.tv-stage/.tv-nav）本来就避开 gap。其余 50 余处 gap 只作用于
+   网页/手机端（现代 Chrome），不动它们就没有布局回归风险。
+   门禁：tools/check-js-compat.mjs 会核对"这里列出的选择器在主 CSS 里确实还有 gap"（防失效）。 */
+@supports not (gap: 1px) {
+  .overlay > * + * { margin-top: 4px; }        /* 竖排 */
+  .ov-top > * + * { margin-left: 10px; }       /* 横排 */
+  .ov-rail > * + * { margin-top: 12px; }       /* 竖排 */
+  .set-panel > * + * { margin-top: 9px; }      /* 竖排（gap 写在 .set-panel 上） */
+  .sheet-row > * + * { margin-left: 12px; }    /* 横排 */
+  .sheet-seg > * + * { margin-left: 10px; }    /* 横排 */
+  .set-row > * + * { margin-left: 8px; }       /* 横排（非 sheet 变体的设置行） */
+  .ov-corner > * + * { margin-left: 8px; }     /* 横排 */
+  .center-loading > * + * { margin-top: 10px; }/* 竖排 */
+  .ep-list > * + * { margin-top: 4px; }        /* 竖排 */
+  .ep-item > * + * { margin-left: 10px; }      /* 横排 */
+  .ep-admin-list > * + * { margin-top: 4px; }  /* 竖排 */
+  .ep-admin-row > * + * { margin-left: 8px; }  /* 横排 */
+}
