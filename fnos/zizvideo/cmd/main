@@ -51,6 +51,47 @@ running_pid() {
   printf '%s' "$pid"
 }
 
+# 把飞牛系统给的目录并进 media_allow_roots：
+#   · TRIM_DATA_SHARE_PATHS      —— 应用自己声明的 data-share 目录（config/resource 里那批）
+#   · TRIM_DATA_ACCESSIBLE_PATHS —— **用户在应用设置里授权给本应用的目录**（官方"授权目录设置"，
+#     对应 manifest 的 disable_authorization_path；我们**不设**它，让这个入口对用户可见）
+# 两者都是 `:` 分隔。合并规则：自己的共享目录永远在；系统给的绝对路径去重追加；**已有条目一个不删**
+# （用户可能在网页后台里手加过媒体根）。写临时文件再 os.replace —— 写坏了原配置不动。
+# ⚠️ 未在真机验证：这两个环境变量由 fnOS 注入，本仓库开发机没有飞牛设备（见 docs/独立部署.md 的已知未验证）。
+merge_media_roots() {
+  [ -f "$CONFIG" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$CONFIG" "$TRIM_PKGVAR" "${TRIM_DATA_SHARE_PATHS:-}" "${TRIM_DATA_ACCESSIBLE_PATHS:-}" <<'PYEOF'
+import json, os, sys
+cfg_path, var, shares, accessible = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    with open(cfg_path) as handle:
+        cfg = json.load(handle)
+except Exception:
+    raise SystemExit(0)  # 读不了就别动它（让上层按原样报错）
+roots = [r for r in (cfg.get("media_allow_roots") or []) if isinstance(r, str) and r.startswith("/")]
+own = os.path.join(var, "media")
+def add(path):
+    p = path.strip()
+    if p.startswith("/") and p not in roots:
+        roots.append(p)
+if own not in roots:
+    roots.insert(0, own)
+for blob in (shares, accessible):
+    for part in (blob or "").split(":"):
+        add(part)
+if roots == (cfg.get("media_allow_roots") or []):
+    raise SystemExit(0)  # 没变化就别写盘（幂等，也少一次抖动）
+cfg["media_allow_roots"] = roots
+tmp = cfg_path + ".tmp"
+with open(tmp, "w") as handle:
+    json.dump(cfg, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+os.replace(tmp, cfg_path)
+PYEOF
+  return 0
+}
+
 write_config_if_missing() {
   [ -f "$CONFIG" ] && return 0
   mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP"
@@ -97,6 +138,7 @@ cmd_start() {
   [ -x "$BIN" ] || { fail "找不到可执行文件：$BIN"; return 1; }
   mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC" "$TRIM_PKGTMP"
   write_config_if_missing
+  merge_media_roots   # 飞牛可能在装完之后才授权目录/挂共享盘 ⇒ 每次 start 都并一次（幂等）
   # 后台常驻：官方要求长期服务**降权**运行（run-as=package，这里不做 sudo/root）
   nohup "$BIN" --config "$CONFIG" >>"$LOGFILE" 2>&1 &
   pid=$!
@@ -180,6 +222,7 @@ os.replace(tmp, cfg_path)
 PYEOF
   rc=$?
   if [ "$rc" != "0" ]; then fail "写配置失败（原配置保持不动）"; return 1; fi
+  merge_media_roots   # 把飞牛给的共享/授权目录也带进来（幂等）
   cmd_stop >/dev/null 2>&1 || true
   cmd_start || { fail "配置已写入，但服务没能起来（看 ${LOGFILE}）"; return 1; }
   return 0

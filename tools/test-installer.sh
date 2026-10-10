@@ -410,13 +410,44 @@ if cvd_run config_callback >/dev/null 2>&1; then
 else
   ok "没有可执行文件时 config_callback 如实非零退出"
 fi
-python3 - "$CVD/etc/config.json" <<'PYC' && ok "config_callback 写出的配置是合法 JSON 且端口/媒体根已更新" || bad "config_callback 写坏了配置"
-import json, sys
+pyerr="$(python3 -c 'import json,sys
 cfg = json.load(open(sys.argv[1]))
 assert cfg.get("listen") == "0.0.0.0:8899", cfg.get("listen")
 roots = cfg.get("media_allow_roots") or []
-assert any(r.startswith("/vol1") for r in roots), roots
-PYC
+assert any(r.startswith("/vol1") for r in roots), roots' "$CVD/etc/config.json" 2>&1)" \
+  && ok "config_callback 写出的配置是合法 JSON 且端口/媒体根已更新" || bad "config_callback 写坏了配置：$pyerr"
+# 飞牛给的共享/授权目录（TRIM_DATA_SHARE_PATHS / TRIM_DATA_ACCESSIBLE_PATHS）必须并进媒体根：
+#   · 原有条目一个不丢（用户可能在网页后台手加过）
+#   · 自己的共享目录（$TRIM_PKGVAR/media）永远在
+#   · 重复项去重、非绝对路径忽略、空段忽略
+T2="$(mktemp -d)"; mkdir -p "$T2/etc" "$T2/var" "$T2/app/bin"
+printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$T2/app/bin/zizvideo"; chmod 0755 "$T2/app/bin/zizvideo"
+printf '{"listen":"0.0.0.0:7799","data_dir":"%s/var","database_path":"%s/var/zizvideo.db","media_allow_roots":["/vol1/1000/视频"]}\n' "$T2" "$T2" >"$T2/etc/config.json"
+t2_run() {
+  TRIM_APPDEST="$T2/app" TRIM_PKGETC="$T2/etc" TRIM_PKGVAR="$T2/var" TRIM_SERVICE_PORT=7799 \
+    TRIM_DATA_SHARE_PATHS="/vol2/@appdata/zizvideo/media" \
+    TRIM_DATA_ACCESSIBLE_PATHS="/vol1/1000/电影:/vol1/1000/剧集::relative/path:/vol1/1000/电影" \
+    sh "$FNOS/cmd/main" "$@" 2>&1
+}
+t2_run start >/dev/null 2>&1 || true
+merr="$(python3 -c 'import json,sys
+cfg = json.load(open(sys.argv[1]))
+roots = cfg.get("media_allow_roots") or []
+own = sys.argv[2]
+assert "/vol1/1000/视频" in roots, ("原有条目丢了", roots)
+assert own in roots, ("自己的共享目录不在", roots)
+assert "/vol2/@appdata/zizvideo/media" in roots, ("TRIM_DATA_SHARE_PATHS 没并进来", roots)
+assert "/vol1/1000/电影" in roots and "/vol1/1000/剧集" in roots, ("授权目录没并进来", roots)
+assert "relative/path" not in roots, ("相对路径应该被忽略", roots)
+assert roots.count("/vol1/1000/电影") == 1, ("重复项没去重", roots)' "$T2/etc/config.json" "$T2/var/media" 2>&1)" \
+  && ok "飞牛给的共享/授权目录并进了 media_allow_roots（原有条目保留、去重、忽略非法项）" || bad "媒体根合并结果不对：$merr"
+n1="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("media_allow_roots") or []))' "$T2/etc/config.json")"
+t2_run stop >/dev/null 2>&1 || true
+t2_run start >/dev/null 2>&1 || true
+n2="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("media_allow_roots") or []))' "$T2/etc/config.json")"
+[ "$n1" = "$n2" ] && ok "重复 start 幂等（媒体根数量 $n1 不变）" || bad "重复 start 把媒体根越加越多：$n1 → $n2"
+t2_run stop >/dev/null 2>&1 || true
+rm -rf "$T2"
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then
