@@ -118,6 +118,24 @@ else
   bad "app.tgz 里没有 bin/zizvideo（装上也起不来）"
 fi
 
+hdr "包内二进制与发行件同源（防止"先打包、后又重建二进制"的漂移）"
+# 场景：先 `make fpk`（包里是那一刻的二进制），之后再 `make release` 重建了 linux 产物 ——
+# 包里的二进制与发行件就不再是同一份字节，而"验过包"这句话也随之失效。
+# fpk 本身不可逐字节复现（打包带时间戳），所以这里比的是**包内二进制**与**发行件**的 sha256。
+case "$platform" in x86) rarch="amd64" ;; arm) rarch="arm64" ;; *) rarch="" ;; esac
+RBIN="${ZV_FNOS_RELEASE_BIN:-$ROOT/dist/apps/zizvideo/$VER/zizvideo_${VER}_linux_$rarch}"
+if [ -n "$rarch" ] && [ -f "$RBIN" ] && [ -f "$BIN" ]; then
+  emb="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$BIN")"
+  rel="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$RBIN")"
+  if [ "$emb" = "$rel" ]; then
+    ok "包内 bin/zizvideo 与发行件逐字节一致（sha256 ${emb:0:12}…）"
+  else
+    bad "包内二进制与发行件**不同源**（包内 ${emb:0:12}… ≠ 发行件 ${rel:0:12}…）—— 打完包之后又重建过二进制？重新 make fpk"
+  fi
+elif [ -n "$rarch" ]; then
+  printf '  · 找不到发行件 %s，无法核对同源（没跑过 make release？）\n' "$RBIN"
+fi
+
 hdr "图标与权限声明"
 for spec in "ICON.PNG 64" "ICON_256.PNG 256"; do
   set -- $spec

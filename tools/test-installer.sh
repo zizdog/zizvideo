@@ -747,6 +747,15 @@ if [ -n "$FN" ]; then
       else
         bad "包自检没过：$(printf '%s' "$fpkout" | grep '✗' | head -3)"
       fi
+      # 同源核对的反例：把"发行件"指到别的文件（模拟"打完包之后又重建了二进制"）
+      if fpkbad="$(ZV_FNOS_RELEASE_BIN=/bin/echo bash "$ROOT/tools/check-fnos-fpk.sh" "$fpk" 2>&1)"; then
+        bad "包内二进制与发行件不同源时自检竟然通过（这种漂移会让"验过的包"其实装着另一份二进制）"
+      else
+        case "$fpkbad" in
+          *"不同源"*) ok "包内二进制与发行件不同源时如实报错（防止打包后又重建二进制）" ;;
+          *) bad "不同源时的报错不对：$(printf '%s' "$fpkbad" | grep '✗' | head -2 | tr '\n' ' ')" ;;
+        esac
+      fi
     else
       bad "fnpack 说成功但没有像样的 .fpk：$fpk"
     fi
