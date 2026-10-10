@@ -29,3 +29,6 @@ android/.kotlin/
 # 容器构建上下文里的大二进制与运行时数据（每次由 make docker 重新放进来）
 docker/zizvideo
 docker/data/
+
+# 本地构建工具（官方 fnpack 等，不进仓库）
+.tools/

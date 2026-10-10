@@ -12,7 +12,7 @@
 #  用法：
 #    bash tools/make-fnos-pkg.sh [--arch amd64|arm64] [--version <ver>] [--stage-only]
 #  产物：
-#    dist/fnos/zizvideo-<ver>-<arch>.fpk         （需要 fnpack）
+#    dist/fnos/zizvideo-<pkgver>-<x86|arm>.fpk    （需要 fnpack；官方提供 macOS 版）
 #    dist/fnos/zizvideo-<ver>-<arch>/            （总是产出：可直接 fnpack build 的目录）
 # ============================================================================
 set -euo pipefail
@@ -77,10 +77,13 @@ if [ "$STAGE_ONLY" = "1" ]; then
   exit 0
 fi
 
-if ! command -v fnpack >/dev/null 2>&1; then
+FN=fnpack
+if [ -x "$ROOT/.tools/fnpack" ]; then FN="$ROOT/.tools/fnpack"; fi
+if ! command -v "$FN" >/dev/null 2>&1 && [ ! -x "$FN" ]; then
   cat >&2 <<'MSG'
 !! 没有 fnpack（飞牛官方打包器）—— 不能诚实地产出 .fpk，所以这里直接失败。
-   装法见飞牛开发者文档 https://developer.fnnas.com/docs/guide/（fnpack 与 appcenter-cli 都在那里）。
+   装法见飞牛开发者文档 https://developer.fnnas.com/docs/cli/fnpack/（官方提供 Windows/Linux/macOS 版，
+   脚本会优先用仓库里的 .tools/fnpack）。
    目录已经准备好，装上之后可以直接跑：
      fnpack build --directory <上面的待打包目录>
    或者用本脚本的 --stage-only 只准备目录。
@@ -89,11 +92,18 @@ MSG
 fi
 
 cd "$DIST"
-fnpack build --directory "$STAGE"
-FPK="$(ls -1 "$DIST"/*.fpk 2>/dev/null | head -1 || true)"
-if [ -z "$FPK" ]; then
-  echo "!! fnpack 跑完却没看到 .fpk（不谎报成功）" >&2
+"$FN" build --directory "$STAGE"
+RAW="$DIST/zizvideo.fpk"
+if [ ! -f "$RAW" ]; then
+  echo "!! fnpack 跑完却没看到 zizvideo.fpk（不谎报成功）" >&2
   exit 1
 fi
-echo "==> 已产出：${FPK}（$(wc -c <"$FPK" | tr -d ' ') 字节）"
+FPK="$DIST/zizvideo-${PKGVER}-${FNOS_PLATFORM}.fpk"
+mv -f "$RAW" "$FPK"
+SIZE="$(wc -c <"$FPK" | tr -d ' ')"
+if [ "$SIZE" -lt 1000000 ]; then
+  echo "!! .fpk 只有 ${SIZE} 字节 —— 太小了，八成没把二进制打进去（不谎报成功）" >&2
+  exit 1
+fi
+echo "==> 已产出：${FPK}（${SIZE} 字节）"
 echo "    装到飞牛设备：appcenter-cli install-fpk $FPK"

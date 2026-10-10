@@ -1,0 +1,4 @@
+#!/bin/sh
+# 官方布局：cmd/ 下每个生命周期钩子是**独立文件**（不是 main 的子命令）。
+# 真正的逻辑只在 cmd/main 里维护一份，这里做薄壳转发 —— 少一份重复实现。
+exec "$(dirname "$0")/main" upgrade_callback "$@"

@@ -387,7 +387,10 @@ assert isinstance(steps, list) and steps, "向导必须是**步骤数组**"
 for st in steps:
     assert isinstance(st, dict) and st.get("stepTitle") and isinstance(st.get("items"), list), "每步要有 stepTitle 与 items"
     for it in st["items"]:
-        assert it.get("type") in ("text", "password", "radio", "checkbox", "select", "switch", "tips"), "字段类型不认识：%r" % it.get("type")
+        # ⚠️ 只认 **fnpack 1.2.3 实测通过**的三种类型。官方那套开发 Skill 文档里列的
+        # radio/checkbox/select/tips **会被打包器拒绝**（我照文档写完，fnpack 直接报
+        # "File install is not valid ... content validation failure"）—— 以真打包器为准。
+        assert it.get("type") in ("text", "password", "switch"), "字段类型不被 fnpack 接受：%r" % it.get("type")
         if it["type"] != "tips":
             assert it.get("field"), "非 tips 的项必须有 field"
 # 端口只能由 manifest 的 service_port + 桌面入口的 port 声明一次；向导里**不许**再出现端口字段，
@@ -524,6 +527,15 @@ rm -rf "$CVD"
 # 生命周期脚本：status 在没跑时必须是 3、未知参数必须 1（官方硬要求），且不许硬编码安装路径
 syntaxless="$FNOS/cmd/main"
 sh -n "$syntaxless" && ok "cmd/main 通过 sh -n" || bad "cmd/main 语法错"
+# 官方布局（fnpack create 生成的工程为准）：cmd/ 下每个生命周期钩子都是**独立文件**，
+# 塞进 main 的子命令 fnOS 根本不会调（我第一版就是那样）。
+for h in install_init install_callback upgrade_init upgrade_callback uninstall_init uninstall_callback config_init config_callback; do
+  if [ -x "$FNOS/cmd/${h}" ]; then
+    sh -n "$FNOS/cmd/${h}" 2>/dev/null && ok "cmd/${h} 存在且可执行" || bad "cmd/${h} 语法错"
+  else
+    bad "缺 cmd/${h}（fnOS 的钩子按**文件**调用，不是 main 的子命令）"
+  fi
+done
 tmpd="$(mktemp -d)"
 if TRIM_APPDEST="$tmpd/app" TRIM_PKGETC="$tmpd/etc" TRIM_PKGVAR="$tmpd/var" \
    TRIM_SERVICE_PORT=7799 sh "$syntaxless" status >/dev/null 2>&1; then
@@ -563,10 +575,29 @@ if bash "$ROOT/tools/make-fnos-pkg.sh" --stage-only >/dev/null 2>&1; then
 else
   bad "make-fnos-pkg.sh --stage-only 失败（待打包目录都出不来）"
 fi
-if command -v fnpack >/dev/null 2>&1; then
-  ok "本机有 fnpack，可以出真 .fpk（make-fnos-pkg.sh）"
+FN=""
+if [ -x "$ROOT/.tools/fnpack" ]; then FN="$ROOT/.tools/fnpack"
+elif command -v fnpack >/dev/null 2>&1; then FN="$(command -v fnpack)"; fi
+if [ -n "$FN" ]; then
+  ok "本机有 fnpack（${FN}）：跑一次**真打包**验包结构与向导格式"
+  if out=$(bash "$ROOT/tools/make-fnos-pkg.sh" --arch amd64 2>&1); then
+    fpk="$(ls -1 "$ROOT/dist/fnos"/zizvideo-*-x86.fpk 2>/dev/null | head -1 || true)"
+    if [ -n "$fpk" ] && [ "$(wc -c <"$fpk" | tr -d ' ')" -gt 1000000 ]; then
+      ok "fnpack 真打包成功：$(basename "$fpk")（$(wc -c <"$fpk" | tr -d ' ') 字节）"
+      # 包里必须真有我们的二进制与 9 个 cmd 脚本（别只看"打包成功"）
+      if tar tzf "$fpk" 2>/dev/null | grep -q '^cmd/main$' && tar xzOf "$fpk" app.tgz 2>/dev/null | tar tzf - 2>/dev/null | grep -q '^bin/zizvideo$'; then
+        ok "包内含 cmd/main 与 app/bin/zizvideo"
+      else
+        bad ".fpk 里没找到 cmd/main 或 app/bin/zizvideo"
+      fi
+    else
+      bad "fnpack 说成功但没有像样的 .fpk：$fpk"
+    fi
+  else
+    bad "fnpack 真打包失败：$(printf '%s' "$out" | tail -3)"
+  fi
 else
-  ok "本机没有 fnpack：脚本会如实报错而**不**伪造 .fpk（真机打包待有 fnpack 的机器）"
+  ok "本机没有 fnpack：脚本会如实报错而**不**伪造 .fpk（有 fnpack 的机器上会自动跑真打包）"
 fi
 
 # ---------------------------------------------------------------------------
