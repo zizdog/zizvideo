@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -112,5 +113,37 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 				t.Fatal("非法配置必须被拒绝")
 			}
 		})
+	}
+}
+
+// database_path 落在 data_dir 之外时必须**明确警告**（2026-10-10 审计 P2）：
+// covers/inbox/安装器的 --purge 全按 data_dir 走，数据库却能单独指到别处；
+// 用户"只改 data_dir"时数据库不会跟着走，备份/卸载就会看错地方。
+// 判据是"警告得准"而不是"自动改用户路径"——自动搬库会在新路径造空库，更危险。
+func TestWarningsWhenDatabaseOutsideDataDir(t *testing.T) {
+	inside := &Config{DataDir: "/data/zizvideo", DatabasePath: "/data/zizvideo/zizvideo.db"}
+	if w := inside.Warnings(); len(w) != 0 {
+		t.Fatalf("库在 data_dir 内不该警告：%v", w)
+	}
+	same := &Config{DataDir: "/data/zizvideo/", DatabasePath: "/data/zizvideo"}
+	if w := same.Warnings(); len(w) != 0 {
+		t.Fatalf("尾部斜杠造成的假阴性：%v", w)
+	}
+	outside := &Config{DataDir: "/data/zizvideo", DatabasePath: "/old/place/zizvideo.db"}
+	w := outside.Warnings()
+	if len(w) != 1 {
+		t.Fatalf("库在 data_dir 之外应恰好 1 条警告，实际 %v", w)
+	}
+	if !strings.Contains(w[0], "/old/place/zizvideo.db") || !strings.Contains(w[0], "data_dir") {
+		t.Fatalf("警告没说清是哪两个路径：%s", w[0])
+	}
+	// 前缀相近但不是子目录（/data/zizvideo2）必须判为"在外"
+	sibling := &Config{DataDir: "/data/zizvideo", DatabasePath: "/data/zizvideo2/zizvideo.db"}
+	if len(sibling.Warnings()) != 1 {
+		t.Fatal("相邻目录名（zizvideo2）被误判成 data_dir 之内")
+	}
+	// 没配齐时不猜、不警告（Validate 会拦住）
+	if w := (&Config{}).Warnings(); len(w) != 0 {
+		t.Fatalf("空配置不该产生警告：%v", w)
 	}
 }

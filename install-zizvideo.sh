@@ -5,7 +5,7 @@
 # 两种模式都与面板托管（cn.zizpanel.zizvideo）互斥，见 check_conflicts。
 set -euo pipefail
 
-INSTALLER_VERSION="1.1.1"
+INSTALLER_VERSION="1.1.2"
 DEFAULT_MIRROR="https://mirror.zizdog.com:8888"
 DEFAULT_LABEL="com.zizvideo.server"
 # ⚠️ 面板托管的 label：互斥检查就靠它（见 check_conflicts）。**面板改一次名，这里就要跟一次**，

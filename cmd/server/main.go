@@ -65,6 +65,11 @@ func run() error {
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
+	// 配置层面的"能用但很可能不是你想要的"如实报出来（只警告，绝不擅自改用户设的路径）。
+	for _, warn := range cfg.Warnings() {
+		logger.Warn("配置提醒", "detail", warn)
+	}
+
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}

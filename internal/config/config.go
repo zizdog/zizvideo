@@ -183,6 +183,38 @@ func splitList(v string) []string {
 	return out
 }
 
+// Warnings 返回"能用但很可能不是你想要的"配置问题（只警告，不改用户设的值）。
+//
+// 目前只查一件事（2026-10-10 审计 P2）：**database_path 落在 data_dir 之外**。
+// 为什么值得警告：covers/inbox/日志/安装器的 --purge 全都按 `data_dir` 定位，数据库却是唯一
+// 可以单独指到别处的路径。用户"只改 data_dir"时数据库**不会跟着走**（老配置文件里还写着旧
+// database_path），于是备份/卸载会看错地方 —— 而这时最危险的处理是"自动把路径改回去/搬库"，
+// 那会在新路径造一个空库、让用户以为数据全丢了。所以这里只**如实警告**，让人自己决定。
+func (c *Config) Warnings() []string {
+	var out []string
+	if c.DatabasePath == "" || c.DataDir == "" {
+		return out
+	}
+	if !pathWithin(c.DatabasePath, c.DataDir) {
+		out = append(out, "database_path（"+c.DatabasePath+"）不在 data_dir（"+c.DataDir+
+			"）之内：covers/inbox/安装器的清除操作都按 data_dir 走，请确认备份与卸载会一并处理这个数据库")
+	}
+	return out
+}
+
+// pathWithin 判断 p 是否等于 base 或位于 base 之下（都按 Clean 后比较，避免尾巴斜杠假阴性）。
+func pathWithin(p, base string) bool {
+	p, base = filepath.Clean(p), filepath.Clean(base)
+	if p == base {
+		return true
+	}
+	rel, err := filepath.Rel(base, p)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // Validate rejects configurations that would make the service unsafe or broken.
 func (c *Config) Validate() error {
 	if c.Listen == "" {
