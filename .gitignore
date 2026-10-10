@@ -35,3 +35,6 @@ docker/data/
 
 # 容器里跑真 Linux 验证的临时现场（不提交）
 .linetest/
+
+# Linux 验证证据（按 sha256 记"这一份字节在真 Linux 上跑过"；每次 make linux-verify 重写）
+dist/
