@@ -32,3 +32,6 @@ docker/data/
 
 # 本地构建工具（官方 fnpack 等，不进仓库）
 .tools/
+
+# 容器里跑真 Linux 验证的临时现场（不提交）
+.linetest/
