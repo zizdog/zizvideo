@@ -130,6 +130,9 @@ index: ## 只按现有版本目录重算索引（产物没重编时用）
 publish-app: ## 只发安卓客户端（APK + android.json），不动服务端（改的只有安卓代码时用）
 	@bash tools/publish-mirror.sh --app-only
 
+preflight: ## 发布前把所有证据跑一遍（门禁/冒烟/飞牛包/真 Linux/发布目录/镜像漂移）并给结论
+	@bash tools/preflight.sh $(if $(ONLY),--only $(ONLY),)
+
 release-check: ## 发版前自检 dist 里的索引与产物是否对得平（sha256/size/签名/静态 ELF）
 	@bash tools/check-release-dir.sh
 

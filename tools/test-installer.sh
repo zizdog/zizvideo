@@ -814,6 +814,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 发布前总检（tools/preflight.sh）：步骤清单 + 镜像漂移的两条判据（正常待发布 vs 真漂移）
+printf '==> 发布前总检 preflight.sh\n'
+PF="$ROOT/tools/preflight.sh"
+bash -n "$PF" && ok "preflight.sh 通过语法检查" || bad "preflight.sh 语法错"
+steps="$(bash "$PF" --list 2>&1 || true)"
+n_steps="$(printf '%s\n' "$steps" | grep -c . || true)"
+[ "$n_steps" -ge 6 ] && ok "preflight 列出 ${n_steps} 个步骤（含 mirror 漂移）" || bad "preflight --list 只列出 ${n_steps} 个步骤"
+# 假镜像：本地安装器与镜像一致 → ✓
+FM="$(mktemp -d)"; mkdir -p "$FM/apps/zizvideo"
+cp "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$FM/apps/zizvideo/" 2>/dev/null || true
+# ⚠️ latest 必须等于**本地版本**：否则会走"镜像还是上一版（发布前正常）"那条分支，测不到我们要拦的情况
+PFVER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+printf '{"app":"zizvideo","latest":"%s","assets":[]}\n' "$PFVER" >"$FM/apps/zizvideo/manifest.json"
+pfout="$(ZV_PREFLIGHT_MIRROR="file://$FM" bash "$PF" --only mirror 2>&1 || true)"
+case "$pfout" in
+  *"逐字节一致"*) ok "镜像与本地一致时报「逐字节一致」" ;;
+  *) bad "镜像一致时没报一致：$(printf '%s' "$pfout" | grep -E '安装器|✗' | head -2 | tr '\n' ' ')" ;;
+esac
+# 同一版本却字节不同 → **必须失败**（违反"同版本不许换字节"）
+printf '\n# 与本地不同\n' >>"$FM/apps/zizvideo/install-zizvideo.sh"
+if ZV_PREFLIGHT_MIRROR="file://$FM" bash "$PF" --only mirror >"$FM/out" 2>&1; then
+  bad "同一版本字节不同时 preflight 竟然通过（同版本换字节是最该拦的）"
+else
+  case "$(cat "$FM/out")" in
+    *"同版本"*"字节不同"*) ok "同版本字节不同时 preflight 如实失败" ;;
+    *) bad "同版本字节不同的报错不对：$(grep -E '✗' "$FM/out" | head -2 | tr '\n' ' ')" ;;
+  esac
+fi
+# 镜像 latest 与本地不同（发布前正常）→ 跳过且说明"发布前正常"，**不算失败**
+printf '{"app":"zizvideo","latest":"0.0.1","assets":[]}\n' >"$FM/apps/zizvideo/manifest.json"
+if ZV_PREFLIGHT_MIRROR="file://$FM" bash "$PF" --only mirror >"$FM/out2" 2>&1; then
+  case "$(cat "$FM/out2")" in
+    *"发布前正常"*) ok "镜像还是上一版时如实说明「发布前正常」且不算失败" ;;
+    *) bad "镜像旧版时的说明不清：$(grep -E '·|✗' "$FM/out2" | head -2 | tr '\n' ' ')" ;;
+  esac
+else
+  bad "镜像还是上一版时 preflight 竟然判失败（发布前必然如此，会天天误报）"
+fi
+rm -rf "$FM"
+
+# ---------------------------------------------------------------------------
 # 安装器 --verify 与自查脚本 --as-daemon：两个**独立实现**在同一场景下必须给出同样判定
 #
 # 这两处都会回答"守护进程到底读不读得到媒体根"（安装器复用安装时那套一次性 launchd 作业，
