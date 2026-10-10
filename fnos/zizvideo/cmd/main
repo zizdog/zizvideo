@@ -142,7 +142,7 @@ cmd_start() {
     return 0
   fi
   [ -x "$BIN" ] || { fail "找不到可执行文件：$BIN"; return 1; }
-  mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC" "$TRIM_PKGTMP"
+  mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC" "$TRIM_PKGTMP" "$TRIM_PKGVAR/media"
   write_config_if_missing
   merge_media_roots   # 飞牛可能在装完之后才授权目录/挂共享盘 ⇒ 每次 start 都并一次（幂等）
   # 后台常驻：官方要求长期服务**降权**运行（run-as=package，这里不做 sudo/root）
@@ -274,7 +274,7 @@ case "${1:-}" in
   install_callback)
     # 装完应用文件后：把数据/配置目录建好、按系统给的端口与目录写一份配置（没有才写），
     # 并把飞牛给的共享/授权目录并进媒体根。**幂等**：重复安装/升级都安全。
-    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP" || {
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGTMP" "$TRIM_PKGVAR/media" || {
       fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
     write_config_if_missing
     merge_media_roots
@@ -286,7 +286,7 @@ case "${1:-}" in
     exit 0 ;;
   upgrade_callback)
     # 升级：**不覆盖用户配置**，只做兼容检查与幂等迁移；配置坏了先备份再重建（可回滚）。
-    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" || { fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
+    mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR" "$TRIM_PKGVAR/media" || { fail "创建数据目录失败：$TRIM_PKGVAR"; exit 1; }
     if [ -f "$CONFIG" ]; then
       if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$CONFIG" >/dev/null 2>&1; then
         backup="$CONFIG.broken.$(date +%Y%m%d%H%M%S)"

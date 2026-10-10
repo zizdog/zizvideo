@@ -970,6 +970,106 @@ PYE
 done
 
 # ---------------------------------------------------------------------------
+# 三个"生成 config.json 的地方"（飞牛 cmd/main、容器 entrypoint、Linux 安装器）产出必须被**真服务**接受
+#
+# 为什么值得单独测：这三处是同一件事的三份实现（key 名、listen 形状、database_path 位置各写各的）。
+# 只验"JSON 合法"不够 —— 真风险是"真服务不认这份配置"（字段名写错/路径不合法/端口形状不对），
+# 而那种错在用户那边表现为"装完起不来"，跟这几行 python 毫无关系、极难查。
+printf '==> 三个配置生成器：产出必须能被真服务接受（真起一遍）\n'
+CW="$(mktemp -d)"; CW_PORT=7798; mkdir -p "$CW/media"
+cfgnote() { printf '  · %s\n' "$*"; }
+
+# ① 飞牛：install_callback 会写配置（并并入系统给的目录）
+mkdir -p "$CW/fnos"
+TRIM_APPDEST="$CW/fnos/app" TRIM_PKGETC="$CW/fnos/etc" TRIM_PKGVAR="$CW/fnos/var" \
+  TRIM_SERVICE_PORT="$CW_PORT" TRIM_DATA_ACCESSIBLE_PATHS="$CW/media" \
+  sh "$ROOT/fnos/zizvideo/cmd/main" install_callback >/dev/null 2>&1 || true
+# ② 容器：entrypoint.sh 首次启动写配置
+mkdir -p "$CW/docker"
+ZV_LISTEN="127.0.0.1:$CW_PORT" ZV_DATA_DIR="$CW/docker/data" ZV_MEDIA_ROOTS="$CW/media" ZV_BIN=/bin/true \
+  sh "$ROOT/docker/entrypoint.sh" >/dev/null 2>&1 || true
+# ③ Linux 安装器：真装一遍（假 systemctl，file:// 当镜像）；配置在它 start 之前就写好，
+#    服务起不来不影响我们取配置（但要求配置必须存在，不许"什么都没写"）
+mkdir -p "$CW/lin/apps/zizvideo/9.9.9" "$CW/lin/media"
+printf '#!/bin/sh\nexit 0\n' >"$CW/lin/apps/zizvideo/9.9.9/zizvideo_9.9.9_linux_arm64"
+printf '#!/bin/sh\nexit 0\n' >"$CW/lin/apps/zizvideo/9.9.9/zizvideo_9.9.9_linux_amd64"
+printf 'stub darwin\n' >"$CW/lin/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
+chmod 0755 "$CW/lin/apps/zizvideo/9.9.9"/zizvideo_9.9.9_linux_*
+if python3 "$ROOT/tools/make-app-index.py" "$CW/lin/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1; then
+  ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$CW/lin/bin" ZV_SYSTEMD_DIR="$CW/lin/systemd" \
+    ZV_DATA_ROOT="$CW/lin/data" ZV_CONF_DIR="$CW/lin/conf" ZV_FAKE_SYSTEMCTL=/bin/true \
+    ZV_FAKE_USERADD=/bin/true ZV_FAKE_ID=/usr/bin/id ZV_ACCESS_PROBE_WAIT=0 \
+    bash "$ROOT/install-zizvideo-linux.sh" --mirror "file://$CW/lin" --listen "127.0.0.1:$CW_PORT" \
+    >/dev/null 2>&1 || true
+fi
+
+for spec in "飞牛cmd/main:$CW/fnos/etc/config.json" "容器entrypoint:$CW/docker/data/config.json" "Linux安装器:$CW/lin/conf/config.json"; do
+  name="${spec%%:*}"; cfg="${spec#*:}"
+  if [ ! -f "$cfg" ]; then
+    bad "$name 没有生成配置：$cfg"
+    continue
+  fi
+  cfg_err="$(python3 -c 'import json,sys
+cfg = json.load(open(sys.argv[1]))
+missing = [k for k in ("listen","data_dir","database_path","media_allow_roots","allow_register") if k not in cfg]
+assert not missing, "缺字段 %s" % missing
+db, data = cfg["database_path"], cfg["data_dir"].rstrip("/")
+assert db.startswith(data + "/"), "database_path=%s 不在 data_dir=%s 内（备份/卸载会漏掉它）" % (db, data)
+assert ":" in cfg["listen"], "listen 形状不对：%r" % cfg["listen"]
+' "$cfg" 2>&1)" && ok "$name 生成的配置结构正确（5 个共享字段都在、库在数据目录内、listen 形状对）" \
+    || bad "$name 生成的配置结构不对：$cfg_err"
+  # 真起一遍：HTTP 200 且 db 检查通过（有真服务认可才算数）
+  port="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["listen"].split(":")[-1])' "$cfg")"
+  # 日志名不能用带 `/` 的 name（"飞牛cmd/main" 会让重定向直接失败、服务根本没起 —— 踩过）
+  safe="$(printf '%s' "$name" | tr '/ ' '__')"
+  "$ROOT/dist/zizvideo" --config "$cfg" >"$CW/${safe}.log" 2>&1 &
+  srv=$!
+  i=0; body=""; code="000"
+  while [ "$i" -lt 40 ]; do
+    # ⚠️ 必须看**状态码**：curl -f 会把 503（服务在跑但自检没过）当成失败，与"根本没响应"无法区分
+    code="$(curl -s -o "$CW/readyz.json" -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/readyz" 2>/dev/null || echo 000)"
+    body="$(cat "$CW/readyz.json" 2>/dev/null || true)"
+    [ "$code" = "200" ] && break
+    case "$code" in 5*) break ;; esac   # 5xx = 服务在跑但没就绪，别等到超时
+    sleep 0.3; i=$((i + 1))
+  done
+  kill "$srv" 2>/dev/null || true; wait "$srv" 2>/dev/null || true
+  if [ "$code" = "000" ] || [ -z "$body" ]; then
+    bad "$name 的配置服务起不来（/readyz 无响应）；日志尾部：$(tail -2 "$CW/${safe}.log" | tr '\n' ' ')"
+  else
+    dbok="$(printf '%s' "$body" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("no"); raise SystemExit
+checks = (d.get("data") or {}).get("checks") or {}
+print("yes" if (checks.get("db") or {}).get("ok") else "no")' 2>/dev/null || echo no)"
+    if [ "$code" = "200" ] && [ "$dbok" = "yes" ]; then
+      ok "$name 的配置**真服务接受**（起得来、/readyz 200、db 检查 ok）"
+    else
+      bad "$name 的配置没被服务接受（HTTP ${code}，db=${dbok}）：$(printf '%s' "$body" | head -c 200)"
+    fi
+  fi
+done
+# ④ 记下一条**语义**：媒体根不存在 ⇒ /readyz 503（"服务在跑但没就绪"）。容器编排器会把 503 当没就绪，
+#    所以容器入口已经改成"只把存在的媒体根写进配置"（见 docker/entrypoint.sh）。
+printf '#!/bin/sh\nexit 0\n' >"$CW/media-probe.json"
+mkdir -p "$CW/missing-test"
+printf '{"listen":"127.0.0.1:7798","data_dir":"%s/missing-test","database_path":"%s/missing-test/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$CW" "$CW" "$CW" >"$CW/missing.json"
+"$ROOT/dist/zizvideo" --config "$CW/missing.json" >"$CW/missing.log" 2>&1 &
+msrv=$!
+i=0; mcode="000"
+while [ "$i" -lt 40 ]; do
+  mcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:7798/readyz 2>/dev/null || echo 000)"
+  case "$mcode" in 200|5*) break ;; esac
+  sleep 0.3; i=$((i + 1))
+done
+kill "$msrv" 2>/dev/null || true; wait "$msrv" 2>/dev/null || true
+[ "$mcode" = "503" ] && ok "媒体根不存在时 /readyz 回 503（明确"没就绪"，不是假装健康也不是无响应）" \
+  || bad "媒体根不存在时的 /readyz 状态码是 ${mcode}（期望 503）"
+rm -rf "$CW"
+
+# ---------------------------------------------------------------------------
 # 真索引端到端：用**真的** tools/make-app-index.py 生成索引，再让 Linux 安装器按它挑包
 #
 # 为什么必须这样测：安装器与索引生成器是两个独立组件，只在"字段名/形状一致"这一层耦合。
