@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -20,9 +21,34 @@ import (
 )
 
 // DB wraps the connection pool with the repositories.
+//
+// ⚠️ 连接是**原子指针**，不是内嵌字段（2026-10-10 审计 P2，2026-10-11 改）：备份恢复要用
+// 新库替换连接（`Swap`），而 server/scanner/转码队列都长期握着同一个 *DB。以前内嵌
+// `*sql.DB` 时 `Swap` 直接写那个字段，而别的 goroutine 同时在读它 ⇒ **数据竞争**，
+// 实测表现是恢复期间"随机 500"。现在每次调用都 `conn.Load()` 取当前连接，Swap 是一次
+// 原子替换；下面这些方法就是把 database/sql 的入口转发给"当前连接"（项目只用到这 6 个）。
 type DB struct {
-	*sql.DB
+	conn atomic.Pointer[sql.DB]
 }
+
+func (db *DB) sql() *sql.DB { return db.conn.Load() }
+
+// 以下转发方法保证所有既有调用点（db.Query/Exec/…）一行都不用改。
+func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
+	return db.sql().Exec(query, args...)
+}
+func (db *DB) Query(query string, args ...any) (*sql.Rows, error) {
+	return db.sql().Query(query, args...)
+}
+func (db *DB) QueryRow(query string, args ...any) *sql.Row {
+	return db.sql().QueryRow(query, args...)
+}
+func (db *DB) Begin() (*sql.Tx, error)                     { return db.sql().Begin() }
+func (db *DB) Conn(ctx context.Context) (*sql.Conn, error) { return db.sql().Conn(ctx) }
+func (db *DB) Close() error                                { return db.sql().Close() }
+
+// Ping 供 /readyz 探活（转发给当前连接）。
+func (db *DB) Ping() error { return db.sql().Ping() }
 
 // Open creates the parent directory, opens SQLite with the documented PRAGMAs
 // and applies pending migrations. Safe to call repeatedly on the same file.
@@ -63,7 +89,8 @@ func Open(path string) (*DB, error) {
 			}
 			return nil, lastErr
 		}
-		db := &DB{DB: sqldb}
+		db := &DB{}
+		db.conn.Store(sqldb)
 		if err := db.Migrate(); err != nil {
 			_ = sqldb.Close()
 			lastErr = err
@@ -89,8 +116,16 @@ func busyErr(err error) bool {
 // Swap 用一份新打开的连接替换当前的连接（备份恢复用）。
 // 必须保持 **同一个 *DB 指针**：server / scanner / 转码队列都握着它，
 // 换指针会让它们指向已经关闭的旧连接（实测会变成"随机 500"）。
+//
+// 替换是原子的（见 DB 的说明）。旧连接池在这里**关掉**：不关就泄漏到进程退出
+// （而且旧库文件此时已经被挪走/删除）。副作用如实说明：正在飞行中的少数查询会拿到
+// "database is closed" 而失败一次 —— 这比"悄悄换到新库、结果写到一半进新库"要诚实得多，
+// 恢复接口本来也会提示"建议重启一次服务"。
 func (db *DB) Swap(fresh *DB) {
-	db.DB = fresh.DB
+	old := db.conn.Swap(fresh.sql())
+	if old != nil && old != fresh.sql() {
+		_ = old.Close()
+	}
 }
 
 // migration is one versioned SQL file.

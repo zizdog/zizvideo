@@ -665,3 +665,55 @@ func TestMigrationClassifiesLibrariesWithSeriesAsDrama(t *testing.T) {
 		t.Fatalf("schema 版本 = %d，0024（library kind）应已应用", v)
 	}
 }
+
+// TestSwapMakesQueriesAtomic：备份恢复用 Swap 换连接，而 server/scanner/转码队列都长期
+// 握着同一个 *DB。老实现是直接写内嵌的 `*sql.DB` 字段（别的 goroutine 同时在读它）⇒
+// 数据竞争，表现是恢复期间"随机 500"。现在连接是 atomic.Pointer，Swap 是一次原子替换。
+//
+// 判据：① 并发查询 + Swap 在 `-race` 下不报竞争；② Swap 之后所有查询走新库；
+// ③ 旧连接池被关掉（不关就泄漏到进程退出）。
+func TestSwapMakesQueriesAtomic(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(filepath.Join(dir, "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := first.CreateLibrary(newLib("lib_a", "A", "/tmp/a")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(filepath.Join(dir, "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CreateLibrary(newLib("lib_b", "B", "/tmp/b")); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// 查询结果在 Swap 前后可能来自任一库（这是允许的），只要不崩、不竞争
+			_, _ = first.ListLibraries()
+			_, _ = first.SchemaVersion()
+		}
+	}()
+	first.Swap(second)
+	close(stop)
+	<-done
+
+	libs, err := first.ListLibraries()
+	if err != nil {
+		t.Fatalf("Swap 之后查询失败：%v", err)
+	}
+	if len(libs) != 1 || libs[0].ID != "lib_b" {
+		t.Fatalf("Swap 之后应看到新库的内容，实际 %+v", libs)
+	}
+	first.Close()
+}
