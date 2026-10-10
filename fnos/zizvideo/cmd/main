@@ -91,7 +91,7 @@ JSONEOF
 
 cmd_start() {
   if pid="$(running_pid)"; then
-    log "$APPNAME 已在运行（pid $pid）"
+    log "$APPNAME 已在运行（pid ${pid}）"
     return 0
   fi
   [ -x "$BIN" ] || { fail "找不到可执行文件：$BIN"; return 1; }
@@ -111,12 +111,12 @@ cmd_start() {
       return 1
     fi
     if [ "$i" -ge 4 ] && curl -fsS --max-time 2 "http://127.0.0.1:$TRIM_SERVICE_PORT/readyz" >/dev/null 2>&1; then
-      log "$APPNAME 已启动（pid $pid，端口 $TRIM_SERVICE_PORT）"
+      log "$APPNAME 已启动（pid ${pid}，端口 ${TRIM_SERVICE_PORT}）"
       return 0
     fi
     sleep 0.5; i=$((i + 1))
   done
-  log "$APPNAME 已启动（pid $pid；/readyz 还没就绪，可能需要更久）"
+  log "$APPNAME 已启动（pid ${pid}；/readyz 还没就绪，可能需要更久）"
   return 0
 }
 
@@ -142,11 +142,47 @@ cmd_stop() {
 
 cmd_status() {
   if pid="$(running_pid)"; then
-    log "$APPNAME 在运行（pid $pid）"
+    log "$APPNAME 在运行（pid ${pid}）"
     return 0
   fi
   log "$APPNAME 没有在运行"
   return 3
+}
+
+# 配置变更（应用设置里改了端口/媒体根）：幂等地合并进 config.json，然后重启服务。
+# 官方要求 config_init（应用前）/ config_callback（应用后）都能重入；这里只实现 config_callback
+# 的"把向导值落到配置并重启"，失败就如实非零退出（用户能看到 TRIM_TEMP_LOGFILE 里的原因）。
+cmd_config_apply() {
+  [ -f "$CONFIG" ] || { write_config_if_missing; return 0; }
+  if ! command -v python3 >/dev/null 2>&1; then
+    fail "配置变更需要 python3 合并 JSON（这台机器没装），请手动编辑 $CONFIG 后 systemctl restart"
+    return 1
+  fi
+  python3 - "$CONFIG" "${wizard_port:-$TRIM_SERVICE_PORT}" "${wizard_extra_root:-}" "$TRIM_PKGVAR" <<'PYEOF'
+import json, os, sys
+cfg_path, port, extra, var = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(cfg_path) as handle:
+    cfg = json.load(handle)
+if port:
+    cfg["listen"] = "0.0.0.0:%s" % port
+roots = [r for r in (cfg.get("media_allow_roots") or []) if isinstance(r, str) and r.startswith("/")]
+shared = os.path.join(var, "media")
+if shared not in roots:
+    roots.insert(0, shared)
+if extra and extra.startswith("/") and extra not in roots:
+    roots.append(extra)
+cfg["media_allow_roots"] = roots
+tmp = cfg_path + ".tmp"
+with open(tmp, "w") as handle:
+    json.dump(cfg, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+os.replace(tmp, cfg_path)
+PYEOF
+  rc=$?
+  if [ "$rc" != "0" ]; then fail "写配置失败（原配置保持不动）"; return 1; fi
+  cmd_stop >/dev/null 2>&1 || true
+  cmd_start || { fail "配置已写入，但服务没能起来（看 ${LOGFILE}）"; return 1; }
+  return 0
 }
 
 # 安装/升级/卸载钩子（官方要求幂等；卸载**不擅自删用户数据**）
@@ -162,6 +198,10 @@ case "${1:-}" in
     "$0" stop >/dev/null 2>&1 || true
     exit 0 ;;
   uninstall_callback)
+    exit 0 ;;
+  config_callback)
+    cmd_config_apply && exit 0 || exit 1 ;;
+  config_init)
     exit 0 ;;
 esac
 

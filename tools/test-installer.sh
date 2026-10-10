@@ -378,6 +378,55 @@ grep -qE '"run-as"[[:space:]]*:[[:space:]]*"root"' "$FNOS/config/privilege" && b
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/privilege" && ok "privilege 是合法 JSON" || bad "privilege 不是合法 JSON"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/resource" && ok "resource 是合法 JSON" || bad "resource 不是合法 JSON"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/app/ui/config" && ok "app/ui/config 是合法 JSON" || bad "app/ui/config 不是合法 JSON"
+for w in install config; do
+  if [ -f "$FNOS/wizard/$w" ]; then
+    python3 - "$FNOS/wizard/$w" <<'PYW' && ok "wizard/${w} 是合法 JSON 且形状正确" || bad "wizard/${w} 不是合法 JSON / 形状不对"
+import json, sys
+steps = json.load(open(sys.argv[1]))
+assert isinstance(steps, list) and steps, "向导必须是**步骤数组**"
+for st in steps:
+    assert isinstance(st, dict) and st.get("stepTitle") and isinstance(st.get("items"), list), "每步要有 stepTitle 与 items"
+    for it in st["items"]:
+        assert it.get("type") in ("text", "password", "radio", "checkbox", "select", "switch", "tips"), "字段类型不认识：%r" % it.get("type")
+        if it["type"] != "tips":
+            assert it.get("field"), "非 tips 的项必须有 field"
+PYW
+  else
+    bad "缺 wizard/$w"
+  fi
+done
+# 配置变更钩子：幂等地合并端口/媒体根并重启
+#  ① 没有可执行文件时：配置**照样要写对**，但必须**如实非零退出**（不许假装服务起来了）
+#  ② 放一个只会 sleep 的假二进制：应当成功退出、并落下 pid 文件
+CVD="$(mktemp -d)"; mkdir -p "$CVD/etc" "$CVD/var" "$CVD/app/bin"
+printf '{"listen":"0.0.0.0:7799","data_dir":"%s","database_path":"%s/zizvideo.db","media_allow_roots":["%s/media"]}\n' "$CVD/var" "$CVD/var" "$CVD/var" >"$CVD/etc/config.json"
+cvd_run() {
+  TRIM_APPDEST="$CVD/app" TRIM_PKGETC="$CVD/etc" TRIM_PKGVAR="$CVD/var" TRIM_SERVICE_PORT=7799 \
+    wizard_port=8899 wizard_extra_root=/vol1/media \
+    sh "$FNOS/cmd/main" "$@" 2>&1
+}
+if cvd_run config_callback >/dev/null 2>&1; then
+  bad "没有可执行文件时 config_callback 竟然返回成功（在假装服务起来了）"
+else
+  ok "没有可执行文件时 config_callback 如实非零退出"
+fi
+python3 - "$CVD/etc/config.json" <<'PYC' && ok "config_callback 写出的配置是合法 JSON 且端口/媒体根已更新" || bad "config_callback 写坏了配置"
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+assert cfg.get("listen") == "0.0.0.0:8899", cfg.get("listen")
+roots = cfg.get("media_allow_roots") or []
+assert any(r.startswith("/vol1") for r in roots), roots
+PYC
+# ② 假二进制（只 sleep）→ 应当成功
+printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
+if cvd_run config_callback >/dev/null 2>&1; then
+  ok "有可执行文件时 config_callback 成功（改了配置并重启）"
+  [ -f "$CVD/var/zizvideo.pid" ] && ok "重启后落了 pid 文件" || bad "重启后没有 pid 文件"
+  cvd_run stop >/dev/null 2>&1 || true
+else
+  bad "有可执行文件时 config_callback 失败：$(cvd_run config_callback | tail -2)"
+fi
+rm -rf "$CVD"
 
 # 生命周期脚本：status 在没跑时必须是 3、未知参数必须 1（官方硬要求），且不许硬编码安装路径
 syntaxless="$FNOS/cmd/main"
@@ -577,7 +626,7 @@ fi
 # `set -u` 下直接炸，`set +u` 下会静默变成空串拼进消息。这类错一旦混进安装器就是"用户看到
 # 一句缺字的提示"或者"安装到一半退出"。**判据：变量后面紧跟非 ASCII 时一律写 `${var}`。**
 printf '==> shell 语法（含 tools/*.sh）+ `$var` 紧挨中文的坑\n'
-for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh; do
+for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
   [ -f "$sh" ] || continue
   if bash -n "$sh" 2>"$SB/sh-err.log"; then
     :
@@ -588,7 +637,7 @@ done
 # ⚠️ 用 LC_ALL=C + POSIX 字符类，**不能用 `grep -P`**：BSD grep 不支持 -P，只会报错、
 # 输出为空 ⇒ 门禁变成永远绿的摆设（我第一版就是这么写的，灵敏度一测就露了）。
 BAD_VAR="$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^[:print:][:space:]]' \
-  "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh 2>/dev/null | head -5)"
+  "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/* 2>/dev/null | head -5)"
 if [ -z "$BAD_VAR" ]; then
   ok "语法全过；没有 \`\$var\` 紧挨中文的写法（要写就写 \${var}）"
 else

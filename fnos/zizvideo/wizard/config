@@ -1,0 +1,28 @@
+[
+  {
+    "stepTitle": "修改 zizvideo 设置",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "服务端口",
+        "rules": [
+          { "required": true, "message": "请填端口" },
+          { "pattern": "^[0-9]{2,5}$", "message": "只能填数字（2-5 位）" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_extra_root",
+        "label": "额外的媒体根目录（可留空）",
+        "rules": [
+          { "pattern": "^$|^/.*", "message": "留空，或以 / 开头的绝对路径" }
+        ]
+      },
+      {
+        "type": "tips",
+        "label": "视频请放进应用共享目录 zizvideo/media；额外的媒体根必须是应用运行用户读得到的路径（装完可用 tools/verify-deploy.sh 自查）。改完会自动重启服务。"
+      }
+    ]
+  }
+]
