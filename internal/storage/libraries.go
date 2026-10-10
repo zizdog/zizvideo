@@ -169,6 +169,22 @@ func (db *DB) UpdateLibrary(id string, p LibraryPatch) (*domain.Library, error) 
 	return db.GetLibrary(id)
 }
 
+// LibraryByName 找同名（活着的）媒体库；没有就返回 nil。
+// 用途：建库前判重名 —— 老实现直接 INSERT，撞 UNIQUE 约束后**冒成 500 服务内部错误**
+// （2026-10-11 浏览器验收时抓到：用户看到的是"服务内部错误"，根本不知道是名字重复）。
+func (db *DB) LibraryByName(name string) (*domain.Library, error) {
+	row := db.QueryRow(`SELECT `+libCols+` FROM media_libraries
+		WHERE name = ? AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`, name)
+	l, err := scanLibrary(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
 // DeleteLibrary soft-deletes a library and all of its media rows.
 func (db *DB) DeleteLibrary(id string) error {
 	now := domain.NowString()

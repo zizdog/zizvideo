@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zizdog/zizvideo/internal/domain"
@@ -252,5 +253,42 @@ func TestMediaListUngroupedOnly(t *testing.T) {
 	}
 	if got := listIDs("kind=drama&ungrouped=1"); len(got) != 0 {
 		t.Fatalf("归入剧后不该再出现在未归组里，实际 %v", got)
+	}
+}
+
+// 建库重名必须是 409 + 人话，不能冒成 500「服务内部错误」。
+// 2026-10-11 浏览器验收时抓到：老实现直接 INSERT，撞 `UNIQUE constraint failed:
+// media_libraries.name` 之后 handler 把 SQL 错误当内部错误回给用户 —— 用户只看到
+// "服务内部错误"，根本不知道是名字重复。
+func TestCreateLibraryDuplicateNameIsConflict(t *testing.T) {
+	e := newEnv(t)
+	e.setupAdmin()
+	root := filepath.Join(e.Root, "dup-lib")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"name": "散片库", "root_path": root, "kind": "short"}
+	res, _, raw := e.write(http.MethodPost, "/api/v1/libraries", body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("第一次建库失败 %d: %s", res.StatusCode, raw)
+	}
+	res, _, raw = e.write(http.MethodPost, "/api/v1/libraries", body)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("重名建库应 409，实际 %d: %s", res.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "散片库") {
+		t.Fatalf("错误里要写清是哪个名字重复了：%s", raw)
+	}
+	// 名字释放后可以再用（软删的库不占名字）
+	libs, err := e.DB.ListLibraries()
+	if err != nil || len(libs) != 1 {
+		t.Fatalf("应有 1 个库：%v %v", libs, err)
+	}
+	if err := e.DB.DeleteLibrary(libs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	res, _, raw = e.write(http.MethodPost, "/api/v1/libraries", body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("删掉旧库后重名应可再用，实际 %d: %s", res.StatusCode, raw)
 	}
 }

@@ -49,6 +49,17 @@ func (s *Server) HandleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// 重名要给人话：以前直接 INSERT，撞 UNIQUE 后冒成 500「服务内部错误」
+	// （2026-08-11 之后的某次改动起就这样；2026-10-11 浏览器验收时抓到）。
+	if dup, derr := s.DB.LibraryByName(req.Name); derr != nil {
+		s.fail(w, r, derr)
+		return
+	} else if dup != nil {
+		s.audit(r, "library.create", "name:"+req.Name, false, "duplicate")
+		s.fail(w, r, domain.New("VALIDATION_LIBRARY_NAME_TAKEN",
+			"已经有一个叫「"+req.Name+"」的媒体库了，请换个名字", 409))
+		return
+	}
 	kind := strings.TrimSpace(req.Kind)
 	if kind == "" {
 		kind = domain.KindShort // 老客户端不传 ⇒ 短视频库（与迁移的默认值一致）
