@@ -272,12 +272,19 @@ func (q *Queue) Start() {
 	if q.started {
 		return
 	}
+	// 每次启动都换一个全新的停止信号：Stop 之后还能再 Start（不会拿到已关闭的 channel）
+	q.stop = make(chan struct{})
 	q.started = true
 	q.wg.Add(1)
-	go q.worker()
+	go q.worker(q.stop)
 }
 
-// Stop 通知协程收尾（正在跑的 ffmpeg 由 ctx 取消）。
+// Stop 收尾：**先取消正在跑的任务**（正在转的 ffmpeg 会被 ctx 杀掉），再等工作协程退出。
+//
+// ⚠️ 2026-10-10 审计：老实现只 close(stop) + wg.Wait()，而 job 的 ctx 派生于
+// context.Background()、cancel 只存进 q.jobs 从不调用 ⇒ 收到 SIGTERM 后进程会一直
+// 卡到当前转码自然结束（长片几十分钟），launchd/systemd 只能强杀；强杀又留下
+// media.transcode_state='running' 与 *.zvtranscode 临时文件。
 func (q *Queue) Stop() {
 	q.mu.Lock()
 	if !q.started {
@@ -285,8 +292,12 @@ func (q *Queue) Stop() {
 		return
 	}
 	q.started = false
+	for _, cancel := range q.jobs {
+		cancel()
+	}
+	stop := q.stop
 	q.mu.Unlock()
-	close(q.stop)
+	close(stop)
 	q.wg.Wait()
 }
 
@@ -321,24 +332,33 @@ func (q *Queue) Enqueue(items []Item, trigger string) (string, error) {
 	return t.ID, nil
 }
 
-func (q *Queue) worker() {
+func (q *Queue) worker(stop <-chan struct{}) {
 	defer q.wg.Done()
 	for {
 		select {
-		case <-q.stop:
+		case <-stop:
 			return
 		case j := <-q.pending:
+			// Stop 与 pending 同时就绪时 select 是随机的：收尾命令优先，别再开工
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			q.runJob(j)
 		}
 	}
 }
 
 // runJob 串行处理一个任务的每一件：单件失败不影响其余，最后如实汇总。
-// Busy 报告有没有任务正在跑（备份恢复前要先确认没有写入者）。
+// Busy 报告有没有任务正在跑或还没开跑（备份恢复前要先确认没有写入者）。
+//
+// ⚠️ 排队中（还在 pending 里、job_tasks 行已建）也必须算 busy：老实现只看 q.jobs，
+// 于是"备份恢复前没有写入者"这道闸门会被绕过（恢复换库后 worker 才拿旧任务的 id 去跑）。
 func (q *Queue) Busy() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.jobs) > 0
+	return len(q.jobs) > 0 || len(q.pending) > 0
 }
 
 // Cancel 取消一个正在跑的任务：正在转的那条会被中止（原文件保持可用），
@@ -568,3 +588,26 @@ func jsonStrings(items []string) string {
 
 // TempSuffixFor 给测试/清理用：临时产物后缀（扫描器会忽略它）。
 func TempSuffixFor(path string) string { return filepath.Clean(path) + tempSuffix }
+
+// RecoverStale 清理上一次进程留下的转码残局（启动时调一次）：
+//  1. media.transcode_state='running' 的行改成 failed —— 没有人在转，继续显示"转码中"就是谎报；
+//  2. 删掉这些行对应的 *.zvtranscode 临时文件（崩溃/强杀后没人清，一个就是整个源文件那么大）。
+//
+// 返回处理条数。只动状态与自己的临时文件，**永不碰原文件**。
+func (q *Queue) RecoverStale() int {
+	stale, err := q.db.ResetStaleTranscodes("上次转码被中断（进程退出），没有完成")
+	if err != nil {
+		q.log.Warn("清理遗留转码状态失败", "error", err.Error())
+		return 0
+	}
+	for _, path := range stale {
+		if path == "" {
+			continue
+		}
+		tmp := path + tempSuffix
+		if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+			q.log.Warn("删除遗留转码临时文件失败", "path", tmp, "error", err.Error())
+		}
+	}
+	return len(stale)
+}

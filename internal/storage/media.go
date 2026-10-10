@@ -112,6 +112,48 @@ func (db *DB) MarkProbeFailed(id, class, message string, attempts int) error {
 	return err
 }
 
+// ResetStaleTranscodes 把"上一次进程留下的、状态卡在 running"的转码行改成 failed，
+// 并返回它们的路径（调用方据此删掉 *.zvtranscode 临时文件）。
+//
+// 为什么必须有：进程崩溃/被强杀时没人把 transcode_state 改回去，界面上就永远显示
+// "转码中"——没有任何东西在转，这正是项目最忌讳的假状态（2026-10-10 审计）。
+// 只动状态与调用方自己的临时文件，永不碰原文件。
+func (db *DB) ResetStaleTranscodes(note string) ([]string, error) {
+	rows, err := db.Query(`SELECT id, path FROM media
+		WHERE transcode_state = ? AND deleted_at IS NULL`, domain.TranscodeRunning)
+	if err != nil {
+		return nil, err
+	}
+	type staleRow struct{ id, path string }
+	var stale []staleRow
+	for rows.Next() {
+		var r staleRow
+		if err := rows.Scan(&r.id, &r.path); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stale = append(stale, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(stale) == 0 {
+		return nil, nil
+	}
+	now := domain.NowString()
+	paths := make([]string, 0, len(stale))
+	for _, r := range stale {
+		if _, err := db.Exec(`UPDATE media SET transcode_state = ?, transcode_note = ?, updated_at = ?
+			WHERE id = ? AND deleted_at IS NULL`, domain.TranscodeFailed, truncate(note, 300), now, r.id); err != nil {
+			return paths, err
+		}
+		paths = append(paths, r.path)
+	}
+	return paths, nil
+}
+
 // MarkMissing flags a row as absent since the given time without deleting it.
 func (db *DB) MarkMissing(id, since string) error {
 	_, err := db.Exec(`UPDATE media SET missing_since = ?, updated_at = ?

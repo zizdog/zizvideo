@@ -101,6 +101,11 @@ func run() error {
 	defer tasks.Stop()
 
 	srv := api.NewServer(cfg, db, authMgr, tasks, roots, runner, logger)
+	// 转码残局清理：上次进程崩溃/被强杀会留下 media.transcode_state='running' 与
+	// *.zvtranscode 临时文件 —— 没有人在转却显示"转码中"就是谎报（2026-10-10 审计）。
+	if n := srv.Transcodes.RecoverStale(); n > 0 {
+		logger.Warn("清理了遗留的转码状态", "count", n)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

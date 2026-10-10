@@ -362,3 +362,64 @@ func grantSourceRow(t *testing.T, db *DB, userID, libraryID string) string {
 	}
 	return src
 }
+
+// TestResetStaleTranscodes：崩溃/强杀留下的 transcode_state='running' 必须在启动时
+// 被改成 failed，并把路径交回调用方去删临时文件（否则界面永远显示"转码中"，
+// 而没有任何东西在转 —— 2026-10-10 审计）。
+func TestResetStaleTranscodes(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "db", "zizvideo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	lib := newLib("lib_1", "库", t.TempDir())
+	if err := db.CreateLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	ins := func(id, path string) {
+		m := &domain.Media{ID: id, LibraryID: lib.ID, Path: path, Title: id, Size: 10,
+			Container: "mov", Codecs: domain.Codecs{Video: "h264", Audio: "aac"},
+			Width: 640, Height: 360, DurationMS: 1000, Status: domain.MediaReady}
+		if err := db.InsertMedia(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ins("med_running", "/lib/a.mp4")
+	ins("med_done", "/lib/b.mp4")
+	ins("med_idle", "/lib/c.mp4")
+	if err := db.SetMediaTranscode("med_running", domain.TranscodeRunning, "转码中"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetMediaTranscode("med_done", domain.TranscodeDone, "完成"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := db.ResetStaleTranscodes("上次转码被中断（进程退出），没有完成")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "/lib/a.mp4" {
+		t.Fatalf("应只交回卡在 running 的那条路径，实际 %v", paths)
+	}
+	for id, want := range map[string]string{
+		"med_running": domain.TranscodeFailed,
+		"med_done":    domain.TranscodeDone,
+		"med_idle":    "",
+	} {
+		got, err := db.GetMediaIn(domain.LibraryScope{All: true}, id)
+		if err != nil {
+			t.Fatalf("%s 读不到: %v", id, err)
+		}
+		if got.TranscodeState != want {
+			t.Fatalf("%s 的 transcode_state = %q, 期望 %q", id, got.TranscodeState, want)
+		}
+	}
+	// 幂等：再跑一次没有可清的了
+	again, err := db.ResetStaleTranscodes("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("第二次不应再有可清项，实际 %v", again)
+	}
+}

@@ -1,8 +1,14 @@
 package transcode
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zizdog/zizvideo/internal/config"
 )
 
 // 门禁：转码决策必须只看编解码/分辨率，且"已兼容"不许白重编（P1 的省时省质判据）。
@@ -16,8 +22,8 @@ func TestBuildPlanDecidesRemuxVsTranscode(t *testing.T) {
 		mustNot  []string
 	}{
 		{
-			name: "HEVC + AC3 → 重编视频与音频（选 720p 上限）",
-			opts: Options{VideoCodec: "hevc", AudioCodec: "ac3", Height: 1280, MaxHeight: 720, Out: base.Out},
+			name:     "HEVC + AC3 → 重编视频与音频（选 720p 上限）",
+			opts:     Options{VideoCodec: "hevc", AudioCodec: "ac3", Height: 1280, MaxHeight: 720, Out: base.Out},
 			wantMode: "transcode",
 			mustHave: []string{"libx264", "aac", "scale=-2:'min(720,ih)'", "+faststart"},
 		},
@@ -58,8 +64,8 @@ func TestBuildPlanDecidesRemuxVsTranscode(t *testing.T) {
 			mustNot:  []string{"2500k", "4500k", "-crf"},
 		},
 		{
-			name: "源没给码率就按档位上限（480p → 1200kbps 上限）",
-			opts: Options{VideoCodec: "mpeg4", AudioCodec: "aac", Height: 480, MaxHeight: 480, Out: base.Out},
+			name:     "源没给码率就按档位上限（480p → 1200kbps 上限）",
+			opts:     Options{VideoCodec: "mpeg4", AudioCodec: "aac", Height: 480, MaxHeight: 480, Out: base.Out},
 			wantMode: "transcode",
 			mustHave: []string{"scale=trunc(iw/2)*2:trunc(ih/2)*2", "-maxrate 1200k"},
 		},
@@ -120,4 +126,63 @@ func TestProgressPercentHonest(t *testing.T) {
 			t.Errorf("progressPercent(%q, %d) = (%d,%v)，期望 (%d,%v)", c.line, c.duration, got, ok, c.want, c.ok)
 		}
 	}
+}
+
+// TestStopCancelsInFlightJob：SIGTERM 收尾必须**取消正在跑的转码**。
+// 2026-10-10 审计：老实现只 close(stop)+wg.Wait()，而 job 的 ctx 从不被 cancel
+// ⇒ 进程会一直挂到当前转码自然结束（长片几十分钟），launchd/systemd 只能强杀。
+func TestStopCancelsInFlightJob(t *testing.T) {
+	q := NewQueue(config.Default(), nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	q.Start()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.mu.Lock()
+	q.jobs["job_在跑"] = cancel
+	q.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() { q.Stop(); close(done) }()
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop 没有取消正在跑的任务：收尾会卡到转码结束")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop 没有在取消后及时返回")
+	}
+}
+
+// TestBusyCountsQueuedJobs：排队中但还没开跑的任务也必须算 busy ——
+// 备份恢复前的"没有写入者"闸门靠它（老实现只看 q.jobs，会把已 Enqueue 的任务漏掉）。
+func TestBusyCountsQueuedJobs(t *testing.T) {
+	q := NewQueue(config.Default(), nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if q.Busy() {
+		t.Fatal("空队列不该 busy")
+	}
+	q.pending <- &job{ID: "job_排队中"}
+	if !q.Busy() {
+		t.Fatal("已排队未开跑的任务必须算 busy（否则恢复备份的闸门会被绕过）")
+	}
+}
+
+// TestStartAfterStopUsesFreshStopChannel：Stop 之后再 Start 必须还能干活
+// （老实现复用同一个 stop 通道，重启后的 worker 会立刻退出）。
+func TestStartAfterStopUsesFreshStopChannel(t *testing.T) {
+	q := NewQueue(config.Default(), nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	q.Start()
+	first := q.stop
+	q.Stop()
+	q.Start()
+	second := q.stop
+	if first == second {
+		t.Fatal("Stop 后再 Start 必须换一个新的停止信号")
+	}
+	select {
+	case <-second:
+		t.Fatal("新启动的停止信号不该是已关闭的")
+	default:
+	}
+	q.Stop()
 }
