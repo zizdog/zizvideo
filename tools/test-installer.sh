@@ -448,6 +448,40 @@ n2="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("m
 [ "$n1" = "$n2" ] && ok "重复 start 幂等（媒体根数量 $n1 不变）" || bad "重复 start 把媒体根越加越多：$n1 → $n2"
 t2_run stop >/dev/null 2>&1 || true
 rm -rf "$T2"
+# 卸载时"保留还是删除数据"：官方要求尊重向导选择；**默认保留**、删除要显式 + 删前守门 + 删后回读
+T3="$(mktemp -d)"; mkdir -p "$T3/var/zizvideo" "$T3/app"; : >"$T3/var/zizvideo/zizvideo.db"
+t3_run() {
+  TRIM_APPDEST="$T3/app" TRIM_PKGETC="$T3/etc" TRIM_PKGVAR="$T3/var/zizvideo" \
+    sh "$FNOS/cmd/main" uninstall_callback 2>&1
+}
+out3="$(t3_run)" || true
+if [ -e "$T3/var/zizvideo/zizvideo.db" ]; then
+  case "$out3" in *"已保留"*) ok "卸载默认**保留**数据（没勾选就不删）" ;; *) bad "默认既没保留也没说明：$out3" ;; esac
+else
+  bad "没勾选「删除数据」却把数据删了"
+fi
+out3="$(wizard_delete_data=1 t3_run)" || true
+if [ ! -e "$T3/var/zizvideo" ]; then
+  case "$out3" in *"回读确认"*) ok "显式勾选后真删并回读确认" ;; *) bad "删了但没说清：$out3" ;; esac
+else
+  bad "勾选了删除却没删干净：$out3"
+fi
+# 守门：把数据目录指到系统目录必须被拒（铁律 5：删文件前先证明这是我们的数据）
+mkdir -p "$T3/var/zizvideo" 2>/dev/null || true
+if out3="$(TRIM_APPDEST="$T3/app" TRIM_PKGETC="$T3/etc" TRIM_PKGVAR=/tmp wizard_delete_data=1 \
+     sh "$FNOS/cmd/main" uninstall_callback 2>&1)"; then
+  bad "TRIM_PKGVAR 指向 /tmp 时竟然照删了"
+else
+  [ -d /tmp ] && ok "数据目录可疑时拒绝删除（/tmp 原样保留）" || bad "/tmp 不见了！"
+fi
+# 不像本应用数据目录的也必须拒
+if out3="$(TRIM_APPDEST="$T3/app" TRIM_PKGETC="$T3/etc" TRIM_PKGVAR="$T3/var/notours" wizard_delete_data=1 \
+     sh "$FNOS/cmd/main" uninstall_callback 2>&1)"; then
+  bad "不像本应用数据的目录也被删了"
+else
+  ok "不像本应用数据的目录被拒（不删未明确拥有的数据）"
+fi
+rm -rf "$T3"
 # ② 假二进制（只 sleep）→ 应当成功
 printf '#!/bin/sh\nwhile true; do sleep 1; done\n' >"$CVD/app/bin/zizvideo"; chmod 0755 "$CVD/app/bin/zizvideo"
 if cvd_run config_callback >/dev/null 2>&1; then

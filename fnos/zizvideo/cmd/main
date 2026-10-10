@@ -241,6 +241,29 @@ case "${1:-}" in
     "$0" stop >/dev/null 2>&1 || true
     exit 0 ;;
   uninstall_callback)
+    # 向导里"同时删除应用数据"是**显式勾选**才删（wizard_delete_data）。默认**保留**：
+    # 用户没表达要删，就绝不动他的数据库（官方要求：尊重向导选择、不删未明确拥有的数据）。
+    case "$(printf '%s' "${wizard_delete_data:-}" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes|on|delete|是|删除|删除数据)
+        case "$TRIM_PKGVAR" in
+          ""|"/"|"$HOME"|"/var"|"/var/lib"|"/tmp"|"/Users"|"/home")
+            fail "拒绝删除可疑的数据目录：\"$TRIM_PKGVAR\"（什么都没删）"
+            exit 1 ;;
+        esac
+        case "$TRIM_PKGVAR" in
+          */zizvideo|*/zizvideo/*|*/@appdata/*) : ;;
+          *) fail "拒绝删除不像本应用数据的目录：\"$TRIM_PKGVAR\"（什么都没删）"
+             exit 1 ;;
+        esac
+        rm -rf "$TRIM_PKGVAR" 2>/dev/null || true
+        if [ -e "$TRIM_PKGVAR" ]; then
+          fail "删不干净：$TRIM_PKGVAR 仍然存在（不谎报成功）"
+          exit 1
+        fi
+        printf '已删除应用数据：%s（回读确认：不存在）\n' "$TRIM_PKGVAR"
+        exit 0 ;;
+    esac
+    printf '已保留应用数据：%s（要连数据一起删，请在卸载向导里勾选「同时删除应用数据」）\n' "$TRIM_PKGVAR"
     exit 0 ;;
   config_callback)
     cmd_config_apply && exit 0 || exit 1 ;;

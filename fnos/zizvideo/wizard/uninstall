@@ -1,0 +1,16 @@
+[
+  {
+    "stepTitle": "卸载 zizvideo",
+    "items": [
+      {
+        "type": "tips",
+        "label": "默认**保留**数据（数据库、封面、收件箱）。想彻底删掉再勾下面那一项 —— 删了不可恢复。"
+      },
+      {
+        "type": "checkbox",
+        "field": "wizard_delete_data",
+        "label": "同时删除应用数据（数据库/封面/收件箱，不可恢复）"
+      }
+    ]
+  }
+]
