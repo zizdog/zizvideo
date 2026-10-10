@@ -65,18 +65,26 @@ def main() -> int:
     if not os.path.isdir(vdir):
         print("!! 版本目录不存在：%s" % vdir, file=sys.stderr)
         return 1
-    pattern = re.compile(r"^zizvideo_" + re.escape(ver) + r"_darwin_(arm64|amd64)$")
+    pattern = re.compile(r"^zizvideo_" + re.escape(ver) + r"_(darwin|linux)_(arm64|amd64)$")
     rows = []
+    linux_rows = []
     for name in sorted(os.listdir(vdir)):
         path = os.path.join(vdir, name)
-        if not pattern.match(name) or not os.path.isfile(path):
+        found = pattern.match(name)
+        if not found or not os.path.isfile(path):
             continue
         with open(path, "rb") as handle:
             digest = hashlib.sha256(handle.read()).hexdigest()
-        rows.append({
-            "name": name, "version": ver, "arch": pattern.match(name).group(1),
+        row = {
+            "name": name, "version": ver, "arch": found.group(2),
             "sha256": digest, "size": os.path.getsize(path),
-        })
+        }
+        # ⚠️ manifest.json 是**面板的契约**，只装 darwin（面板按 arch 选包，同 arch 塞两个平台
+        # 会让 macOS 装到 Linux 二进制）。Linux 走独立的 linux.json（见下）。
+        if found.group(1) == "linux":
+            linux_rows.append({**row, "os": "linux"})
+        else:
+            rows.append(row)
     if not rows:
         print("!! %s 下没有 zizvideo_%s_darwin_<arch> 产物" % (vdir, ver), file=sys.stderr)
         return 1
@@ -103,6 +111,29 @@ def main() -> int:
     print("   索引已写：%s（latest=%s，%d 个架构）" % (index, ver, len(rows)))
     for row in rows:
         print("     %s  %s  %d B" % (row["name"], row["sha256"][:16] + "…", row["size"]))
+
+    # Linux 独立部署清单（有 linux 产物才写；与 android.json 同一思路：平台专属、稳定路径、
+    # **不塞进面板的 manifest.json**）。独立安装器 install-zizvideo-linux.sh 只读它。
+    if linux_rows:
+        lproblems = []
+        for row in linux_rows:
+            if not SHA256_RE.match(str(row["sha256"])) or int(row["size"]) <= 0:
+                lproblems.append("%s 的 sha256/size 不合法" % row["name"])
+            if row["arch"] not in ("arm64", "amd64"):
+                lproblems.append("%s 的 arch=%r 不认识" % (row["name"], row["arch"]))
+        if lproblems:
+            print("!! linux.json 自校验不通过，未写：", file=sys.stderr)
+            for p in lproblems:
+                print("   - " + p, file=sys.stderr)
+            return 1
+        lpath = os.path.join(os.path.dirname(vdir), "linux.json")
+        with open(lpath, "w", encoding="utf-8") as handle:
+            json.dump({"app": "zizvideo", "platform": "linux", "latest": ver,
+                       "generated_at": stamp, "assets": linux_rows}, handle,
+                      ensure_ascii=False, indent=2)
+            handle.write("\n")
+        print("   Linux 清单已写：%s（%d 个架构：%s）" % (
+            lpath, len(linux_rows), ", ".join(r["arch"] for r in linux_rows)))
 
     # 安卓客户端的自动更新清单（有 APK 才写；没带客户端时**不动**旧的那份，
     # 否则会把手上的更新源清掉）

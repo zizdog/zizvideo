@@ -5,6 +5,11 @@
 GO        ?= go
 VERSION   ?= 0.6.5-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
+# Linux 产物（用户 2026-10-11："完善独立部署…含 Linux/systemd 路径"、飞牛 NAS 用得上）。
+# 与 darwin 分开：**不签名**（Linux 没有 codesign），也**不进 manifest.json** —— 那份是面板的
+# 契约，只认 darwin 且按 arch 选包，同 arch 塞两个平台会让面板装错平台。Linux 走独立的
+# linux.json（与 android.json 同一思路：平台专属、稳定路径）。
+LINUX_ARCHS ?= amd64 arm64
 DIST      ?= dist
 APPDIR    ?= $(DIST)/apps/zizvideo
 VERDIR    ?= $(APPDIR)/$(VERSION)
@@ -94,6 +99,13 @@ release: ## 产出 dist/apps/zizvideo/（<版本>/ 产物 + 顶层索引 manifes
 	  else \
 	    echo "    !! 没有 $(CODESIGN_CERT)：产物未签名，用户每次升级都要重新授权"; \
 	  fi; \
+	done
+	@set -e; \
+	for arch in $(LINUX_ARCHS); do \
+	  echo "==> 构建 linux/$${arch}（CGO_ENABLED=0，静态，不签名）"; \
+	  GOOS=linux GOARCH=$$arch CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false \
+	    -ldflags "$(RELEASE_LDFLAGS)" -o "$(VERDIR)/zizvideo_$(VERSION)_linux_$$arch" ./cmd/server; \
+	  chmod 0755 "$(VERDIR)/zizvideo_$(VERSION)_linux_$$arch"; \
 	done
 	@# 安卓客户端（可选）：有 release APK 就一起放进版本目录，随索引一起发；
 	@# 没有 Android 工具链的机器不会因此失败 —— 服务端发布不依赖客户端。

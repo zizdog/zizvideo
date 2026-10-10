@@ -200,6 +200,34 @@ PY
     [ "$got_size" = "$want_size" ] || die "线上 APK 大小 ${got_size} ≠ 清单 ${want_size}（${apk_url}）"
     ok "安卓更新源可用：android.json → app ${apk_ver}，${link}（${got_size} B，线上可达）"
   fi
+  # Linux 清单（独立部署 Linux 那条路读它）：可达 + 它指向的产物就在线上且大小一致
+  if [ -f "$APPDIR/linux.json" ] && curl -fsS --max-time 30 "$MIRROR_BASE/apps/zizvideo/linux.json" -o "$tmp/linux.json"; then
+    local lname lsize lurl lgot
+    lname="$(python3 - "$tmp/linux.json" <<'PYL'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print(row.get("name") or "")
+    break
+PYL
+)"
+    lsize="$(python3 - "$tmp/linux.json" <<'PYL'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for row in d.get("assets") or []:
+    print(row.get("size") or 0)
+    break
+PYL
+)"
+    if [ -n "$lname" ]; then
+      lurl="$MIRROR_BASE/apps/zizvideo/${VERSION}/${lname}"
+      lgot="$(curl -fsSI --max-time 30 "$lurl" 2>/dev/null | tr -d '\r' \
+        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+      [ -n "$lgot" ] || die "线上取不到 Linux 产物：$lurl"
+      [ "$lgot" = "$lsize" ] || die "线上 Linux 产物大小 ${lgot} ≠ 清单 ${lsize}（${lname}）"
+      ok "Linux 独立部署源可用：linux.json → ${lname}（${lgot} B，线上可达）"
+    fi
+  fi
   ok "镜像复验通过：latest=${VERSION}，索引与本地发布件一致，线上可达"
   phase "复验"
 }
@@ -478,6 +506,15 @@ for f in "$VERDIR"/*; do
 done
 if [ -f install-zizvideo.sh ]; then
   queue_upload "$APP_DIR" "$PWD/install-zizvideo.sh" "install-zizvideo.sh"
+fi
+# Linux 安装器（独立部署的 systemd 那条路）：同样放 app 级稳定路径（版本目录会被 prune 掉）。
+if [ -f install-zizvideo-linux.sh ]; then
+  queue_upload "$APP_DIR" "$PWD/install-zizvideo-linux.sh" "install-zizvideo-linux.sh"
+fi
+# Linux 平台清单（install-zizvideo-linux.sh 只读它）：**不能塞进面板契约的 manifest.json**
+# —— 那份按 arch 选包，同 arch 塞两个平台会让 macOS 装到 Linux 二进制。
+if [ -f "$APPDIR/linux.json" ]; then
+  queue_upload "$APP_DIR" "$APPDIR/linux.json" "linux.json"
 fi
 if [ -f .release-key/codesign/zp-codesign.crt ]; then
   # 必须显式给 filename：curl 默认用源文件基名，带 PID 的临时名（xxx.crt.22824）会被传成垃圾名，

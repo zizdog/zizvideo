@@ -246,6 +246,105 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Linux / systemd 安装器（install-zizvideo-linux.sh）：沙箱里真跑一遍
+#
+# 用 file:// 当"镜像"（curl 支持 file://），systemctl/useradd/id 全用假的，
+# 安装前缀/单元目录/数据目录/配置目录全指到 mktemp 下 —— 绝不碰真 systemd。
+printf '==> Linux 安装器（systemd）：sha256 校验 + 落盘 + 单元文件 + 不符必须拒\n'
+LROOT="$SB/linux"; LMIR="$LROOT/mirror/apps/zizvideo"; LVER="9.9.9-mvp"
+mkdir -p "$LMIR/$LVER" "$LROOT/bin" "$LROOT/systemd" "$LROOT/data" "$LROOT/conf"
+# 两个架构都造一份：门禁要在 arm64（开发机）与 amd64（CI/x86）上都能跑
+for A in amd64 arm64; do
+  printf '#!/bin/sh\necho "zizvideo %s %s"\n' "$LVER" "$A" >"$LMIR/$LVER/zizvideo_${LVER}_linux_$A"
+  chmod 0755 "$LMIR/$LVER/zizvideo_${LVER}_linux_$A"
+done
+LSHA_A=$(shasum -a 256 "$LMIR/$LVER/zizvideo_${LVER}_linux_amd64" | awk '{print $1}')
+LSIZE_A=$(wc -c <"$LMIR/$LVER/zizvideo_${LVER}_linux_amd64" | tr -d ' ')
+LSHA_R=$(shasum -a 256 "$LMIR/$LVER/zizvideo_${LVER}_linux_arm64" | awk '{print $1}')
+LSIZE_R=$(wc -c <"$LMIR/$LVER/zizvideo_${LVER}_linux_arm64" | tr -d ' ')
+cat >"$LMIR/linux.json" <<JSONEOF
+{"app":"zizvideo","platform":"linux","latest":"$LVER","generated_at":"2026-01-01T00:00:00Z",
+ "assets":[{"name":"zizvideo_${LVER}_linux_amd64","version":"$LVER","arch":"amd64",
+            "sha256":"$LSHA_A","size":$LSIZE_A,"os":"linux"},
+           {"name":"zizvideo_${LVER}_linux_arm64","version":"$LVER","arch":"arm64",
+            "sha256":"$LSHA_R","size":$LSIZE_R,"os":"linux"}]}
+JSONEOF
+LC_SYS="$LROOT/systemctl.log"; : >"$LC_SYS"
+cat >"$LROOT/systemctl" <<EOF
+#!/bin/sh
+echo "\$*" >>"$LC_SYS"
+exit 0
+EOF
+chmod 0755 "$LROOT/systemctl"
+printf '#!/bin/sh\nexit 0\n' >"$LROOT/useradd"; chmod 0755 "$LROOT/useradd"
+printf '#!/bin/sh\n[ "\$1" = "-u" ] && exit 1\nexec /usr/bin/id "\$@"\n' >"$LROOT/id"; chmod 0755 "$LROOT/id"
+LINUX_INSTALLER="$ROOT/install-zizvideo-linux.sh"
+linux_run() { # 回显安装器输出；参数原样传给安装器
+  ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$LROOT/bin" ZV_SYSTEMD_DIR="$LROOT/systemd" \
+    ZV_DATA_ROOT="$LROOT/data" ZV_CONF_DIR="$LROOT/conf" ZV_FAKE_SYSTEMCTL="$LROOT/systemctl" \
+    ZV_FAKE_USERADD="$LROOT/useradd" ZV_FAKE_ID="$LROOT/id" \
+    bash "$LINUX_INSTALLER" --mirror "file://$LROOT/mirror" "$@" 2>&1
+}
+
+# ① sha256 对不上：必须拒，且不许把半截产物留在目标位置
+cp "$LMIR/linux.json" "$LROOT/linux.json.good"
+python3 - "$LMIR/linux.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+# 所有架构都改坏：门禁可能在 arm64 或 amd64 上跑，只改 index 0 会打不中实际会选的那条
+for row in d["assets"]:
+    row["sha256"] = "0" * 64
+json.dump(d, open(p, "w"))
+PYEOF
+if out=$(linux_run --dry-run); then
+  bad "sha256 不符时竟然成功了：$out"
+else
+  case "$out" in
+    *"sha256 不符"*) ok "sha256 不符被拒（不装无法校验的包）" ;;
+    *) bad "sha256 不符的报错不对：$out" ;;
+  esac
+fi
+[ -e "$LROOT/bin/zizvideo" ] && bad "sha256 不符却留下了产物" || ok "sha256 不符时目标位置没有半截产物"
+cp "$LROOT/linux.json.good" "$LMIR/linux.json"
+
+# ② dry-run 全流程：下载 + 校验 + 建用户 + 写配置/单元 + daemon-reload
+if out=$(linux_run --listen 0.0.0.0:7799 --dry-run); then
+  ok "dry-run 安装流程跑通"
+else
+  bad "dry-run 安装失败：$out"
+fi
+case "$out" in *"sha256 校验通过"*) ok "做了 sha256 校验" ;; *) bad "没做 sha256 校验：$out" ;; esac
+case "$out" in *"版本 $LVER"*) ok "版本取自 linux.json 的 latest" ;; *) bad "没报版本：$out" ;; esac
+case "$out" in *"journalctl"*) ok "给出了 systemd 运维命令提示" ;; *) bad "没给运维提示：$out" ;; esac
+
+# ③ 真装（不 dry-run，假二进制起不了服务 ⇒ 必须回滚且如实报错，不许谎报成功）
+if out=$(linux_run --listen 127.0.0.1:7799); then
+  warn_note="（假二进制居然验收通过了？）"
+  bad "假二进制不可能通过 /readyz 验收，却返回了成功：$out"
+else
+  case "$out" in
+    *"回滚"*|*"验收未通过"*) ok "起不来的服务如实报错并回滚（不谎报成功）" ;;
+    *) bad "失败路径的说明不清：$out" ;;
+  esac
+fi
+grep -q "daemon-reload" "$LC_SYS" && ok "真装时调用了（假的）systemctl daemon-reload" || bad "没有 daemon-reload：$(cat "$LC_SYS")"
+if [ -f "$LROOT/systemd/zizvideo.service" ]; then
+  ok "写了 systemd 单元"
+  grep -q "User=zizvideo" "$LROOT/systemd/zizvideo.service" && ok "单元指定了专用用户" || bad "单元没有 User="
+  grep -q "Restart=always" "$LROOT/systemd/zizvideo.service" && ok "单元 Restart=always" || bad "单元没有 Restart=always"
+  grep -q "ProtectSystem=full" "$LROOT/systemd/zizvideo.service" && ok "单元带 systemd 沙箱项" || bad "单元没有沙箱项"
+else
+  bad "没写出 systemd 单元"
+fi
+if [ -f "$LROOT/conf/config.json" ]; then
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$LROOT/conf/config.json" && ok "配置是合法 JSON" || bad "配置不是合法 JSON"
+  grep -q "$LROOT/data" "$LROOT/conf/config.json" && ok "配置里的 data_dir 指向指定数据目录" || bad "配置里 data_dir 不对"
+else
+  bad "没写配置"
+fi
+
+# ---------------------------------------------------------------------------
 fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
   (
     export HOME="$SB/home-fda"
@@ -330,7 +429,7 @@ fi
 # `set -u` 下直接炸，`set +u` 下会静默变成空串拼进消息。这类错一旦混进安装器就是"用户看到
 # 一句缺字的提示"或者"安装到一半退出"。**判据：变量后面紧跟非 ASCII 时一律写 `${var}`。**
 printf '==> shell 语法（含 tools/*.sh）+ `$var` 紧挨中文的坑\n'
-for sh in "$ROOT/install-zizvideo.sh" "$ROOT"/tools/*.sh; do
+for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh; do
   [ -f "$sh" ] || continue
   if bash -n "$sh" 2>"$SB/sh-err.log"; then
     :
@@ -341,7 +440,7 @@ done
 # ⚠️ 用 LC_ALL=C + POSIX 字符类，**不能用 `grep -P`**：BSD grep 不支持 -P，只会报错、
 # 输出为空 ⇒ 门禁变成永远绿的摆设（我第一版就是这么写的，灵敏度一测就露了）。
 BAD_VAR="$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^[:print:][:space:]]' \
-  "$ROOT/install-zizvideo.sh" "$ROOT"/tools/*.sh 2>/dev/null | head -5)"
+  "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh 2>/dev/null | head -5)"
 if [ -z "$BAD_VAR" ]; then
   ok "语法全过；没有 \`\$var\` 紧挨中文的写法（要写就写 \${var}）"
 else
