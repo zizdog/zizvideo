@@ -853,6 +853,30 @@ else
   bad "镜像还是上一版时 preflight 竟然判失败（发布前必然如此，会天天误报）"
 fi
 rm -rf "$FM"
+# 发布后复核：线上产物与索引 sha256 **逐字节**对账（用本地假镜像测正反两例）
+PM="$(mktemp -d)"; mkdir -p "$PM/apps/zizvideo/9.9.9"
+printf 'hello-zizvideo-9.9.9\n' >"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
+PMSHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64")"
+PMSIZE="$(wc -c <"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64" | tr -d ' ')"
+python3 - "$PM/apps/zizvideo" "$PMSHA" "$PMSIZE" <<'PYP'
+import json, sys
+base, sha, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rows = [{"name": "zizvideo_9.9.9_darwin_arm64", "version": "9.9.9", "arch": "arm64", "sha256": sha, "size": size}]
+json.dump({"app": "zizvideo", "latest": "9.9.9", "assets": rows}, open(base + "/manifest.json", "w"))
+json.dump({"app": "zizvideo", "version": "9.9.9", "assets": rows}, open(base + "/9.9.9/manifest.json", "w"))
+PYP
+pfp="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
+case "$pfp" in
+  *"线上字节与索引 sha256 一致"*) ok "线上产物与索引逐字节一致时报 ✓" ;;
+  *) bad "线上产物复核没报一致：$(printf '%s' "$pfp" | grep -E '✗|·' | head -2 | tr '\n' ' ')" ;;
+esac
+printf 'tampered\n' >>"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
+pfp2="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
+case "$pfp2" in
+  *"大小不符"*|*"sha256 不符"*) ok "线上产物被换过/被截断时如实报错（大小或 sha256 不符）" ;;
+  *) bad "产物被改后没报错：$(printf '%s' "$pfp2" | grep -E '✗' | head -2 | tr '\n' ' ')" ;;
+esac
+rm -rf "$PM"
 
 # ---------------------------------------------------------------------------
 # 安装器 --verify 与自查脚本 --as-daemon：两个**独立实现**在同一场景下必须给出同样判定
@@ -929,6 +953,27 @@ rm -rf "$VA"
 # 脚本开头的注释块里混进一行"代码"会**自我递归**（我这一轮真踩了：用法块里漏写一个 `#`，
 # 于是 `bash tools/verify-deploy.sh --no-service` 被当命令执行，脚本无限重启自己直到 fork 耗尽）。
 # 判据：从文件头到第一个 `set ` 之前，每一行都必须是注释或空行。
+printf '==> 脚本不许用 bash 4 专有语法（本机 /bin/bash 是 3.2，安装器就要在它上面跑）\n'
+b4=""
+for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
+  # 跳过本门禁自己：它必须把 mapfile/declare -A 这些**模式**当数据写在自己里面，否则没法检查别人
+  case "$sh" in *test-installer.sh) continue ;; esac
+  # mapfile/readarray/关联数组/大小写转换都是 bash 4+；安装器与自查脚本要能在 macOS 自带 3.2 上跑
+  # 跳过注释行：注释里提到 mapfile 是在说明"别用它"，不是违规
+  hit="$(grep -vE '^[[:space:]]*#' "$sh" 2>/dev/null | grep -nE 'mapfile|readarray|declare -A|declare -n|\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}' | head -1)"
+  [ -n "$hit" ] && b4="$b4 $(basename "$sh"):$hit"
+done
+if [ -z "$b4" ]; then
+  ok "没有 bash 4 专有语法（mapfile/readarray/关联数组/大小写转换）"
+else
+  bad "用了 bash 4 专有语法（3.2 下会报 command not found）：$b4"
+fi
+if /bin/bash "$ROOT/tools/preflight.sh" --list >/dev/null 2>&1; then
+  ok "preflight.sh 在 /bin/bash（$(/bin/bash --version | head -1 | grep -o '3\.[0-9]*\.[0-9]*' | head -1)）下能跑"
+else
+  bad "preflight.sh 在 /bin/bash 3.2 下跑不起来"
+fi
+
 printf '==> 脚本头部注释块不许混进可执行行（防自我递归）\n'
 hdr_bad=""
 for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do

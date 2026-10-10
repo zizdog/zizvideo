@@ -8,6 +8,7 @@
 #  用法：
 #    bash tools/preflight.sh                  # 全跑
 #    bash tools/preflight.sh --only smoke     # 只跑某一步（可重复；名字见下）
+#    bash tools/preflight.sh --post           # **发布后复核**（= 只跑 post-* 两步 + mirror）
 #    bash tools/preflight.sh --list           # 列出步骤名
 #  环境：
 #    ZV_PREFLIGHT_MIRROR  覆盖镜像地址（默认 https://mirror.zizdog.com:8888）；门禁令用它指向本地目录
@@ -26,12 +27,15 @@ STEPS=(
   "linux:发布的 Linux 二进制在真 Linux（容器）跑全链路（make linux-verify API=1）"
   "release:发布目录索引 ↔ 产物 + Linux 验证 stamp 对账（make release-check）"
   "mirror:镜像上的安装器/清单与我们验过的是否同一份字节"
+  "post-artifacts:发布后复核：线上产物与索引里的 sha256/size 是否一致（下载复算）"
+  "post-latest:发布后复核：镜像 latest 是否就是本版本"
 )
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --only) ONLY+=("$2"); shift 2 ;;
     --list) for s in "${STEPS[@]}"; do printf '%s\n' "${s%%:*}"; done; exit 0 ;;
+    --post) ONLY=("mirror" "post-artifacts" "post-latest"); shift ;;
     --help|-h) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "!! 未知参数：$1（--help 看用法）" >&2; exit 2 ;;
   esac
@@ -122,6 +126,98 @@ if wanted mirror; then
     step_skip "镜像漂移" "镜像还是 ${remote_latest} 那一版、本地已到 ${local_ver}（**发布前正常**；发布后应一致）"
   else
     step_bad "镜像漂移 —— 同版本（${local_ver}）却字节不同：${drifted}（违反"同版本不许换字节"）"
+  fi
+fi
+
+# ---- 发布后复核：线上产物是不是"索引里写的那份字节" ------------------------------
+# 为什么值得下载复算：`publish-mirror.sh` 上传时会核对大小，但那是在**发布那一刻**；
+# 事后文件被换、被截断、CDN 缓存了旧版本，都只有"下载回来算 sha256"才能发现。
+if wanted post-artifacts; then
+  printf '\n──── 发布后复核：线上产物 ↔ 索引 ────\n'
+  mver="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/manifest.json" 2>/dev/null \
+    | python3 -c 'import json,sys; print((json.load(sys.stdin).get("latest") or ""))' 2>/dev/null || true)"
+  if [ -z "$mver" ]; then
+    step_skip "线上产物复核" "拉不到镜像索引（网络不通 / 还没发布过）"
+  else
+    printf '  镜像 latest = %s\n' "$mver"
+    tmpd="$(mktemp -d)"
+    bad_items=0; checked=0
+    for idx in "manifest.json" "linux.json" "android.json"; do
+      url="$MIRROR/apps/zizvideo/$idx"
+      case "$idx" in
+        manifest.json) assets_base="$MIRROR/apps/zizvideo/$mver" ;;
+        linux.json)    assets_base="$MIRROR/apps/zizvideo/$mver" ;;
+        android.json)  assets_base="$MIRROR/apps/zizvideo" ;;
+      esac
+      if ! curl -fsS --max-time 20 "$url" -o "$tmpd/$idx" 2>/dev/null; then
+        printf '  · %s：取不到（没这类产物？）\n' "$idx"
+        continue
+      fi
+      # 每条资产：先比 size，再**下载**算 sha256（这是唯一能发现"被换过/被截断"的办法）
+      # ⚠️ macOS 自带 bash 3.2 **没有 mapfile**（安装器就要在 3.2 上跑）⇒ 用 while+数组
+      rows="$(python3 - "$tmpd/$idx" <<'PYI'
+import json, sys
+d = json.load(open(sys.argv[1]))
+if "assets" in d:
+    for a in d.get("assets") or []:
+        print("%s\t%s\t%s" % (a.get("name") or "", a.get("sha256") or "", a.get("size") or 0))
+elif d.get("file"):
+    print("%s\t%s\t%s" % (d["file"], d.get("sha256") or "", d.get("size") or 0))
+PYI
+)"
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        name="$(printf '%s' "$row" | cut -f1)"; want="$(printf '%s' "$row" | cut -f2)"; dsize="$(printf '%s' "$row" | cut -f3)"
+        file_url="$assets_base/$name"
+        got_size="$(curl -fsSI --max-time 20 "$file_url" 2>/dev/null | tr -d '\r' \
+          | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+        if [ -z "$got_size" ]; then
+          printf '  ✗ %s：线上取不到（%s）\n' "$name" "$file_url"; bad_items=$((bad_items + 1)); continue
+        fi
+        if [ "$got_size" != "$dsize" ]; then
+          printf '  ✗ %s：大小不符（索引 %s / 线上 %s）\n' "$name" "$dsize" "$got_size"
+          bad_items=$((bad_items + 1)); continue
+        fi
+        # ⚠️ 输出文件名要 sanitize：APK 那条的 name 是**带斜杠的路径**（android/xxx.apk），
+        # 直接当文件名会因"目录不存在"写不进去，报出来却是"下载失败"（又是名字带斜杠这一类坑）
+        safe_name="$(printf '%s' "$name" | tr '/' '_')"
+        curl -fsS --max-time 300 "$file_url" -o "$tmpd/$safe_name" 2>/dev/null || {
+          printf '  ✗ %s：下载失败\n' "$name"; bad_items=$((bad_items + 1)); continue; }
+        got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmpd/$safe_name")"
+        if [ "$got" = "$want" ]; then
+          printf '  ✓ %s：线上字节与索引 sha256 一致（%s…，%s B）\n' "$name" "${got:0:12}" "$got_size"
+          checked=$((checked + 1))
+        else
+          printf '  ✗ %s：sha256 不符（索引 %s… / 线上 %s…）\n' "$name" "${want:0:12}" "${got:0:12}"
+          bad_items=$((bad_items + 1))
+        fi
+      done <<EOF
+$rows
+EOF
+    done
+    rm -rf "$tmpd"
+    if [ "$bad_items" -eq 0 ] && [ "$checked" -gt 0 ]; then
+      step_ok "线上产物复核（${checked} 份逐字节与索引一致）"
+    elif [ "$checked" -eq 0 ]; then
+      step_skip "线上产物复核" "索引里没读到可比对的资产"
+    else
+      step_bad "线上产物复核 —— ${bad_items} 份与索引不符（线上被换过/被截断/索引过期）"
+    fi
+  fi
+fi
+
+if wanted post-latest; then
+  printf '\n──── 发布后复核：latest 就是本版本吗 ────\n'
+  mver2="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/manifest.json" 2>/dev/null \
+    | python3 -c 'import json,sys; print((json.load(sys.stdin).get("latest") or ""))' 2>/dev/null || true)"
+  local_ver2="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+  printf '  镜像 latest = %s；工作树 = %s\n' "${mver2:-（取不到）}" "$local_ver2"
+  if [ -z "$mver2" ]; then
+    step_skip "latest 复核" "拉不到镜像索引"
+  elif [ "$mver2" = "$local_ver2" ]; then
+    step_ok "latest 复核（镜像就是这个版本，面板会看到更新）"
+  else
+    step_bad "latest 复核 —— 镜像 latest=${mver2} ≠ 本地 ${local_ver2}（**还没发布**，或发的是别的版本）"
   fi
 fi
 

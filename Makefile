@@ -133,6 +133,9 @@ publish-app: ## 只发安卓客户端（APK + android.json），不动服务端�
 preflight: ## 发布前把所有证据跑一遍（门禁/冒烟/飞牛包/真 Linux/发布目录/镜像漂移）并给结论
 	@bash tools/preflight.sh $(if $(ONLY),--only $(ONLY),)
 
+preflight-post: ## 发布后复核：线上产物是否与索引的 sha256/size 一致、latest 是否就是本版本
+	@bash tools/preflight.sh --post
+
 release-check: ## 发版前自检 dist 里的索引与产物是否对得平（sha256/size/签名/静态 ELF）
 	@bash tools/check-release-dir.sh
 
