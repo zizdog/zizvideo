@@ -145,6 +145,9 @@ export VERIFY_DEEP = $(DEEP)
 
 # ⚠️ 目标名不能叫 `fnos`：仓库里有个**目录** fnos/，make 会认为目标已存在而跳过配方。
 # ⚠️ 目标名不能叫 docker：仓库里有同名**目录** docker/，make 会认为目标已存在而跳过配方（踩过两次了）。
+linux-verify: ## 把发布的 Linux 二进制跑进真 Linux 容器验一遍（--api 会跑建库/扫描/流式全链路）
+	@bash tools/verify-linux-container.sh $(if $(filter 1,$(API)),--api,)
+
 docker-image: ## 打容器镜像（先把静态 Linux 二进制放进构建上下文；没有 docker daemon 会如实失败）
 	@bash tools/make-docker-image.sh --arch $(DOCKER_ARCH) $(if $(filter 1,$(STAGE_ONLY)),--stage-only,)
 

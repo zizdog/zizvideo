@@ -287,6 +287,22 @@ linux_run() { # 回显安装器输出；参数原样传给安装器
     bash "$LINUX_INSTALLER" --mirror "file://$LROOT/mirror" "$@" 2>&1
 }
 
+# 真 Linux 验证脚本：没有 docker daemon 时必须**如实跳过**（exit 2），不许假装验过
+printf '==> verify-linux-container.sh：环境不具备时如实跳过\n'
+LVC="$ROOT/tools/verify-linux-container.sh"
+bash -n "$LVC" && ok "verify-linux-container.sh 通过语法检查" || bad "verify-linux-container.sh 语法错"
+SHIM2="$(mktemp -d)"; printf '#!/bin/sh\nexit 1\n' >"$SHIM2/docker"; chmod 0755 "$SHIM2/docker"
+if out=$(PATH="$SHIM2:$PATH" bash "$LVC" 2>&1); then
+  bad "没有 docker daemon 时竟然返回成功（假装验过了）"
+else
+  rc=$?
+  case "$out" in
+    *"如实跳过"*) ok "没有 docker daemon 时如实跳过（退出码 ${rc}，不假装验过）" ;;
+    *) bad "没有 docker daemon 时的说明不清：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')" ;;
+  esac
+fi
+rm -rf "$SHIM2"
+
 # ① sha256 对不上：必须拒，且不许把半截产物留在目标位置
 cp "$LMIR/linux.json" "$LROOT/linux.json.good"
 python3 - "$LMIR/linux.json" <<'PYEOF'
