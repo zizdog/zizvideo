@@ -149,6 +149,18 @@ else
   bad "缺 APK 或 $PARENT/android.json（二者要同时有才发得出去）"
 fi
 
+hdr "飞牛应用包（有就一并自检）"
+FPK="$(ls -1 "$ROOT/dist/fnos"/zizvideo-*-x86.fpk "$ROOT/dist/fnos"/zizvideo-*-arm.fpk 2>/dev/null | head -1 || true)"
+if [ -n "$FPK" ]; then
+  if out="$(bash "$ROOT/tools/check-fnos-fpk.sh" "$FPK" 2>&1)"; then
+    ok "$(basename "$FPK")：$(printf '%s' "$out" | grep '结论' | head -1)"
+  else
+    bad "$(basename "$FPK") 自检没过：$(printf '%s' "$out" | grep '✗' | head -3 | tr '\n' ' ')"
+  fi
+else
+  printf '  · 没有 dist/fnos/*.fpk（没打飞牛包就跳过；要发就 make fpk）\n'
+fi
+
 printf '\n== 结论：%d 项通过，%d 项失败\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || { printf '上面每条 ✗ 都要先修（宁可重跑 make release，也别把不一致的索引发出去）\n' >&2; exit 1; }
 printf '发布目录自检通过，可以 make publish。\n'

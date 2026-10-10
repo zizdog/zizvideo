@@ -713,6 +713,24 @@ fi
 
 # ---------------------------------------------------------------------------
 # 部署自查脚本（tools/verify-deploy.sh）+ 发布件的 Linux 二进制必须真是静态 ELF
+# ---------------------------------------------------------------------------
+# 脚本开头的注释块里混进一行"代码"会**自我递归**（我这一轮真踩了：用法块里漏写一个 `#`，
+# 于是 `bash tools/verify-deploy.sh --no-service` 被当命令执行，脚本无限重启自己直到 fork 耗尽）。
+# 判据：从文件头到第一个 `set ` 之前，每一行都必须是注释或空行。
+printf '==> 脚本头部注释块不许混进可执行行（防自我递归）\n'
+hdr_bad=""
+for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
+  st="$(grep -n '^set ' "$sh" 2>/dev/null | head -1 | cut -d: -f1)"
+  [ -n "$st" ] || continue
+  badline="$(head -n "$((st - 1))" "$sh" | sed -n '2,$p' | grep -nvE '^\s*(#|$)' | head -1)"
+  [ -n "$badline" ] && hdr_bad="$hdr_bad $(basename "$sh"):$badline"
+done
+if [ -z "$hdr_bad" ]; then
+  ok "所有脚本的头部注释块都只含注释/空行"
+else
+  bad "这些脚本头部混进了可执行行（可能自我递归）：$hdr_bad"
+fi
+
 printf '==> 部署自查脚本 + Linux 发行件静态性\n'
 VD="$ROOT/tools/verify-deploy.sh"
 sh -n "$VD" 2>/dev/null || bash -n "$VD"
@@ -775,6 +793,78 @@ PYE
 )
   [ "$res" = "ok" ] && ok "linux/$1 发行件是静态 ELF 且架构正确" || bad "linux/$1 发行件有问题：$res"
 done
+
+# ---------------------------------------------------------------------------
+# 真索引端到端：用**真的** tools/make-app-index.py 生成索引，再让 Linux 安装器按它挑包
+#
+# 为什么必须这样测：安装器与索引生成器是两个独立组件，只在"字段名/形状一致"这一层耦合。
+# 各自用假数据都能过，但真发出去就会"挑不到架构/校验不过"。这里让两个真组件对接一次。
+printf '==> 真索引端到端（make-app-index.py → install-zizvideo-linux.sh）\n'
+RELVER_NOW="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+REAL_AMD64="$ROOT/dist/apps/zizvideo/$RELVER_NOW/zizvideo_${RELVER_NOW}_linux_amd64"
+REAL_ARM64="$ROOT/dist/apps/zizvideo/$RELVER_NOW/zizvideo_${RELVER_NOW}_linux_arm64"
+if [ -f "$REAL_AMD64" ] && [ -f "$REAL_ARM64" ]; then
+  IDX="$(mktemp -d)"; VERFAKE="1.2.3"   # 用一个"新版本号"，把真产物按新名字放进去
+  VF="$IDX/apps/zizvideo/zizvideo-${VERFAKE}"   # 仅占位，索引只看版本目录里的文件名
+  mkdir -p "$IDX/apps/zizvideo/${VERFAKE}"
+  cp "$REAL_AMD64" "$IDX/apps/zizvideo/${VERFAKE}/zizvideo_${VERFAKE}_linux_amd64"
+  cp "$REAL_ARM64" "$IDX/apps/zizvideo/${VERFAKE}/zizvideo_${VERFAKE}_linux_arm64"
+  # ⚠️ 索引生成器**要求至少一个 darwin 产物**（manifest.json 是面板契约，latest 不能为空）⇒
+  # linux.json 只会在"跟 darwin 一起发"时生成。这里放一个占位 darwin 文件即可（本用例只走 linux 路径）。
+  printf 'stub-darwin-binary\n' >"$IDX/apps/zizvideo/${VERFAKE}/zizvideo_${VERFAKE}_darwin_arm64"
+  if python3 "$ROOT/tools/make-app-index.py" "$IDX/apps/zizvideo/${VERFAKE}" "$VERFAKE" >/dev/null 2>&1 \
+     && [ -f "$IDX/apps/zizvideo/linux.json" ]; then
+    ok "make-app-index.py 从真产物生成了 linux.json"
+    # ① 安装器能按真索引挑到本机架构的包（dry-run，不落盘）
+    ldrive() { ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$IDX/bin" \
+      ZV_SYSTEMD_DIR="$IDX/systemd" ZV_DATA_ROOT="$IDX/data" ZV_CONF_DIR="$IDX/conf" \
+      ZV_FAKE_SYSTEMCTL=/bin/true ZV_FAKE_USERADD=/bin/true ZV_FAKE_ID=/usr/bin/id \
+      bash "$ROOT/install-zizvideo-linux.sh" --mirror "file://$IDX" "$@"; }
+    if lout="$(ldrive --dry-run 2>&1)"; then
+      case "$lout" in
+        *"版本 $VERFAKE"*) ok "安装器从**真索引**里读到版本 $VERFAKE" ;;
+        *) bad "安装器没读出真索引的版本：$(printf '%s' "$lout" | tail -2)" ;;
+      esac
+      case "$lout" in
+        *"sha256 校验通过"*) ok "安装器用真索引的 sha256 校验通过（两个组件字段对得上）" ;;
+        *) bad "安装器没做/没过 sha256 校验：$(printf '%s' "$lout" | tail -2)" ;;
+      esac
+    else
+      bad "安装器读真索引失败：$(printf '%s' "$lout" | tail -3)"
+    fi
+    # ② 明确钉一个过期版本时必须拒绝（别把旧包装上去）
+    if lout="$(ldrive --version 0.0.1 --dry-run 2>&1)"; then
+      bad "钉了不存在的版本竟然还成功：$(printf '%s' "$lout" | tail -2)"
+    else
+      case "$lout" in
+        *"版本已翻页"*) ok "钉过期版本被拒（不装旧包）" ;;
+        *) bad "钉过期版本的报错不对：$(printf '%s' "$lout" | tail -2)" ;;
+      esac
+    fi
+    # ③ 索引里的 sha256 被改坏时，安装器必须拒绝（真索引 + 真安装器的失败路径）
+    python3 - "$IDX/apps/zizvideo/linux.json" <<'PYB2'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for row in d["assets"]:
+    row["sha256"] = "1" * 64
+json.dump(d, open(p, "w"))
+PYB2
+    if lout="$(ldrive --dry-run 2>&1)"; then
+      bad "真索引 sha256 被改坏后安装器竟然还成功"
+    else
+      case "$lout" in
+        *"sha256 不符"*) ok "真索引 sha256 不符时安装器拒绝安装" ;;
+        *) bad "sha256 不符的报错不对：$(printf '%s' "$lout" | tail -2)" ;;
+      esac
+    fi
+  else
+    bad "make-app-index.py 没能在真产物上生成 linux.json"
+  fi
+  rm -rf "$IDX"
+else
+  note_skip "没有 linux 发行件（先 make release），跳过真索引端到端"
+fi
 
 # ---------------------------------------------------------------------------
 # 发版前自检（tools/check-release-dir.sh）：索引与产物对不平时**必须**红

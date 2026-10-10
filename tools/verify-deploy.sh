@@ -10,6 +10,7 @@
 #    bash tools/verify-deploy.sh                       # 自动找默认路径
 #    bash tools/verify-deploy.sh --config /etc/zizvideo/config.json --bin /opt/zizvideo/zizvideo
 #    bash tools/verify-deploy.sh --port 7766           # 只检查健康端点用哪个端口
+#    bash tools/verify-deploy.sh --no-service           # 容器/无 init 系统：跳过服务状态那一条
 #  退出码：0 = 关键项全过；1 = 有 ✗；2 = 参数/环境问题
 # ============================================================================
 set -uo pipefail
@@ -17,7 +18,12 @@ set -uo pipefail
 CONFIG=""
 BIN=""
 PORT=""
+NO_SERVICE=0
 OS="$(uname -s)"
+# 容器里没有 launchd/systemd：不显式给 --no-service 时也自动跳过（否则会误报一条 ✗）
+if [ -f /.dockerenv ] || grep -qa 'docker\|containerd\|kubepods' /proc/1/cgroup 2>/dev/null; then
+  NO_SERVICE=1
+fi
 
 usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -26,6 +32,7 @@ while [ $# -gt 0 ]; do
     --config) CONFIG="$2"; shift 2 ;;
     --bin) BIN="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --no-service) NO_SERVICE=1; shift ;;   # 容器/无 init 系统的环境（或不想管服务状态时）
     --help|-h) usage; exit 0 ;;
     *) echo "!! 未知参数：$1（--help 看用法）" >&2; exit 2 ;;
   esac
@@ -127,7 +134,9 @@ fi
 
 # ---------------------------------------------------------------------------
 hdr "服务与健康"
-if [ "$OS" = "Darwin" ]; then
+if [ "$NO_SERVICE" = "1" ]; then
+  note "跳过服务状态检查（容器/--no-service：这里没有 launchd/systemd，进程由容器负责）"
+elif [ "$OS" = "Darwin" ]; then
   if launchctl print "system/$SERVICE_LABEL" >/dev/null 2>&1; then
     st="$(launchctl print "system/$SERVICE_LABEL" 2>/dev/null | awk -F' = ' '/state =/{print $2; exit}')"
     [ "$st" = "running" ] && ok "LaunchDaemon $SERVICE_LABEL 在 running" || bad "LaunchDaemon $SERVICE_LABEL 状态是 ${st}（不是 running）"
