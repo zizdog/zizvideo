@@ -20,12 +20,14 @@ import path from 'path';
 const dirs = process.argv.slice(2);
 if (dirs.length === 0) dirs.push('internal/web/assets/js');
 
+// ⚠️ acorn 不可导入必须**直接失败**（铁律 3：不许把"缺了就跳过"当成门禁）：
+// 它是唯一能抓"白屏级"语法错的东西，静默跳过等于没测。
 let acorn;
 try {
   acorn = await import('acorn');
-} catch {
-  console.log('（未安装 acorn，跳过 JS 语法校验：npm install）');
-  process.exit(0);
+} catch (err) {
+  console.error('!! 无法导入 acorn（' + (err && err.message) + '）：先 `npm install`，别跳过语法校验');
+  process.exit(1);
 }
 
 function collect(dir, out = []) {

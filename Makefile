@@ -45,10 +45,10 @@ check-run: ## 真正跑一遍门禁（不做指纹跳过）
 	@echo "==> 独立部署安装器（语法 + --purge 删除前守门 + listen 写入 + 回滚 + 证书指纹；全程沙箱）"
 	@bash tools/test-installer.sh
 	@echo "==> 前端 JS 语法（真 ES 解析器；缺 acorn 直接失败，不静默跳过）"
-	@[ -d node_modules/acorn ] || { echo "!! 缺 node_modules/acorn —— 先 npm install（白屏级错误只有它能抓）"; exit 1; }
+	@node -e "import('acorn').then(()=>0,()=>{console.error('!! 无法导入 acorn —— 先 npm install（白屏级错误只有它能抓）');process.exit(1)})"
 	@node tools/check-js-syntax.mjs internal/web/assets
 	@node tools/check-js-undeclared.mjs internal/web/assets
-	@echo "==> 前端兼容（老电视 WebView 上没有的 DOM/JS API 会让整页崩；acorn 只查语法抓不到）"
+	@echo "==> 前端兼容（老电视 WebView 缺的 JS API + CSS 写法棘轮 + 禁用原生弹窗）"
 	@node tools/check-js-compat.mjs internal/web/assets
 	@$(MAKE) --no-print-directory vet
 	@$(MAKE) --no-print-directory test
@@ -119,5 +119,11 @@ publish-app: ## 只发安卓客户端（APK + android.json），不动服务端�
 publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini 面板接口）
 	@bash tools/publish-mirror.sh
 
-verify: ## 复验线上镜像：索引 latest / sha256 / --version
-	@bash tools/publish-mirror.sh --verify-only
+# DEEP=1 走整包下载复算（快验只比 Content-Length，发现不了"同长度被换过"）。
+# ⚠️ 老写法 `make verify DEEP=1` 是**静默退化**成快验的（Makefile 没把它 export 给脚本），
+# 2026-10-11 审计抓到：操作者以为做了字节级复验。现在真传下去。
+DEEP ?= 0
+export VERIFY_DEEP = $(DEEP)
+
+verify: ## 复验线上镜像（DEEP=1 整包下载复算 sha256；不加只做快验）
+	@bash tools/publish-mirror.sh --verify-only $(if $(filter 1,$(DEEP)),--deep,)

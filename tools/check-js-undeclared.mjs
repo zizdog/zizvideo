@@ -24,12 +24,13 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
+// 见 check-js-syntax.mjs：acorn 不可导入必须直接失败，不许静默跳过（铁律 3）。
 let acorn;
 try {
   acorn = await import('acorn');
-} catch {
-  console.error('（未安装 acorn，跳过：npm install）');
-  process.exit(0);
+} catch (err) {
+  console.error('!! 无法导入 acorn（' + (err && err.message) + '）：先 `npm install`，别跳过检查');
+  process.exit(1);
 }
 
 // 浏览器/宿主提供的全局名（赋值给它们不算"没声明"）。

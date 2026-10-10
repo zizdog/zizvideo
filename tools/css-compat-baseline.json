@@ -1,0 +1,7 @@
+{
+  "_comment": "老 WebView 缺的 CSS 写法的现存数量（棘轮基线，只许减少）。工具：tools/check-js-compat.mjs；新增一处就会红。还债后把对应数字改小，锁住成果。",
+  "internal/web/assets/app.css": {
+    "gap": 58,
+    "aspect-ratio": 2
+  }
+}
