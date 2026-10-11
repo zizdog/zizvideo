@@ -17,11 +17,23 @@
 #                                      # 允许覆盖镜像上已存在的同版本（默认拒绝：同版本换字节
 #                                      # 会让"已装 0.1.2 的用户"和"新装 0.1.2 的用户"不是同一份产物）
 #
+#  参数：--verify-only      只复验线上，不上传（等价 make verify）
+#        --deep             复验时整包下载复算 sha256（慢但最实）
+#        --no-prune         保留镜像上的旧版本目录（便于回滚；默认只留最近几版）
+#        --self-test        只验证"能不能写镜像"（传个探针再删掉），换机器/换凭据后先跑它
+#        --app-only         只发安卓客户端（APK + android.json），不动服务端版本与索引
+#        --allow-existing-version  显式允许"同版本换字节重传"（正常绝不该用）
 #  凭据：.panel-credential.local（gitignored，600）里的
 #    ZP_MINI_URL / ZP_MINI_USER / ZP_MINI_PASS
 #  地址由调用者提供，仓库里不留任何内网/公网默认值以外的秘密。
 # ============================================================================
 set -euo pipefail
+
+usage() { awk 'NR==2 && /^# =====/{next} NR>1 && /^# =====/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; }
+
+case "${1:-}" in
+  --help|-h) usage; exit 0 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"

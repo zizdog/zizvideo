@@ -7,11 +7,18 @@
 #  构建中断留下的半截文件、版本号改过没重算索引），用户那边只会看到"装不上/校验不过"，
 #  报错跟我们的源码毫无关系、极难查。所以发之前先在本地把"索引 ↔ 文件"对平。
 #
-#  用法：bash tools/check-release-dir.sh [--version <ver>] [版本目录]
+#  用法：bash tools/check-release-dir.sh [--version <ver>] [--no-signature] [版本目录]
+#        --no-signature 只查"索引 ↔ 产物"一致性、跳过签名检查（**给门禁用假目录时用**，真发版别加）
 #        缺省版本 = Makefile 里的 VERSION；缺省目录 = dist/apps/zizvideo/<版本>
 #  退出码：0 全过；1 有不一致；2 环境/参数问题
 # ============================================================================
 set -uo pipefail
+
+usage() { awk 'NR==2 && /^# =====/{next} NR>1 && /^# =====/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; }
+
+case "${1:-}" in
+  --help|-h) usage; exit 0 ;;
+esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"

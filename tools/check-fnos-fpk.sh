@@ -12,6 +12,12 @@
 # ============================================================================
 set -uo pipefail
 
+usage() { awk 'NR==2 && /^# =====/{next} NR>1 && /^# =====/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; }
+
+case "${1:-}" in
+  --help|-h) usage; exit 0 ;;
+esac
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 PKGVER="${VER%-mvp}"

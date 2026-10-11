@@ -844,6 +844,12 @@ if dout="$(python3 "$ROOT/tools/check-docs.py" 2>&1)"; then
 else
   bad "文档与实现不一致：$(printf '%s' "$dout" | grep -v '^✓' | head -4 | tr '\n' ' ')"
 fi
+# 脚本自己的 --help 必须写全它解析的参数（"解析了但没写"= 用户永远不知道有这功能）
+if uout="$(python3 "$ROOT/tools/check-usage-flags.py" 2>&1)"; then
+  ok "各脚本 --help 与参数解析一致：$(printf '%s' "$uout" | tail -1)"
+else
+  bad "有帮助漏写参数：$(printf '%s' "$uout" | grep '✗' | head -3 | tr '\n' ' ')"
+fi
 # 状态文档（新会话第一入口）里**可机器核对的事实**：工作树版本、未推送、速览里不许写死条数
 if sout="$(python3 "$ROOT/tools/check-status-doc.py" 2>&1)"; then
   ok "状态文档的事实对得上：$(printf '%s' "$sout" | tail -1)"

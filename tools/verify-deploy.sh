@@ -10,11 +10,14 @@
 #    bash tools/verify-deploy.sh                       # 自动找默认路径
 #    bash tools/verify-deploy.sh --config /etc/zizvideo/config.json --bin /opt/zizvideo/zizvideo
 #    bash tools/verify-deploy.sh --port 7766           # 只检查健康端点用哪个端口
+#    bash tools/verify-deploy.sh --as-daemon           # 在**守护进程上下文**里探媒体根（macOS 需 sudo）
 #    bash tools/verify-deploy.sh --no-service           # 容器/无 init 系统：跳过服务状态那一条
 #  退出码：0 = 关键项全过；3 = **服务在跑但没就绪**（媒体根/磁盘/ffmpeg，按提示修，别重启服务）；
 #          1 = 服务不可用（健康端点无响应）/ 其它 ✗；2 = 参数或环境问题
 # ============================================================================
 set -uo pipefail
+
+usage() { awk 'NR==2 && /^# =====/{next} NR>1 && /^# =====/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; }
 
 CONFIG=""
 BIN=""
@@ -26,8 +29,6 @@ OS="$(uname -s)"
 if [ -f /.dockerenv ] || grep -qa 'docker\|containerd\|kubepods' /proc/1/cgroup 2>/dev/null; then
   NO_SERVICE=1
 fi
-
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in

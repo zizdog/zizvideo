@@ -14,6 +14,7 @@
 #    sudo bash install-zizvideo-linux.sh [--listen host:port] [--dry-run]
 #    sudo bash install-zizvideo-linux.sh --upgrade
 #    sudo bash install-zizvideo-linux.sh --uninstall | --purge --yes
+#    sudo bash install-zizvideo-linux.sh [--mirror <base>] [--version <版本>]   # 换镜像 / 钉住版本
 #    bash install-zizvideo-linux.sh --help | --script-version
 #
 #  布局：
@@ -50,7 +51,7 @@ die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
 
 usage() {
-  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR==2 && /^# =====/{next} NR>1 && /^# =====/{exit} NR>1{sub(/^# ?/,""); print}' "$0"
 }
 
 # ---------------------------------------------------------------------------
