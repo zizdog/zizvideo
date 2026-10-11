@@ -929,6 +929,16 @@ case "$vout2" in
   *"标准结论"*|*"== 结论"*) ok "安装器 --verify 的报告没被中途截断（跑到结论段）" ;;
   *) bad "安装器 --verify 报告被截断了（很可能 set -e 下某个命令返回非零）：$(printf '%s' "$vout2" | tail -2 | tr '\n' ' ')" ;;
 esac
+# 二进制**坏掉**时（架构不对/被拦截/损坏），体检必须**跑到底**并把原因说清 ——
+# 这正是最需要报告的时候，绝不能让 `set -e` 把报告截断（我在这两处各栽过一次）
+printf '#!/bin/sh\necho "broken: cannot execute" >&2\nexit 126\n' >"$VH2/bin/zizvideo"; chmod 0755 "$VH2/bin/zizvideo"
+vbout="$(HOME="$VH2/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH2/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$VH2/daemons" ZV_INSTALL_ROOT="$VH2" \
+  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+case "$vbout" in
+  *"跑不起来"*"== 结论："*) ok "二进制坏掉时体检跑到底并说清「跑不起来」（不被 set -e 截断）" ;;
+  *) bad "二进制坏掉时体检被截断或没说清：$(printf '%s' "$vbout" | tail -2 | tr '\n' ' ')" ;;
+esac
 rm -rf "$VH2"
 # 同一个对账也要覆盖 **Linux 安装器的 --verify**（设备上没有仓库、只能用装它的那个脚本自检）：
 # 用假 harness 造一个"结构项有问题"的部署，要求它报出同样的四项 + 报告不被截断 + 用**配置里的端口**

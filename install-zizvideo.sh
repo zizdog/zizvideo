@@ -1330,8 +1330,14 @@ do_verify() {
   say "== 二进制"
   if [ -x "$BIN" ]; then
     vok "可执行：$BIN"
-    vv="$("$BIN" --version 2>&1 | head -1)"
-    case "$vv" in *"zizvideo "*) vok "--version：$vv" ;; *) vbad "--version 输出异常：$vv" ;; esac
+    # ⚠️ 二进制跑不起来时（架构不对/被 quarantine/文件损坏）不能让**体检自己中断** ——
+    # 体检的职责就是报问题（同 Linux 侧那处；`2>&1` 还会把错误信息当成版本输出骗过 case 判断）
+    vv="$("$BIN" --version 2>/dev/null | head -1 || true)"
+    case "$vv" in
+      "zizvideo "[0-9]*) vok "--version：${vv}" ;;
+      "")               vbad "二进制跑不起来（架构不对/被拦截/文件损坏？）" ;;
+      *)                vbad "--version 输出异常：${vv}" ;;
+    esac
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
       # ⚠️ `set -euo pipefail` 下，对**未签名**的二进制 `codesign -dv` 返回非零 ⇒ 管道失败 ⇒ 脚本直接中断
       # （表现出来就是"报告只出了二进制那两行"）。必须 `|| true` 兜住。
