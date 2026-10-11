@@ -355,6 +355,18 @@ if [ -f "$LROOT/systemd/zizvideo.service" ]; then
   else
     bad "systemd 单元没通过静态校验：$(printf '%s' "$uout" | grep '✗' | head -3 | tr '\n' ' ')"
   fi
+  # **文档宣称的安全属性**必须真的写在单元里（别让"只放开数据目录"变成一句空话）：
+  # ReadWritePaths 只能有一条且等于数据目录；ProtectSystem/ProtectHome/NoNewPrivileges/PrivateTmp 都要在
+  unit="$LROOT/systemd/zizvideo.service"
+  rw_n="$(grep -c '^ReadWritePaths=' "$unit" || true)"
+  if [ "$rw_n" = "1" ] && grep -q "^ReadWritePaths=$LROOT/data$" "$unit"; then
+    ok "单元只放开数据目录（ReadWritePaths 恰好一条 = 数据目录）"
+  else
+    bad "单元的 ReadWritePaths 不对（应恰好一条 = 数据目录，实际 ${rw_n} 条：$(grep '^ReadWritePaths=' "$unit" | tr '\n' ' '))"
+  fi
+  for kv in "ProtectSystem=full" "ProtectHome=read-only" "NoNewPrivileges=yes" "PrivateTmp=yes" "User=zizvideo" "Group=zizvideo"; do
+    grep -q "^${kv}$" "$unit" && ok "单元里有 ${kv}（文档宣称的安全属性）" || bad "单元缺 ${kv}（文档宣称了这条）"
+  done
   # 反例：把枚举值改坏必须被报出来（否则这个校验就是摆设）
   sed 's/^ProtectSystem=.*/ProtectSystem=fll/' "$LROOT/systemd/zizvideo.service" >"$LROOT/systemd/bad.service"
   if python3 "$ROOT/tools/check-systemd-unit.py" "$LROOT/systemd/bad.service" >/dev/null 2>&1; then
