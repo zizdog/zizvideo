@@ -930,6 +930,35 @@ case "$vout2" in
   *) bad "安装器 --verify 报告被截断了（很可能 set -e 下某个命令返回非零）：$(printf '%s' "$vout2" | tail -2 | tr '\n' ' ')" ;;
 esac
 rm -rf "$VH2"
+# 同一个对账也要覆盖 **Linux 安装器的 --verify**（设备上没有仓库、只能用装它的那个脚本自检）：
+# 用假 harness 造一个"结构项有问题"的部署，要求它报出同样的四项 + 报告不被截断 + 用**配置里的端口**
+VH3="$(mktemp -d)"; mkdir -p "$VH3/bin" "$VH3/conf" "$VH3/data" "$VH3/media"
+printf '#!/bin/sh\n[ "$1" = "is-active" ] && { echo active; exit 0; }; exit 0\n' >"$VH3/systemctl"; chmod 0755 "$VH3/systemctl"
+printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }\nexit 0\n' >"$VH3/bin/zizvideo"; chmod 0755 "$VH3/bin/zizvideo"
+printf '{"listen":"127.0.0.1:7793","data_dir":"%s/data","database_path":"/tmp/elsewhere.db","media_allow_roots":["%s/missing"]}\n' "$VH3" "$VH3" >"$VH3/conf/config.json"
+lvout="$(ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$VH3/bin" ZV_CONF_DIR="$VH3/conf" \
+  ZV_FAKE_SYSTEMCTL="$VH3/systemctl" bash "$ROOT/install-zizvideo-linux.sh" --verify 2>&1 || true)"
+case "$lvout" in
+  *"数据库不在数据目录内"*) ok "Linux 安装器 --verify 也报「数据库不在数据目录内」（与另两份实现覆盖面一致）" ;;
+  *) bad "Linux 安装器 --verify 漏了"数据库不在数据目录内"" ;;
+esac
+case "$lvout" in
+  *"数据所在卷剩余"*) ok "Linux 安装器 --verify 给出磁盘余量" ;;
+  *) bad "Linux 安装器 --verify 没给磁盘余量" ;;
+esac
+case "$lvout" in
+  *"目录不存在"*"挂盘了吗"*) ok "Linux 安装器 --verify 对不存在的媒体根说「挂盘了吗」" ;;
+  *) bad "Linux 安装器 --verify 没说清"目录不存在"" ;;
+esac
+case "$lvout" in
+  *"7793"*) ok "Linux 安装器 --verify 用**配置里的**端口（不是脚本默认值）" ;;
+  *) bad "Linux 安装器 --verify 没按配置里的端口探测" ;;
+esac
+case "$lvout" in
+  *"== 结论："*) ok "Linux 安装器 --verify 的报告没被中途截断" ;;
+  *) bad "Linux 安装器 --verify 报告被截断了：$(printf '%s' "$lvout" | tail -2 | tr '\n' ' ')" ;;
+esac
+rm -rf "$VH3"
 
 rm -rf "$VA"
 

@@ -18,6 +18,8 @@
 #    sudo bash install-zizvideo-linux.sh --version <版本>          # **断言**镜像 latest 就是这个版本
 #        （对不上就拒绝：这是防"版本已翻页还去装旧包"的守卫，**不是**"装某个旧版本"）
 #        ⚠️ 与 macOS 安装器不同：那边的 `--version` 是**打印脚本版本**（本脚本用 `--script-version`）
+#    sudo bash install-zizvideo-linux.sh --verify                # **体检当前部署**（只读，不改任何东西）
+#        退出码：0 全过 / 3 **服务在跑但没就绪**（503：按提示修，别重启）/ 1 服务不可用或结构项有错 / 2 参数环境
 #    bash install-zizvideo-linux.sh --help | --script-version
 #
 #  布局：
@@ -69,6 +71,7 @@ while [ $# -gt 0 ]; do
     --uninstall) ACTION="uninstall"; shift ;;
     --purge) ACTION="purge"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --verify) ACTION="verify"; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --script-version) printf '%s\n' "$SCRIPT_VERSION"; exit 0 ;;
     --help|-h) usage; exit 0 ;;
@@ -329,7 +332,132 @@ if [ "${ZV_LIB_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
+do_verify() {
+  # 只读体检：硬件/权限类事实由它给结论，**不改任何东西**
+  local ok_n=0 bad_n=0 structural_bad=0 unready=0 host port url code body tmp
+  vok() { ok_n=$((ok_n + 1)); say "  ✓ $*"; }
+  vbad() { bad_n=$((bad_n + 1)); say "  ✗ $*"; }
+
+  say "== 二进制"
+  if [ -x "$BIN" ]; then
+    vok "可执行：${BIN}"
+    # ⚠️ `set -euo pipefail` 下，二进制跑不起来（架构不对/不能执行）会让**整个体检中断** ——
+    # 而体检的职责恰恰是"把问题报出来"，绝不能自己先崩（同 macOS 那次 codesign 的坑）。
+    local vv; vv="$("$BIN" --version 2>/dev/null | head -1 || true)"
+    case "$vv" in
+      "zizvideo "[0-9]*) vok "--version：${vv}" ;;
+      "")               vbad "二进制跑不起来（架构不对/不可执行；本机不是它该跑的系统时也会这样）" ;;
+      *)                vbad "--version 输出异常：${vv}" ;;
+    esac
+    local elf; elf="$(python3 - "$BIN" 2>/dev/null <<'PYV'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+if data[:4] != b"\x7fELF":
+    print("不是 ELF"); raise SystemExit
+e_phoff = struct.unpack("<Q", data[32:40])[0]
+e_phentsize = struct.unpack("<H", data[54:56])[0]
+e_phnum = struct.unpack("<H", data[56:58])[0]
+ptypes = [struct.unpack("<I", data[e_phoff + i*e_phentsize:][:4])[0] for i in range(e_phnum)]
+print("动态（需要 ld.so）" if 3 in ptypes else "静态")
+PYV
+)" || elf=""""
+    case "$elf" in
+      静态) vok "静态编译（不依赖目标机的 ld.so/glibc）" ;;
+      动态*) vbad "二进制是动态链接的：极简 NAS 上可能缺 ld.so（${elf}）" ;;
+      *) vbad "不是 ELF 或没法判定：${elf}" ;;
+    esac
+  else
+    vbad "二进制不可执行（没装？）：${BIN}"
+  fi
+
+  say "== 配置"
+  if [ -f "$CONFIG" ]; then
+    vok "配置存在：${CONFIG}"
+    local out; out="$(python3 - "$CONFIG" 2>/dev/null <<'PYC'
+import json, sys, os
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception as exc:
+    print("BAD 配置不是合法 JSON：%s" % exc); raise SystemExit
+print("OK " + (cfg.get("listen") or "-") + " " + (cfg.get("data_dir") or "-") + " "
+      + (cfg.get("database_path") or "-") + " " + ",".join(cfg.get("media_allow_roots") or []))
+PYC
+)" || out="BAD python3 解析失败"
+    case "$out" in
+      OK*) # shellcheck disable=SC2086
+           set -- $out; local vlisten="$2" vdata="$3" vdb="$4" vroots="${5:-}"
+           vok "listen=${vlisten}"
+           if [ -n "$vdata" ] && [ -d "$vdata" ] && [ -w "$vdata" ]; then vok "数据目录可写：${vdata}"; else vbad "数据目录不存在或不可写：${vdata}"; fi
+           case "$vdb" in "${vdata%/}"/*) vok "数据库在数据目录内" ;; "") : ;; *) vbad "数据库不在数据目录内：${vdb}" ;; esac
+           [ -n "$vroots" ] && vok "媒体根：${vroots}" || vbad "media_allow_roots 是空的（建不了媒体库）" ;;
+      *)   vbad "${out#BAD }" ;;
+    esac
+    [ -n "${vdata:-}" ] && [ -d "$vdata" ] && df -h "$vdata" 2>/dev/null | awk 'NR==2{printf "  · 数据所在卷剩余 %s（已用 %s）\n", $4, $5}'
+  else
+    vbad "没有配置文件：${CONFIG}"
+  fi
+  structural_bad="$bad_n"     # 结构项（二进制/配置/数据目录）到此为止；退出码判据要用它
+
+  say "== 服务"
+  local st; st="$("$SYSTEMCTL_BIN" is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  case "$st" in
+    active) vok "systemd 里 ${SERVICE_NAME} 是 active" ;;
+    "")     say "  · 拿不到服务状态（没有 systemd？用 --no-service 的那个脚本 tools/verify-deploy.sh 在容器里更合适）" ;;
+    *)      vbad "systemd 里 ${SERVICE_NAME} 状态是 ${st}（不是 active）" ;;
+  esac
+
+  say "== 健康端点"
+  # 端口以**配置里的** listen 为准（部署实际用它）；配置里没有才退回脚本的 $LISTEN 默认值
+  local eff="${vlisten:-$LISTEN}"
+  host="${eff%:*}"; port="${eff##*:}"
+  case "$host" in ""|"0.0.0.0"|"::"|"[::]") host="127.0.0.1" ;; esac
+  url="http://${host}:${port}/readyz"
+  tmp="$(mktemp)"
+  code="$(curl -s -o "$tmp" -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || true)"
+  [ -n "$code" ] || code=000        # curl 自己也会打 000，别再 echo 一个（否则变成 000000）
+  body="$(cat "$tmp" 2>/dev/null || true)"; rm -f "$tmp"
+  case "$code" in
+    200) vok "/readyz 200（就绪）" ;;
+    503) unready=1; vbad "/readyz 503：**服务在跑但没就绪** —— 看下面每项（媒体根/ffmpeg/磁盘），别急着重启" ;;
+    000) vbad "${url} 无响应（服务没起来 / 端口不对 / 只绑了别的地址）" ;;
+    *)   vbad "${url} 回了 HTTP ${code}" ;;
+  esac
+  [ -n "$body" ] && printf '%s' "$body" | tr ',' '\n' | sed -n 's/^[[:space:]]*"/  · /p' | head -10
+
+  say "== 媒体根（**服务用户**读不读得到）"
+  if [ -z "${vroots:-}" ]; then
+    vbad "配置里没有媒体根"
+  else
+    local r line
+    for r in $(printf '%s' "$vroots" | tr ',' ' '); do
+      if [ ! -e "$r" ]; then
+        vbad "目录不存在：${r}（挂盘了吗/路径写错？）"
+        continue
+      fi
+      if [ "$(id -u 2>/dev/null || echo 1)" = "0" ] && command -v runuser >/dev/null 2>&1; then
+        line="$(runuser -u "$SERVICE_USER" -- "$BIN" check-access "$r" 2>/dev/null || true)"
+      else
+        line="$(sudo -n -u "$SERVICE_USER" "$BIN" check-access "$r" 2>/dev/null || true)"
+      fi
+      case "$line" in
+        *'"readable":true'*) vok "服务用户读得到：${r}" ;;
+        "")                  say "  · 没能以 ${SERVICE_USER} 身份探测 ${r}（需要 root/sudo）—— 这不等于读不到" ;;
+        *)                   vbad "服务用户读不到：${r}（挂载权限/属主不对；Linux 没有 TCC 这一步）" ;;
+      esac
+    done
+  fi
+
+  say ""
+  say "== 结论：${ok_n} 项通过，${bad_n} 项失败"
+  if [ "$bad_n" = "0" ]; then say "部署健康。"; return 0; fi
+  if [ "$unready" = "1" ] && [ "$structural_bad" = "0" ] && [ "$st" = "active" ]; then
+    say "**服务在跑但没就绪**（503 是「能修」，别重启）：按上面提示修。"; return 3
+  fi
+  say "有失败项：先修上面每条 ✗。"; return 1
+}
+
 case "$ACTION" in
+  verify) do_verify; exit $? ;;
   install|upgrade) do_install_or_upgrade ;;
   uninstall) do_uninstall ;;
   purge) do_purge ;;
