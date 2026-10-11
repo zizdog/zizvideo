@@ -1668,6 +1668,14 @@ else
   bad "有代码走了真 sudo 这条路：$(cat "$SUDO_LOG")"
 fi
 
+# 收尾：沙箱里起的假服务/假守护必须收干净（我实测时发现过一个残留 20 分钟的假 zizvideo 进程占着资源）
+leftover="$(pgrep -fl "$SB" 2>/dev/null | grep -v pgrep | head -3 || true)"
+if [ -z "$leftover" ]; then
+  ok "收尾干净：没有留下沙箱子进程（假服务都已退出）"
+else
+  bad "沙箱里留下了子进程（占资源、也可能拖着端口）：$(printf '%s' "$leftover" | tr '\n' ' ')"
+fi
+
 if [ "$FAIL" = "0" ]; then
   printf '安装器门禁通过 ✅\n'
   exit 0

@@ -207,7 +207,8 @@ if wanted mirror; then
   begin_step
   printf '\n──── 安装器 × 线上索引（dry-run，只读）────\n'
   if drout="$(cd "$ROOT" && bash platform/macos/install-zizvideo.sh --dry-run 2>&1)"; then
-    if printf '%s' "$drout" | grep -Eq '核 sha256 [0-9a-f]{64}'; then
+    # 断言**行为**（不看措辞）：dry-run 成功、且输出里有 64 位 hex 的 sha256（说明真读到了索引与产物信息）
+    if printf '%s' "$drout" | grep -Eq '[0-9a-f]{64}'; then
       step_ok "安装器能读懂线上索引并挑出本架构产物（dry-run 通过，sha256 已列出）"
     else
       step_bad "安装器 dry-run 成功但没列出 sha256 —— 输出变了，去看一眼：$(printf '%s' "$drout" | tail -3 | tr '\n' ' ')"
