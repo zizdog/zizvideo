@@ -4,7 +4,8 @@
 检查三件事（都是"写死了必腐"或"改名后没人改文档"的典型）：
   ① 文档里提到的仓库内路径（tools/… 、docker/… 、fnos/… 、dist/… 、install-*.sh…）必须存在；
   ② 文档里写的 `make <目标>` 必须在 Makefile 里真的有；
-  ③ 文档**不许写死门禁条数**（例如"覆盖（92 条 ok）"）—— 条数会涨，写死了必腐，
+  ③ 文档里提到的 `ZV_*` 环境开关必须在代码里真的存在（文档写了、代码没有 = 用户照着设了没用）；
+  ④ 文档**不许写死门禁条数**（例如"覆盖（92 条 ok）"）—— 条数会涨，写死了必腐，
      应该写"条数见 make check 输出"。
 
 用法：python3 tools/check-docs.py       退出码 0=一致，1=有不一致
@@ -64,6 +65,26 @@ def main() -> int:
             checked += 1
             if t not in known_targets and t not in IGNORE_MAKE:
                 problems.append("%s: `make %s` 在 Makefile 里没有" % (os.path.basename(doc), t))
+        # 环境开关：文档里写了 `ZV_XXX=...`，代码里必须有这个变量（否则用户照着设，什么都不会发生）
+        for var in sorted(set(re.findall(r"\bZV_[A-Z0-9_]+", text))):
+            checked += 1
+            hit = False
+            for root, dirs, files in os.walk(ROOT):
+                dirs[:] = [d for d in dirs if d not in (".git", "dist", "node_modules", ".tools", ".linetest")]
+                for f in files:
+                    if not f.endswith((".sh", ".py", ".go", ".mk")) and f != "Makefile":
+                        continue
+                    try:
+                        if var in open(os.path.join(root, f), encoding="utf-8", errors="ignore").read():
+                            hit = True
+                            break
+                    except OSError:
+                        continue
+                if hit:
+                    break
+            if not hit:
+                problems.append("%s: 文档写了环境开关 %s，但代码里没有它（用户设了也不会生效）"
+                                % (os.path.basename(doc), var))
         if COUNT_RE.search(text):
             problems.append("%s: 写死了门禁条数（应改成「条数见 make check 输出」）" % os.path.basename(doc))
     if problems:
