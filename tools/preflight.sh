@@ -265,7 +265,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 if "assets" in d:
     for a in d.get("assets") or []:
-        # ⚠️ 资产行里可能同时有 `name`（basename）与 `file`（**带子目录**，如 platform/fnos/、docker/、android/）——
+        # ⚠️ 资产行里可能同时有 `name`（basename）与 `file`（**带子目录**，如 fnos/、docker/、android/）——
         # 必须优先用 `file`，否则拼出的 URL 少了子目录，线上明明有却被报成"取不到"（我这次就踩了：
         # docker.json 的 name 是 basename，post 检查报两个 tar"线上取不到"，其实它们在 docker/ 下）
         print("%s\t%s\t%s" % (a.get("file") or a.get("name") or "",
@@ -422,7 +422,8 @@ VERD="$APPD/$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile"
 if [ -d "$VERD" ]; then
   n_darwin=$(ls -1 "$VERD"/zizvideo_*_darwin_* 2>/dev/null | wc -l | tr -d ' ')
   n_linux=$(ls -1 "$VERD"/zizvideo_*_linux_* 2>/dev/null | wc -l | tr -d ' ')
-  n_fpk=$(ls -1 "$APPD"/platform/fnos/*.fpk 2>/dev/null | wc -l | tr -d ' ')
+  # ⚠️ dist 下的布局是**镜像侧布局**（fnos/、docker/、android/），没有 platform/ 那一层
+  n_fpk=$(ls -1 "$APPD"/fnos/*.fpk 2>/dev/null | wc -l | tr -d ' ')
   n_tar=$(ls -1 "$APPD"/docker/*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
   n_apk=$(ls -1 "$VERD"/*.apk 2>/dev/null | wc -l | tr -d ' ')
   printf '\n本次发布件：darwin %s / linux %s / 飞牛 %s / 容器 %s / APK %s' \

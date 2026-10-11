@@ -206,8 +206,10 @@ print(json.load(open(sys.argv[1]))["size"])
 PY
 )"
     local got_size
+    # ⚠️ `set -euo pipefail`：curl 404 会让这个赋值**直接中止整个脚本**（只留退出码 22、不打错误）
+    # ⇒ 一律 `|| true`，由下一行的 `[ -n ... ] || die` 负责报错
     got_size="$(curl -fsSI --max-time 30 "$MIRROR_BASE/apps/zizvideo/$apk_url" 2>/dev/null \
-      | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+      | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1 || true)"
     [ -n "$got_size" ] || die "线上取不到 APP 更新包：$apk_url"
     [ "$got_size" = "$want_size" ] || die "线上 APK 大小 ${got_size} ≠ 清单 ${want_size}（${apk_url}）"
     ok "安卓更新源可用：android.json → app ${apk_ver}，${link}（${got_size} B，线上可达）"
@@ -262,7 +264,7 @@ PYF
     if [ -n "$fname" ]; then
       furl="$MIRROR_BASE/apps/zizvideo/fnos/$fname"
       fgot="$(curl -fsSI --max-time 30 "$furl" 2>/dev/null | tr -d '\r' \
-        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1 || true)"
       [ -n "$fgot" ] || die "线上取不到飞牛包：$furl"
       [ "$fgot" = "$fsize" ] || die "线上飞牛包大小 ${fgot} ≠ 清单 ${fsize}（${fname}）"
       ok "飞牛包可用：fnos.json → ${fname}（${fgot} B，线上可达）"
@@ -288,7 +290,7 @@ PYD
     if [ -n "$dname" ]; then
       durl="$MIRROR_BASE/apps/zizvideo/docker/$dname"
       dgot="$(curl -fsSI --max-time 30 "$durl" 2>/dev/null | tr -d '\r' \
-        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+        | awk 'tolower($1)=="content-length:"{print $2}' | tail -1 || true)"
       [ -n "$dgot" ] || die "线上取不到容器镜像：$durl"
       [ "$dgot" = "$dsize" ] || die "线上容器镜像大小 ${dgot} ≠ 清单 ${dsize}（${dname}）"
       ok "容器镜像可用：docker.json → ${dname}（${dgot} B，线上可达）"
@@ -616,13 +618,13 @@ if [ -d "$APPDIR/fnos" ]; then
   fdir="$APP_DIR/fnos"
   fbody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$fdir")"
   if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$fbody" >/dev/null 2>&1; then
-    ok "已创建 platform/fnos/（飞牛包目录）"
+    ok "已创建 fnos/（飞牛包目录）"
   elif api GET /api/v1/files -G --data-urlencode "path=$fdir" 2>/dev/null | grep -q '"entries"'; then
-    ok "platform/fnos/ 已存在"
+    ok "fnos/ 已存在"
   else
     die "创建飞牛包目录失败：${fdir}（面板接口不建目录）"
   fi
-  for f in "$APPDIR"/platform/fnos/*.fpk; do
+  for f in "$APPDIR"/fnos/*.fpk; do
     [ -f "$f" ] || continue
     queue_upload "$fdir" "$f" "$(basename "$f")"
   done

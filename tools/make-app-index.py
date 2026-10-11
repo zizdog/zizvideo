@@ -139,6 +139,10 @@ def main() -> int:
     # 与 android.json 同思路 —— 飞牛用户/文档靠它拿到**稳定路径**的包（版本目录会被 prune 掉）。
     fnosdir = os.path.join(os.path.dirname(vdir), "fnos")
     fnos_rows = []
+    # 只索引**本版本**的产物：上一版的残留（刚 bump 完版本时必然有）不算错误 —— 但也**不能静默**，
+    # 收集起来统一提示（否则会重演"make release 直接失败、却看不出该删哪个文件"）。
+    stale = []
+    pkgver_hint = ver[:-4] if ver.endswith("-mvp") else ver
     if os.path.isdir(fnosdir):
         for name in sorted(os.listdir(fnosdir)):
             found = re.match(r"^zizvideo-(.+)-(x86|arm)\.fpk$", name)
@@ -147,13 +151,22 @@ def main() -> int:
                 continue
             with open(path, "rb") as handle:
                 digest = hashlib.sha256(handle.read()).hexdigest()
+            if found.group(1) != pkgver_hint:
+                stale.append("fnos/" + name); continue
             fnos_rows.append({
                 "name": name, "arch": found.group(2), "version": found.group(1),
-                "file": "platform/fnos/" + name, "sha256": digest, "size": os.path.getsize(path),
+                "file": "fnos/" + name, "sha256": digest, "size": os.path.getsize(path),
             })
     # fpk 的版本号是**去掉 -mvp 后缀**的（飞牛要求 1.0.0 这种形状）⇒ 比较要用 pkgver，
     # 同时把服务端版本也记进去（android.json 也是这个思路：version + server_version）
     pkgver = ver[:-4] if ver.endswith("-mvp") else ver
+    if not fnos_rows:
+        # 本版本还没有 .fpk（刚 bump 完版本）⇒ **删掉旧索引**：留着会指向已删的包，
+        # 让 `make release-check` 报"fnos.json 与 .fpk 不一致"（假警报）
+        fpath0 = os.path.join(os.path.dirname(vdir), "fnos.json")
+        if os.path.isfile(fpath0):
+            os.remove(fpath0)
+            print("    · 本版本还没有飞牛包 ⇒ 已移除旧 fnos.json（make fpk 会重建）")
     if fnos_rows:
         fproblems = []
         for row in fnos_rows:
@@ -187,10 +200,17 @@ def main() -> int:
                 continue
             with open(path, "rb") as handle:
                 digest = hashlib.sha256(handle.read()).hexdigest()
+            if found.group(1) != ver:
+                stale.append("docker/" + name); continue
             docker_rows.append({
                 "name": name, "arch": found.group(2), "version": found.group(1),
                 "file": "docker/" + name, "sha256": digest, "size": os.path.getsize(path),
             })
+    if not docker_rows:
+        dpath0 = os.path.join(os.path.dirname(vdir), "docker.json")
+        if os.path.isfile(dpath0):
+            os.remove(dpath0)
+            print("    · 本版本还没有容器 tar ⇒ 已移除旧 docker.json（make docker-tar 会重建）")
     if docker_rows:
         dproblems = []
         for row in docker_rows:
@@ -203,7 +223,11 @@ def main() -> int:
             for p in dproblems:
                 print("   - " + p, file=sys.stderr)
             return 1
-        dpath = os.path.join(os.path.dirname(vdir), "docker.json")
+    if stale:
+        print("    · 忽略旧版本残留（要发的是 %s）：%s" % (ver, ", ".join(stale)))
+        print("      （不会写进索引；不再需要可删 `dist/apps/zizvideo/{fnos,docker}/zizvideo-<旧版本>-*`）")
+    dpath = os.path.join(os.path.dirname(vdir), "docker.json")
+    if docker_rows:
         with open(dpath, "w", encoding="utf-8") as handle:
             json.dump({"app": "zizvideo", "platform": "docker", "latest": ver,
                        "generated_at": stamp, "assets": docker_rows}, handle,

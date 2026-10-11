@@ -162,10 +162,10 @@ fi
 
 hdr "飞牛应用包（有就核对）"
 if [ -f "$PARENT/fnos.json" ] && [ -d "$PARENT/fnos" ]; then
-  # fnos.json 里的资产用 `file` 字段（platform/fnos/xxx.fpk）⇒ 按 base=$PARENT 解析
+  # fnos.json 里的资产用 `file` 字段（**镜像侧相对路径** fnos/xxx.fpk）⇒ 按 base=$PARENT 解析
   check_asset "$PARENT/fnos.json" assets "fnos.json" "$PARENT" && ok "fnos.json 与 .fpk 逐字节一致" || bad "fnos.json 与 .fpk 不一致"
 else
-  printf '  · 没有 fnos.json / platform/fnos/（没打飞牛包就跳过；要发就 make fpk）\n'
+  printf '  · 没有 fnos.json / fnos/（没打飞牛包就跳过；要发就 make fpk）\n'
 fi
 
 hdr "容器镜像（有就核对）"
@@ -200,7 +200,7 @@ else
 fi
 
 hdr "飞牛应用包（有就一并自检）"
-FPK="$(ls -1 "$PARENT"/platform/fnos/zizvideo-*-x86.fpk "$PARENT"/platform/fnos/zizvideo-*-arm.fpk 2>/dev/null | head -1 || true)"
+FPK="$(ls -1 "$PARENT"/fnos/zizvideo-*-x86.fpk "$PARENT"/fnos/zizvideo-*-arm.fpk 2>/dev/null | head -1 || true)"
 if [ -n "$FPK" ]; then
   if out="$(bash "$ROOT/tools/check-fnos-fpk.sh" "$FPK" 2>&1)"; then
     ok "$(basename "$FPK")：$(printf '%s' "$out" | grep '结论' | head -1)"
@@ -208,7 +208,7 @@ if [ -n "$FPK" ]; then
     bad "$(basename "$FPK") 自检没过：$(printf '%s' "$out" | grep '✗' | head -3 | tr '\n' ' ')"
   fi
 else
-  printf '  · 没有 %s/platform/fnos/*.fpk（没打飞牛包就跳过；要发就 make fpk）\n' "$PARENT"
+  printf '  · 没有 %s/fnos/*.fpk（没打飞牛包就跳过；要发就 make fpk）\n' "$PARENT"
 fi
 
 printf '\n== 结论：%d 项通过，%d 项失败\n' "$PASS" "$FAIL"

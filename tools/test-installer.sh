@@ -712,7 +712,10 @@ elif command -v fnpack >/dev/null 2>&1; then FN="$(command -v fnpack)"; fi
 if [ -n "$FN" ]; then
   ok "本机有 fnpack（${FN}）：跑一次**真打包**验包结构与向导格式"
   if out=$(bash "$ROOT/tools/make-fnos-pkg.sh" --arch amd64 2>&1); then
-    fpk="$(ls -1 "$ROOT/dist/apps/zizvideo/fnos"/zizvideo-*-x86.fpk 2>/dev/null | head -1 || true)"
+    # ⚠️ 必须按**本版本**选包：`ls … | head -1` 会在 dist 里同时有旧版本残留时选中旧包
+    # （0.6.5 排在 0.6.6 前面 ⇒ 自检拿 0.6.5 的 manifest 对 0.6.6 的期望，报"包自检没过"）
+    fpkver="${FNOS_VER%-mvp}"
+    fpk="$(ls -1 "$ROOT/dist/apps/zizvideo/fnos/zizvideo-${fpkver}-x86.fpk" 2>/dev/null | head -1 || true)"
     if [ -n "$fpk" ] && [ "$(wc -c <"$fpk" | tr -d ' ')" -gt 1000000 ]; then
       ok "fnpack 真打包成功：$(basename "$fpk")（$(wc -c <"$fpk" | tr -d ' ') 字节）"
       # 包里必须真有我们的二进制与 9 个 cmd 脚本（别只看"打包成功"）
