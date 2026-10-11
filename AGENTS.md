@@ -100,7 +100,9 @@
 
 ---
 
-## 四、目录速览
+## 四、目录速览（结构约定：**核心共用，平台隔离**）
+
+**核心**（与平台无关，所有部署方式共用同一个二进制）：
 
 ```
 cmd/server                入口（只有 --config / --version；没有 --supervise）
@@ -108,8 +110,28 @@ internal/api              路由与 handler；Version 常量在这里
 internal/web/assets       内嵌前端（原生 ESM，无构建步骤）
 internal/{storage,media,dirimport,autoscan,config,auth,task}
 migrations                SQLite 迁移
-install-zizvideo.sh       独立部署安装器（system LaunchDaemon + 证书导入 + 升级/卸载）
-tools/{codesign-release.sh,publish-mirror.sh,make-app-index.py,check-js-*.mjs}
-CONTRACT.md               两个运行接口的冻结契约
-docs/ITERATION-*.md       历史设计基线；docs/坑清单.md 结论
+tools/                    共用工具与门禁（校验器都能独立运行：`python3 tools/check-*.py`）
+Makefile / go.mod         版本真源、构建与门禁目标
 ```
+
+**平台特有**（各自隔离，一个平台一个目录；细节见 `platform/README.md`）：
+
+```
+platform/macos/           独立部署（macOS）：LaunchDaemon/证书指纹固定/FDA 引导（含 --verify）
+platform/linux/           独立部署（Linux/systemd）：系统用户/单元文件/验收+回滚（含 --verify）
+platform/fnos/            飞牛 fnOS 应用包源（fnpack 打的 .fpk；设备侧自检 cmd/verify 随包安装）
+platform/docker/          容器：Dockerfile / docker-compose.yml / entrypoint.sh
+platform/panel/           面板托管（ZizPanel）的对接说明
+android/                  安卓客户端（独立 Gradle 工程，另一类"平台"，暂留原位）
+```
+
+**跨边界**：`CONTRACT.md`（与面板仓库的接口契约，刻意放根目录——另一侧也引用它）、
+`docs/`（使用者/维护者文档）、`ZizVideo-当前状态.md`（gitignored 的本机状态）。
+
+**三条铁律**（维护性靠它们）：
+1. 平台目录**只放该平台特有的东西**；两处要用同一段逻辑就抽到 `tools/`（脚本）或 `internal/`（Go）。
+2. **对外名字与仓库内路径解耦**：镜像上的文件名（安装器、索引、`fnos/`+`docker/` 下的包）是对外契约，
+   发布一律按 **basename** 上传 —— 改仓库结构**不许**改动对外名字（坑 160）。
+3. 搬目录时要同步改：`Makefile`、`tools/*`（含各校验器里写死的路径）、`docs/*`、`AGENTS.md`，
+   并**跑 `make check`**（门禁里有"文档路径必须存在""脚本卫生""上传名不许带目录"等判据兜底）。
+

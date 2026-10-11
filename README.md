@@ -55,7 +55,7 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 - 数据目录 `~/Library/Application Support/zizvideo`，卸载默认保留。
 - 与面板托管**互斥**：机器上已被面板托管时，脚本会拒绝并给出两条出路（先用面板，或先在面板卸载再独立装）。
 
-常用参数（`bash install-zizvideo.sh --help` 看全）：
+常用参数（`bash platform/macos/install-zizvideo.sh --help` 看全）：
 
 | 参数 | 作用 |
 |---|---|
@@ -83,7 +83,7 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 
 | 平台 | 怎么装 | 入口 |
 |---|---|---|
-| Linux / NAS（systemd） | `sudo bash install-zizvideo-linux.sh` | 见 [`docs/独立部署.md`](docs/独立部署.md) |
+| Linux / NAS（systemd） | `sudo bash platform/linux/install-zizvideo-linux.sh` | 见 [`docs/独立部署.md`](docs/独立部署.md) |
 | 容器（Docker/群晖/Unraid/飞牛） | `docker load -i zizvideo-<版本>-<架构>.tar.gz` 或自己 `make docker-image` | 同上 / `docker.json` 索引 |
 | 飞牛 fnOS | `appcenter-cli install-fpk zizvideo-<版本>-x86.fpk` | 同上 / `fnos.json` 索引 |
 

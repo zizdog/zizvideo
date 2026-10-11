@@ -8,7 +8,7 @@
 #  用法：
 #    bash tools/make-docker-image.sh [--arch amd64|arm64] [--tag zizvideo:local] [--stage-only]
 #  行为：
-#    ① 把 dist/apps/zizvideo/<版本>/zizvideo_<版本>_linux_<arch> 拷进 docker/zizvideo（构建上下文）；
+#    ① 把 dist/apps/zizvideo/<版本>/zizvideo_<版本>_linux_<arch> 拷进 platform/docker/zizvideo（构建上下文）；
 #    ② 有可用的 **docker daemon** 才 `docker build`；没有就**如实报错**（只装 CLI 没 daemon、
 #       或 Docker Desktop 没启动，都会走到这里）。
 # ============================================================================
@@ -33,7 +33,7 @@ esac
 
 BIN="$ROOT/dist/apps/zizvideo/${VERSION}/zizvideo_${VERSION}_linux_${ARCH}"
 [ -x "$BIN" ] || { echo "!! 找不到 $BIN —— 先 make release" >&2; exit 1; }
-CTX="$ROOT/docker"
+CTX="$ROOT/platform/docker"
 cp -f "$BIN" "$CTX/zizvideo"
 chmod 0755 "$CTX/zizvideo"
 echo "==> 构建上下文就绪：${CTX}（zizvideo = linux/${ARCH}，$(wc -c <"$CTX/zizvideo" | tr -d ' ') 字节）"

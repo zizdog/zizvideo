@@ -111,7 +111,7 @@ sudo -n -u <真实用户> <execPath> check-access <路径>
 ### 6.2 泛化轨的 label：本仓库安装器**两个都认**
 
 通用轨硬编码 `com.zizdog.<id>`（你们文档 §6.1-2）⇒ 迁移后 label 会是 **`com.zizdog.zizvideo`**。
-zizvideo 侧已经跟上：`install-zizvideo.sh` 的 `PANEL_LABELS` 同时认 `cn.zizpanel.zizvideo`
+zizvideo 侧已经跟上：`platform/macos/install-zizvideo.sh` 的 `PANEL_LABELS` 同时认 `cn.zizpanel.zizvideo`
 与 `com.zizdog.zizvideo`（plist 在、或 `launchctl print` 起得来都算命中 ⇒ 拒绝独立安装）。
 另有一道**与 label 无关的兜底**：独立安装时若 7766 已被占用，直接拒绝并提示"占用者可能是
 面板托管的新 label" —— 所以即便将来又改一次名，也不会两边同时抢端口。

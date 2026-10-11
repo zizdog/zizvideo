@@ -92,12 +92,12 @@ usage() {
 zizvideo 独立部署安装器
 
 用法：
-  install-zizvideo.sh [--system|--user] [--mirror <base>] [--listen <host:port>] [--dry-run]
-  install-zizvideo.sh --upgrade   [--system|--user] [--dry-run]
-  install-zizvideo.sh --uninstall [--system|--user] [--dry-run]
-  install-zizvideo.sh --purge     [--system|--user] [--dry-run]
-  install-zizvideo.sh --verify    [--system|--user]     # 只体检当前部署，不改任何东西
-  install-zizvideo.sh --version | --help
+  platform/macos/install-zizvideo.sh [--system|--user] [--mirror <base>] [--listen <host:port>] [--dry-run]
+  platform/macos/install-zizvideo.sh --upgrade   [--system|--user] [--dry-run]
+  platform/macos/install-zizvideo.sh --uninstall [--system|--user] [--dry-run]
+  platform/macos/install-zizvideo.sh --purge     [--system|--user] [--dry-run]
+  platform/macos/install-zizvideo.sh --verify    [--system|--user]     # 只体检当前部署，不改任何东西
+  platform/macos/install-zizvideo.sh --version | --help
 
 模式：
   --system（默认）系统级 LaunchDaemon，开机即起、不需要登录，无头 Mac 用这个。
@@ -129,7 +129,7 @@ parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
-      --version) say "install-zizvideo.sh $INSTALLER_VERSION"; exit 0 ;;
+      --version) say "platform/macos/install-zizvideo.sh $INSTALLER_VERSION"; exit 0 ;;
       --dry-run) DRY_RUN=1 ;;
       --system) MODE="system" ;;
       --user) MODE="user" ;;
@@ -277,9 +277,9 @@ refuse_other_mode() {
   say "拒绝安装：检测到另一种模式的独立部署（$1）。"
   say "两种模式共用同一 label 与端口，不能并存。先卸载它，再用当前模式装："
   if [ "$MODE" = "system" ]; then
-    say "  install-zizvideo.sh --user --uninstall"
+    say "  platform/macos/install-zizvideo.sh --user --uninstall"
   else
-    say "  install-zizvideo.sh --system --uninstall（脚本会提示 sudo）"
+    say "  platform/macos/install-zizvideo.sh --system --uninstall（脚本会提示 sudo）"
   fi
 }
 
@@ -393,7 +393,7 @@ verify_cert_pin() {
   fi
   if [ "$got" != "$EXPECTED_CRT_SHA256" ]; then
     die "证书指纹不匹配：镜像 $CRT_NAME 的 sha256=${got}，脚本内置的是 ${EXPECTED_CRT_SHA256}
-      这可能是镜像被换过，或者维护者换证书后忘了同步 install-zizvideo.sh 的 EXPECTED_CRT_SHA256。
+      这可能是镜像被换过，或者维护者换证书后忘了同步 platform/macos/install-zizvideo.sh 的 EXPECTED_CRT_SHA256。
       已中止，什么都没装（绝不导入来路不明的系统信任根）。"
   fi
   say "证书指纹核对通过：${got}（= 脚本内置指纹）"
@@ -1499,7 +1499,7 @@ main() {
 }
 
 # 测试接缝：source 本脚本 + ZV_LIB_ONLY=1 时只定义函数、不跑 main（tools/test-installer.sh 用）。
-# 必须 source（直接 `bash install-zizvideo.sh` 时 return 会报错，所以兜底 exit 0）。
+# 必须 source（直接 `bash platform/macos/install-zizvideo.sh` 时 return 会报错，所以兜底 exit 0）。
 if [ "${ZV_LIB_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi

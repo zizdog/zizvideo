@@ -11,7 +11,7 @@
   ③ **头部注释块不许混进可执行行**：从 shebang 到第一行 `set ` 之间只能是注释/空行 ——
      否则可能变成自动执行（我踩过：用法注释漏了 `#`，脚本自我递归、3 秒内 2000 行输出直到 fork 耗尽）。
   ④ **`bash -n` / `sh -n` 语法**。
-  ⑤ **Makefile 目标名与同名目录**：`make fnos` 会因存在 `fnos/` 目录而认为"已是最新"、**静默跳过配方**。
+  ⑤ **Makefile 目标名与同名目录**：`make fnos` 会因存在 `platform/fnos/` 目录而认为"已是最新"、**静默跳过配方**。
 
 用法：python3 tools/check-script-hygiene.py [--root <另一棵树>]   退出码 0=干净，1=有问题
 """
@@ -28,9 +28,9 @@ SELF = os.path.basename(__file__)
 # ⚠️ 必须**相对 ROOT** 展开（第一版用相对当前目录的 glob ⇒ `--root` 指向副本时根本没扫它，
 # 前四项检查全是摆设 —— 反例自测当场发现）
 SCRIPTS = (
-    ["install-zizvideo.sh", "install-zizvideo-linux.sh"]
+    ["platform/macos/install-zizvideo.sh", "platform/linux/install-zizvideo-linux.sh"]
     + sorted(os.path.relpath(p, ROOT) for p in glob.glob(os.path.join(ROOT, "tools/*.sh")))
-    + sorted(os.path.relpath(p, ROOT) for p in glob.glob(os.path.join(ROOT, "fnos/*/cmd/*")))
+    + sorted(os.path.relpath(p, ROOT) for p in glob.glob(os.path.join(ROOT, "platform/fnos/*/cmd/*")))
 )
 BASH4_RE = re.compile(r"mapfile|readarray|declare -A|declare -n|\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}")
 CJK_RE = re.compile(rb"\$[A-Za-z_][A-Za-z0-9_]*[^\x20-\x7e\s]")

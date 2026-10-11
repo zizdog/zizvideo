@@ -20,9 +20,9 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CANDIDATES = (
-    ["install-zizvideo.sh", "install-zizvideo-linux.sh"]
+    ["platform/macos/install-zizvideo.sh", "platform/linux/install-zizvideo-linux.sh"]
     + sorted(glob.glob("tools/*.sh"))
-    + sorted(glob.glob("fnos/*/cmd/*"))
+    + sorted(glob.glob("platform/fnos/*/cmd/*"))
 )
 SKIP = {"tools/test-installer.sh", "tools/test-fast.sh", "tools/ui-test.sh"}   # 门禁/测试脚本
 FLAG_RE = re.compile(r"^\s*(--[a-z][a-z0-9-]*(?:\|--[a-z][a-z0-9-]*)*)\)", re.M)

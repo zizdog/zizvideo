@@ -18,7 +18,7 @@
 
 这些错在真机上表现为"装上了但某功能不工作"，而本机没有飞牛设备 ⇒ 只能静态查。
 
-用法：python3 tools/check-fnos-project.py fnos/zizvideo     退出码 0=通过，1=有问题，2=参数错
+用法：python3 tools/check-fnos-project.py platform/fnos/zizvideo     退出码 0=通过，1=有问题，2=参数错
 """
 import json
 import os

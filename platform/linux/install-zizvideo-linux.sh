@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  install-zizvideo-linux.sh —— Linux 独立部署（systemd），不依赖 ZizPanel
+#  platform/linux/install-zizvideo-linux.sh —— Linux 独立部署（systemd），不依赖 ZizPanel
 #
 #  为什么单独一份：macOS 那份是 LaunchDaemon + 钥匙串 + TCC，整套都不通用。
 #  Linux 侧要做的是另一件事：静态二进制 + systemd 单元 + 一个专用系统用户。
@@ -11,16 +11,16 @@
 #  那份只认 darwin，同 arch 塞两个平台会让面板装错平台）。
 #
 #  用法：
-#    sudo bash install-zizvideo-linux.sh [--listen host:port] [--dry-run]
-#    sudo bash install-zizvideo-linux.sh --upgrade
-#    sudo bash install-zizvideo-linux.sh --uninstall | --purge --yes
-#    sudo bash install-zizvideo-linux.sh [--mirror <base>]        # 换镜像基址
-#    sudo bash install-zizvideo-linux.sh --version <版本>          # **断言**镜像 latest 就是这个版本
+#    sudo bash platform/linux/install-zizvideo-linux.sh [--listen host:port] [--dry-run]
+#    sudo bash platform/linux/install-zizvideo-linux.sh --upgrade
+#    sudo bash platform/linux/install-zizvideo-linux.sh --uninstall | --purge --yes
+#    sudo bash platform/linux/install-zizvideo-linux.sh [--mirror <base>]        # 换镜像基址
+#    sudo bash platform/linux/install-zizvideo-linux.sh --version <版本>          # **断言**镜像 latest 就是这个版本
 #        （对不上就拒绝：这是防"版本已翻页还去装旧包"的守卫，**不是**"装某个旧版本"）
 #        ⚠️ 与 macOS 安装器不同：那边的 `--version` 是**打印脚本版本**（本脚本用 `--script-version`）
-#    sudo bash install-zizvideo-linux.sh --verify                # **体检当前部署**（只读，不改任何东西）
+#    sudo bash platform/linux/install-zizvideo-linux.sh --verify                # **体检当前部署**（只读，不改任何东西）
 #        退出码：0 全过 / 3 **服务在跑但没就绪**（503：按提示修，别重启）/ 1 服务不可用或结构项有错 / 2 参数环境
-#    bash install-zizvideo-linux.sh --help | --script-version
+#    bash platform/linux/install-zizvideo-linux.sh --help | --script-version
 #
 #  布局：
 #    /opt/zizvideo/zizvideo              二进制（root:root 0755）
@@ -102,7 +102,7 @@ require_linux_root() {
   # ZV_ALLOW_ANY_OS=1 是**沙箱测试口**（让门禁能在 macOS 的开发机上跑通逻辑，见 tools/test-installer.sh）；
   # 生产环境绝不要设 —— 真在 macOS 上跑会把 Linux 二进制装进 /opt。
   if [ "${ZV_ALLOW_ANY_OS:-}" != "1" ] && [ "$(uname -s)" != "Linux" ]; then
-    die "这是 Linux 安装器（当前系统：$(uname -s)）。macOS 请用 install-zizvideo.sh"
+    die "这是 Linux 安装器（当前系统：$(uname -s)）。macOS 请用 platform/macos/install-zizvideo.sh"
   fi
   if [ "$(uname -s)" = "Linux" ] && [ "${ZV_ALLOW_NONROOT:-}" != "1" ] && [ "$(id -u)" != "0" ]; then
     die "需要 root（要写 ${INSTALL_PREFIX}、$SYSTEMD_DIR 并启 systemd 服务）：请用 sudo 重跑"

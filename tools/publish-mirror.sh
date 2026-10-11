@@ -570,14 +570,16 @@ info "上传产物到 $UPLOAD_DIR/（并行）"
 for f in "$VERDIR"/*; do
   queue_upload "$UPLOAD_DIR" "$f" "$(basename "$f")"
 done
-if [ -f install-zizvideo.sh ]; then
-  queue_upload "$APP_DIR" "$PWD/install-zizvideo.sh" "install-zizvideo.sh"
+# ⚠️ 第三个参数是**镜像上的名字**：必须是 basename。搬到 platform/ 后这里曾被路径扫描改成带目录的
+# 名字 ⇒ 安装器会被传到 apps/zizvideo/platform/... 下，而使用者的一键 URL 是 apps/zizvideo/install-*.sh ⇒ 404
+if [ -f platform/macos/install-zizvideo.sh ]; then
+  queue_upload "$APP_DIR" "$PWD/platform/macos/install-zizvideo.sh" "install-zizvideo.sh"
 fi
 # Linux 安装器（独立部署的 systemd 那条路）：同样放 app 级稳定路径（版本目录会被 prune 掉）。
-if [ -f install-zizvideo-linux.sh ]; then
-  queue_upload "$APP_DIR" "$PWD/install-zizvideo-linux.sh" "install-zizvideo-linux.sh"
+if [ -f platform/linux/install-zizvideo-linux.sh ]; then
+  queue_upload "$APP_DIR" "$PWD/platform/linux/install-zizvideo-linux.sh" "install-zizvideo-linux.sh"
 fi
-# Linux 平台清单（install-zizvideo-linux.sh 只读它）：**不能塞进面板契约的 manifest.json**
+# Linux 平台清单（platform/linux/install-zizvideo-linux.sh 只读它）：**不能塞进面板契约的 manifest.json**
 # —— 那份按 arch 选包，同 arch 塞两个平台会让 macOS 装到 Linux 二进制。
 if [ -f "$APPDIR/linux.json" ]; then
   queue_upload "$APP_DIR" "$APPDIR/linux.json" "linux.json"
@@ -614,13 +616,13 @@ if [ -d "$APPDIR/fnos" ]; then
   fdir="$APP_DIR/fnos"
   fbody="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$fdir")"
   if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$fbody" >/dev/null 2>&1; then
-    ok "已创建 fnos/（飞牛包目录）"
+    ok "已创建 platform/fnos/（飞牛包目录）"
   elif api GET /api/v1/files -G --data-urlencode "path=$fdir" 2>/dev/null | grep -q '"entries"'; then
-    ok "fnos/ 已存在"
+    ok "platform/fnos/ 已存在"
   else
     die "创建飞牛包目录失败：${fdir}（面板接口不建目录）"
   fi
-  for f in "$APPDIR"/fnos/*.fpk; do
+  for f in "$APPDIR"/platform/fnos/*.fpk; do
     [ -f "$f" ] || continue
     queue_upload "$fdir" "$f" "$(basename "$f")"
   done

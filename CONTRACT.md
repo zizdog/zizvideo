@@ -90,8 +90,8 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   `0.0.0.0:7766` = 局域网直连（首次绑非回环时 macOS 防火墙要放行）。
 - **label 是两侧共同的判据**：面板托管的作业叫 `cn.zizpanel.zizvideo`（泛化通用轨会变成
   `com.zizdog.zizvideo`，见面板侧文档 §6.1-2），本仓库独立部署的叫 `com.zizvideo.server`
-  （plist label 与签名 identifier 都是它，`install-zizvideo.sh:9-11`）。
-  `install-zizvideo.sh` 的 `PANEL_LABELS` 数组**把面板的两个 label 都认**（plist 在、或
+  （plist label 与签名 identifier 都是它，`platform/macos/install-zizvideo.sh:9-11`）。
+  `platform/macos/install-zizvideo.sh` 的 `PANEL_LABELS` 数组**把面板的两个 label 都认**（plist 在、或
   `launchctl print` 起得来都算命中 ⇒ 拒绝独立安装），并且独立安装时还有一道与 label 无关的
   兜底："7766 已被占用就拒绝"。**面板再改 label，往那个数组里加一项**，否则两条作业会抢 7766
   （面板侧文档 §6.1-2/§6.2/§8⑨）。面板侧注册表里另有一组过时常量
@@ -104,7 +104,7 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   `manifest.json` 仍是**面板唯一认的版本真源**，且**只含 darwin 产物**（面板按 `arch` 选包 ——
   同 arch 混入别的平台会让 macOS 装到 Linux 二进制，所以平台专属清单是分开的文件）：
   · `apps/zizvideo/linux.json` —— Linux 独立部署（`platform:"linux"`，含 amd64/arm64 静态二进制）；
-  · `apps/zizvideo/fnos.json` —— 飞牛 fnOS 应用包（`platform:"fnos"`，`file` 指向 `fnos/*.fpk`）；
+  · `apps/zizvideo/fnos.json` —— 飞牛 fnOS 应用包（`platform:"fnos"`，`file` 指向 `platform/fnos/*.fpk`）；
   · `apps/zizvideo/docker.json` —— 离线容器镜像（`platform:"docker"`，`file` 指向 `docker/*.tar.gz`）；
   · `apps/zizvideo/android.json` —— 安卓客户端自动更新（App 自己读，面板不读）。
   它们都在**应用级路径**（不在版本目录里），所以面板"清理旧版本目录"的逻辑天然不会碰到它们；

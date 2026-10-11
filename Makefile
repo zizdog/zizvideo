@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.6.5-mvp
+VERSION   ?= 0.6.6-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 FPK_ARCH  ?= amd64              # 飞牛 .fpk 的架构（x86 设备居多）
 DOCKER_ARCH ?= amd64            # 容器镜像用的 linux 架构（在 arm 机器上跑就改 arm64）
@@ -149,7 +149,7 @@ publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini
 DEEP ?= 0
 export VERIFY_DEEP = $(DEEP)
 
-# ⚠️ 目标名不能叫 `fnos`：仓库里有个**目录** fnos/，make 会认为目标已存在而跳过配方。
+# ⚠️ 目标名不能叫 `fnos`：仓库里有个**目录** platform/fnos/，make 会认为目标已存在而跳过配方。
 # ⚠️ 目标名不能叫 docker：仓库里有同名**目录** docker/，make 会认为目标已存在而跳过配方（踩过两次了）。
 linux-verify: ## 把发布的 Linux 二进制跑进真 Linux 容器验一遍（--api 会跑建库/扫描/流式全链路）
 	@bash tools/verify-linux-container.sh $(if $(filter 1,$(API)),--api,)

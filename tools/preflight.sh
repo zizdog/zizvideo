@@ -129,19 +129,32 @@ if wanted release; then
   printf '\n──── 发布件完整性（该出的都在吗）────\n'
   relver="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
   vdir="$ROOT/dist/apps/zizvideo/$relver"
-  miss=""
-  [ -f "$vdir/zizvideo_${relver}_darwin_arm64" ] || miss="$miss darwin_arm64"
-  for a in amd64 arm64; do
-    [ -f "$vdir/zizvideo_${relver}_linux_$a" ] || miss="$miss linux_$a"
-  done
-  [ -f "$ROOT/dist/apps/zizvideo/linux.json" ] || miss="$miss linux.json"
-  [ -f "$ROOT/dist/apps/zizvideo/manifest.json" ] || miss="$miss manifest.json"
-  if [ -z "$miss" ]; then
-    step_ok "发布件完整性（darwin + linux 两架构 + manifest.json/linux.json 都在）"
+  if [ ! -d "$vdir" ]; then
+    # 刚发完版就 bump 版本时，本版本目录还不存在 —— 这是**正常的中途状态**，如实跳过比报 ✗ 诚实
+    # （假警报会让人开始无视门禁）。要发布就先 make release。
+    step_skip "发布件完整性" "本版本（${relver}）还没构建过（发布前先 make release）"
+    step_skip "发布目录对账" "本版本（${relver}）还没构建过（发布前先 make release）"
+    RELVER_MISSING=1
   else
-    step_bad "发布件缺失：${miss} —— 先 make release（这些是 Linux/容器/独立部署的基础）"
+    miss=""
+    [ -f "$vdir/zizvideo_${relver}_darwin_arm64" ] || miss="$miss darwin_arm64"
+    for a in amd64 arm64; do
+      [ -f "$vdir/zizvideo_${relver}_linux_$a" ] || miss="$miss linux_$a"
+    done
+    [ -f "$ROOT/dist/apps/zizvideo/linux.json" ] || miss="$miss linux.json"
+    [ -f "$ROOT/dist/apps/zizvideo/manifest.json" ] || miss="$miss manifest.json"
+    if [ -z "$miss" ]; then
+      step_ok "发布件完整性（darwin + linux 两架构 + manifest.json/linux.json 都在）"
+    else
+      step_bad "发布件缺失：${miss} —— 先 make release（这些是 Linux/容器/独立部署的基础）"
+    fi
+    RELVER_MISSING=0
   fi
-  run_make "发布目录对账" "索引与产物不一致（宁可重跑 make release）" release-check
+  if [ "${RELVER_MISSING:-0}" = "1" ]; then
+    :                                          # 本版本未构建，已在上面如实跳过
+  else
+    run_make "发布目录对账" "索引与产物不一致（宁可重跑 make release）" release-check
+  fi
 fi
 
 # ---- 镜像漂移：用户下到的东西，跟我们验过的是不是一份 ------------------------
@@ -149,10 +162,12 @@ if wanted mirror; then
   begin_step
   printf '\n──── 镜像漂移（安装器/清单同源）────\n'
   drifted=""
-  for f in install-zizvideo.sh install-zizvideo-linux.sh; do
+  for f in platform/macos/install-zizvideo.sh platform/linux/install-zizvideo-linux.sh; do
     [ -f "$ROOT/$f" ] || continue
     local_sum="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ROOT/$f")"
-    remote_sum="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/$f" 2>/dev/null \
+    # ⚠️ 镜像 URL 用**文件名**，不是仓库内的相对路径（搬进 platform/ 后这里曾拼出
+    # apps/zizvideo/platform/macos/install-zizvideo.sh ⇒ 404 ⇒ 空 body ⇒ 被当成"镜像上是旧版"）
+    remote_sum="$(curl -fsS --max-time 20 "$MIRROR/apps/zizvideo/$(basename "$f")" 2>/dev/null \
       | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())' 2>/dev/null || true)"
     if [ -z "$remote_sum" ]; then
       printf '  · %s：镜像上取不到（还没发过 / 网络不通），无法比对\n' "$f"
@@ -191,7 +206,7 @@ if wanted mirror; then
   #   · 退出码 0。
   begin_step
   printf '\n──── 安装器 × 线上索引（dry-run，只读）────\n'
-  if drout="$(cd "$ROOT" && bash install-zizvideo.sh --dry-run 2>&1)"; then
+  if drout="$(cd "$ROOT" && bash platform/macos/install-zizvideo.sh --dry-run 2>&1)"; then
     if printf '%s' "$drout" | grep -Eq '核 sha256 [0-9a-f]{64}'; then
       step_ok "安装器能读懂线上索引并挑出本架构产物（dry-run 通过，sha256 已列出）"
     else
@@ -250,7 +265,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 if "assets" in d:
     for a in d.get("assets") or []:
-        # ⚠️ 资产行里可能同时有 `name`（basename）与 `file`（**带子目录**，如 fnos/、docker/、android/）——
+        # ⚠️ 资产行里可能同时有 `name`（basename）与 `file`（**带子目录**，如 platform/fnos/、docker/、android/）——
         # 必须优先用 `file`，否则拼出的 URL 少了子目录，线上明明有却被报成"取不到"（我这次就踩了：
         # docker.json 的 name 是 basename，post 检查报两个 tar"线上取不到"，其实它们在 docker/ 下）
         print("%s\t%s\t%s" % (a.get("file") or a.get("name") or "",
@@ -330,7 +345,7 @@ PYC
                 printf '  ✗ 签名链对不上：DR root %s… ≠ 线上 crt %s…（用户会被导入一张不是签名者的信任根）\n' "${dr:0:12}" "${crt_sha1:0:12}"
                 bad_items=$((bad_items + 1))
               fi
-              pinned="$(sed -n 's/^EXPECTED_CRT_SHA256="\([0-9a-f]*\)".*/\1/p' "$ROOT/install-zizvideo.sh" | head -1)"
+              pinned="$(sed -n 's/^EXPECTED_CRT_SHA256="\([0-9a-f]*\)".*/\1/p' "$ROOT/platform/macos/install-zizvideo.sh" | head -1)"
               if [ -n "$pinned" ] && [ "$crt_der" != "$pinned" ]; then
                 printf '  ✗ 线上 crt 的 DER sha256 与安装器写死的指纹不一致（签名版安装会拒绝导入 ⇒ 退化成未签名）\n'
                 bad_items=$((bad_items + 1))
@@ -407,7 +422,7 @@ VERD="$APPD/$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile"
 if [ -d "$VERD" ]; then
   n_darwin=$(ls -1 "$VERD"/zizvideo_*_darwin_* 2>/dev/null | wc -l | tr -d ' ')
   n_linux=$(ls -1 "$VERD"/zizvideo_*_linux_* 2>/dev/null | wc -l | tr -d ' ')
-  n_fpk=$(ls -1 "$APPD"/fnos/*.fpk 2>/dev/null | wc -l | tr -d ' ')
+  n_fpk=$(ls -1 "$APPD"/platform/fnos/*.fpk 2>/dev/null | wc -l | tr -d ' ')
   n_tar=$(ls -1 "$APPD"/docker/*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
   n_apk=$(ls -1 "$VERD"/*.apk 2>/dev/null | wc -l | tr -d ' ')
   printf '\n本次发布件：darwin %s / linux %s / 飞牛 %s / 容器 %s / APK %s' \

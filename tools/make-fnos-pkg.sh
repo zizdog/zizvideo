@@ -40,7 +40,7 @@ esac
 
 # fpk 的版本号用**去掉 -mvp 后缀**的服务端版本（飞牛要求 1.0.0 / 1.2.3-beta 这种形状）
 PKGVER="${VERSION%-mvp}"
-SRC="$ROOT/fnos/zizvideo"
+SRC="$ROOT/platform/fnos/zizvideo"
 # 产物放 app 级稳定路径（与 android/ 同一思路）：版本目录会被 prune 掉，飞牛包不能跟着走
 DIST="$ROOT/dist/apps/zizvideo/fnos"
 STAGE="$DIST/zizvideo-${PKGVER}-${FNOS_PLATFORM}"

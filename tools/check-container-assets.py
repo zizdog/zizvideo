@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """check-container-assets.py —— 校验容器部署的三份文件（静态结构 + 入口脚本**行为**）
 
-静态（docker/Dockerfile、docker-compose.yml、docker/entrypoint.sh）：
+静态（platform/docker/Dockerfile、docker-compose.yml、platform/docker/entrypoint.sh）：
   · Dockerfile：有 `FROM`、**非 root** 的 `USER`、`VOLUME`、`EXPOSE`、`COPY zizvideo`（用发行版二进制、不在镜像里编译）；
   · compose：给了 `ZV_LISTEN`/`ZV_DATA_DIR`/`ZV_MEDIA_ROOTS`，挂了 `/data` 卷；
   · entrypoint 通过 `sh -n`。
-行为（真跑 `docker/entrypoint.sh`，`ZV_BIN=/bin/true` 顶掉真正的二进制）—— 这部分原来只在门禁里**静态**断言，
+行为（真跑 `platform/docker/entrypoint.sh`，`ZV_BIN=/bin/true` 顶掉真正的二进制）—— 这部分原来只在门禁里**静态**断言，
   等于没验过行为：
   · ① 首次启动写出配置，字段齐全（含 `scan_workers`）、`database_path` 在 `data_dir` 内；
   · ② **已有配置绝不覆盖**（用户改过的东西不能被容器重启冲掉）；
@@ -26,7 +26,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `--dir <path>` 指向一份 docker/ 副本，便于**反例自测**（改坏的副本必须被抓住）
-DDIR = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == "--dir" else os.path.join(ROOT, "docker")
+DDIR = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == "--dir" else os.path.join(ROOT, "platform", "docker")
 DOCKERFILE = os.path.join(DDIR, "Dockerfile")
 COMPOSE = os.path.join(DDIR, "docker-compose.yml")
 ENTRY = os.path.join(DDIR, "entrypoint.sh")
@@ -46,7 +46,7 @@ def main() -> int:
 
     # ---------------- 静态：Dockerfile ----------------
     if not os.path.isfile(DOCKERFILE):
-        problems.append("缺 docker/Dockerfile")
+        problems.append("缺 platform/docker/Dockerfile")
     else:
         txt = open(DOCKERFILE, encoding="utf-8").read()
         checks += 5
@@ -72,7 +72,7 @@ def main() -> int:
 
     # ---------------- 静态：compose ----------------
     if not os.path.isfile(COMPOSE):
-        problems.append("缺 docker/docker-compose.yml")
+        problems.append("缺 platform/docker/docker-compose.yml")
     else:
         ctxt = open(COMPOSE, encoding="utf-8").read()
         for k in ("ZV_LISTEN", "ZV_DATA_DIR", "ZV_MEDIA_ROOTS"):
@@ -85,13 +85,13 @@ def main() -> int:
 
     # ---------------- 静态：entrypoint 语法 ----------------
     if not os.path.isfile(ENTRY):
-        problems.append("缺 docker/entrypoint.sh")
+        problems.append("缺 platform/docker/entrypoint.sh")
         print("\n".join("  ✗ " + p for p in problems))
         return 1
     rc = subprocess.run(["sh", "-n", ENTRY], capture_output=True, text=True).returncode
     checks += 1
     if rc != 0:
-        problems.append("docker/entrypoint.sh 语法错")
+        problems.append("platform/docker/entrypoint.sh 语法错")
 
     # ---------------- 行为：真跑一遍 ----------------
     with tempfile.TemporaryDirectory() as td:

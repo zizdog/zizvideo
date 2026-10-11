@@ -113,7 +113,7 @@ def main() -> int:
         print("     %s  %s  %d B" % (row["name"], row["sha256"][:16] + "…", row["size"]))
 
     # Linux 独立部署清单（有 linux 产物才写；与 android.json 同一思路：平台专属、稳定路径、
-    # **不塞进面板的 manifest.json**）。独立安装器 install-zizvideo-linux.sh 只读它。
+    # **不塞进面板的 manifest.json**）。独立安装器 platform/linux/install-zizvideo-linux.sh 只读它。
     if linux_rows:
         lproblems = []
         for row in linux_rows:
@@ -149,7 +149,7 @@ def main() -> int:
                 digest = hashlib.sha256(handle.read()).hexdigest()
             fnos_rows.append({
                 "name": name, "arch": found.group(2), "version": found.group(1),
-                "file": "fnos/" + name, "sha256": digest, "size": os.path.getsize(path),
+                "file": "platform/fnos/" + name, "sha256": digest, "size": os.path.getsize(path),
             })
     # fpk 的版本号是**去掉 -mvp 后缀**的（飞牛要求 1.0.0 这种形状）⇒ 比较要用 pkgver，
     # 同时把服务端版本也记进去（android.json 也是这个思路：version + server_version）

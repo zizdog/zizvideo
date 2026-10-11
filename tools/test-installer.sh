@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  tools/test-installer.sh —— install-zizvideo.sh 的回归门禁（make check-run 里跑）。
+#  tools/test-installer.sh —— platform/macos/install-zizvideo.sh 的回归门禁（make check-run 里跑）。
 #
 #  为什么要有它：独立部署安装器原来被 make check **零覆盖** —— 四个 P0/P1 问题
 #  （--purge 裸 rm -rf、无条件导入系统信任根、BSD sed 静默不生效、回滚不原子）都是
@@ -18,7 +18,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT="$ROOT/install-zizvideo.sh"
+SCRIPT="$ROOT/platform/macos/install-zizvideo.sh"
 SB="$(mktemp -d -t zv-installer-test.XXXXXX)"
 trap 'rm -rf "$SB"' EXIT
 
@@ -247,7 +247,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Linux / systemd 安装器（install-zizvideo-linux.sh）：沙箱里真跑一遍
+# Linux / systemd 安装器（platform/linux/install-zizvideo-linux.sh）：沙箱里真跑一遍
 #
 # 用 file:// 当"镜像"（curl 支持 file://），systemctl/useradd/id 全用假的，
 # 安装前缀/单元目录/数据目录/配置目录全指到 mktemp 下 —— 绝不碰真 systemd。
@@ -279,7 +279,7 @@ EOF
 chmod 0755 "$LROOT/systemctl"
 printf '#!/bin/sh\nexit 0\n' >"$LROOT/useradd"; chmod 0755 "$LROOT/useradd"
 printf '#!/bin/sh\n[ "\$1" = "-u" ] && exit 1\nexec /usr/bin/id "\$@"\n' >"$LROOT/id"; chmod 0755 "$LROOT/id"
-LINUX_INSTALLER="$ROOT/install-zizvideo-linux.sh"
+LINUX_INSTALLER="$ROOT/platform/linux/install-zizvideo-linux.sh"
 linux_run() { # 回显安装器输出；参数原样传给安装器
   ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$LROOT/bin" ZV_SYSTEMD_DIR="$LROOT/systemd" \
     ZV_DATA_ROOT="$LROOT/data" ZV_CONF_DIR="$LROOT/conf" ZV_FAKE_SYSTEMCTL="$LROOT/systemctl" \
@@ -395,7 +395,7 @@ fi
 # 看到"安装失败"，跟我们的源码毫无关系、极难查。这里只做**能用文件判定的部分**；
 # 真正的 `fnpack build` 与真机安装要在有 fnpack / 飞牛设备的地方做（脚本会如实说）。
 printf '==> 飞牛 fnOS 包（.fpk 源目录）：结构 + 生命周期 + 最小权限\n'
-FNOS="$ROOT/fnos/zizvideo"
+FNOS="$ROOT/platform/fnos/zizvideo"
 # **静态契约**合并成一个强检查（tools/check-fnos-project.py）：必需文件/目录、manifest 取值与
 # **拼错的键**（fnOS 静默忽略）、**重复键**（后写的静默覆盖）、入口交叉引用、权限最小形态、
 # resource 合法、向导形状与字段类型（只认 fnpack 实测接受的三种）、图标尺寸。
@@ -629,7 +629,7 @@ printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; };
 chmod 0755 "$SP/bin/zizvideo"
 spout="$(HOME="$SP/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$SP/lc" \
   ZV_SYSTEM_DAEMON_DIR="$SP/daemons" ZV_INSTALL_ROOT="$SP" ZV_ACCESS_PROBE_WAIT=0 \
-  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+  bash "$ROOT/platform/macos/install-zizvideo.sh" --verify 2>&1 || true)"
 n_read="$(printf '%s' "$spout" | grep -c "守护进程读得到：$SP/My Drive/视频" || true)"
 [ "$n_read" = "1" ] && ok "--verify 把带空格的媒体根当成**一个**目标（不是切成几段）" \
   || bad "--verify 对带空格路径的处理不对（匹配行数 ${n_read}）：$(printf '%s' "$spout" | grep '守护进程' | head -3 | tr '\n' ' ')"
@@ -692,13 +692,22 @@ PYI
   [ "$dim" = "$2" ] && ok "$1 是 ${2}x${2}" || bad "$1 是 ${dim}，应为 $2（fnOS 要求）"
 done
 # 打包脚本：没有 fnpack 时必须**如实失败**，不许伪造 .fpk
-if bash "$ROOT/tools/make-fnos-pkg.sh" --stage-only >/dev/null 2>&1; then
+# ⚠️ 真打包需要**本版本已构建的** Linux 发行件（`make release` 产出）。发行后 bump 版本、还没重新
+# 构建时，这里要**如实跳过**而不是报 ✗ —— 否则"刚发完版、下一轮刚开始"每次都会红（假失败会让人
+# 开始无视门禁）。结构类判据（check-fnos-project.py）不依赖发行件，照常跑。
+FNOS_VER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+FNOS_REL_BIN="$ROOT/dist/apps/zizvideo/$FNOS_VER/zizvideo_${FNOS_VER}_linux_amd64"
+if [ ! -f "$FNOS_REL_BIN" ]; then
+  note_skip "飞牛真打包：本版本（${FNOS_VER}）的 Linux 发行件还没构建（先 make release）"
+elif bash "$ROOT/tools/make-fnos-pkg.sh" --stage-only >/dev/null 2>&1; then
   ok "make-fnos-pkg.sh --stage-only 能准备出待打包目录"
 else
   bad "make-fnos-pkg.sh --stage-only 失败（待打包目录都出不来）"
 fi
 FN=""
-if [ -x "$ROOT/.tools/fnpack" ]; then FN="$ROOT/.tools/fnpack"
+if [ ! -f "$FNOS_REL_BIN" ]; then
+  FN=""      # 没有本版本发行件 ⇒ 后面"真打包"整段跳过（上面已 note_skip 说明原因）
+elif [ -x "$ROOT/.tools/fnpack" ]; then FN="$ROOT/.tools/fnpack"
 elif command -v fnpack >/dev/null 2>&1; then FN="$(command -v fnpack)"; fi
 if [ -n "$FN" ]; then
   ok "本机有 fnpack（${FN}）：跑一次**真打包**验包结构与向导格式"
@@ -783,6 +792,22 @@ if uout="$(python3 "$ROOT/tools/check-usage-flags.py" 2>&1)"; then
 else
   bad "有帮助漏写参数：$(printf '%s' "$uout" | grep '✗' | head -3 | tr '\n' ' ')"
 fi
+# publish 的上传名必须是**对外名字**（不带目录）：这类错只在下一次真发版时才暴露，代价是使用者 404
+upout="$(python3 - "$ROOT/tools/publish-mirror.sh" <<'PYUP'
+import re, sys
+bad = []
+for i, line in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    m = re.search(r'queue_upload\s+\S+\s+\S+\s+"([^"]*)"', line)
+    if m and "/" in m.group(1):
+        bad.append("第%d行=%s" % (i, m.group(1)))
+print("；".join(bad))
+PYUP
+)"
+if [ -z "$upout" ]; then
+  ok "publish 的上传名都是对外名字（不带目录）"
+else
+  bad "publish 的上传名带了目录（会传到镜像子目录，使用者的一键 URL 会 404）：${upout}"
+fi
 # 状态文档（新会话第一入口）里**可机器核对的事实**：工作树版本、未推送、速览里不许写死条数
 if sout="$(python3 "$ROOT/tools/check-status-doc.py" 2>&1)"; then
   ok "状态文档的事实对得上：$(printf '%s' "$sout" | tail -1)"
@@ -800,7 +825,7 @@ n_steps="$(printf '%s\n' "$steps" | grep -c . || true)"
 [ "$n_steps" -ge 6 ] && ok "preflight 列出 ${n_steps} 个步骤（含 mirror 漂移）" || bad "preflight --list 只列出 ${n_steps} 个步骤"
 # 假镜像：本地安装器与镜像一致 → ✓
 FM="$(mktemp -d)"; mkdir -p "$FM/apps/zizvideo"
-cp "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$FM/apps/zizvideo/" 2>/dev/null || true
+cp "$ROOT/platform/macos/install-zizvideo.sh" "$ROOT/platform/linux/install-zizvideo-linux.sh" "$FM/apps/zizvideo/" 2>/dev/null || true
 # ⚠️ latest 必须等于**本地版本**：否则会走"镜像还是上一版（发布前正常）"那条分支，测不到我们要拦的情况
 PFVER="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 printf '{"app":"zizvideo","latest":"%s","assets":[]}\n' "$PFVER" >"$FM/apps/zizvideo/manifest.json"
@@ -810,6 +835,9 @@ case "$pfout" in
   *) bad "镜像一致时没报一致：$(printf '%s' "$pfout" | grep -E '安装器|✗' | head -2 | tr '\n' ' ')" ;;
 esac
 # 同一版本却字节不同 → **必须失败**（违反"同版本不许换字节"）
+# ⚠️ 改的是**镜像侧**文件：镜像上只按**文件名**存放（没有 platform/ 那层）——我的路径扫描曾把它改成
+# `$FM/apps/zizvideo/install-zizvideo.sh`，append 因目录不存在而静默失败 ⇒ 造不出
+# "同版本字节不同"，那条判据就白测了。
 printf '\n# 与本地不同\n' >>"$FM/apps/zizvideo/install-zizvideo.sh"
 if ZV_PREFLIGHT_MIRROR="file://$FM" bash "$PF" --only mirror >"$FM/out" 2>&1; then
   bad "同一版本字节不同时 preflight 竟然通过（同版本换字节是最该拦的）"
@@ -861,7 +889,7 @@ chmod 0755 "$VA/lc"
 inst_verify() {
   HOME="$VA/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VA/lc" \
     ZV_SYSTEM_DAEMON_DIR="$VA/daemons" ZV_INSTALL_ROOT="$VA" ZV_ACCESS_PROBE_WAIT=0 \
-    ZV_FAKE_PROBE_JSON="$1" bash "$ROOT/install-zizvideo.sh" --verify 2>&1
+    ZV_FAKE_PROBE_JSON="$1" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify 2>&1
 }
 vd_verify() {
   ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VA/lc" \
@@ -910,7 +938,7 @@ chmod 0755 "$VH2/bin/zizvideo"
 printf '#!/bin/sh\n[ "$1" = "print" ] && { echo "	state = running"; exit 0; }; exit 0\n' >"$VH2/lc"; chmod 0755 "$VH2/lc"
 vout2="$(HOME="$VH2/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH2/lc" \
   ZV_SYSTEM_DAEMON_DIR="$VH2/daemons" ZV_INSTALL_ROOT="$VH2" \
-  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+  bash "$ROOT/platform/macos/install-zizvideo.sh" --verify 2>&1 || true)"
 case "$vout2" in
   *"数据库不在数据目录内"*) ok "安装器 --verify 也会报「数据库不在数据目录内」（与自查脚本覆盖面一致）" ;;
   *) bad "安装器 --verify 漏了"数据库不在数据目录内"（两份实现覆盖面不一致）" ;;
@@ -934,7 +962,7 @@ esac
 printf '#!/bin/sh\necho "broken: cannot execute" >&2\nexit 126\n' >"$VH2/bin/zizvideo"; chmod 0755 "$VH2/bin/zizvideo"
 vbout="$(HOME="$VH2/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH2/lc" \
   ZV_SYSTEM_DAEMON_DIR="$VH2/daemons" ZV_INSTALL_ROOT="$VH2" \
-  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+  bash "$ROOT/platform/macos/install-zizvideo.sh" --verify 2>&1 || true)"
 case "$vbout" in
   *"跑不起来"*"== 结论："*) ok "二进制坏掉时体检跑到底并说清「跑不起来」（不被 set -e 截断）" ;;
   *) bad "二进制坏掉时体检被截断或没说清：$(printf '%s' "$vbout" | tail -2 | tr '\n' ' ')" ;;
@@ -947,7 +975,7 @@ printf '#!/bin/sh\n[ "$1" = "is-active" ] && { echo active; exit 0; }; exit 0\n'
 printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }\nexit 0\n' >"$VH3/bin/zizvideo"; chmod 0755 "$VH3/bin/zizvideo"
 printf '{"listen":"127.0.0.1:7793","data_dir":"%s/data","database_path":"/tmp/elsewhere.db","media_allow_roots":["%s/missing"]}\n' "$VH3" "$VH3" >"$VH3/conf/config.json"
 lvout="$(ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$VH3/bin" ZV_CONF_DIR="$VH3/conf" \
-  ZV_FAKE_SYSTEMCTL="$VH3/systemctl" bash "$ROOT/install-zizvideo-linux.sh" --verify 2>&1 || true)"
+  ZV_FAKE_SYSTEMCTL="$VH3/systemctl" bash "$ROOT/platform/linux/install-zizvideo-linux.sh" --verify 2>&1 || true)"
 case "$lvout" in
   *"数据库不在数据目录内"*) ok "Linux 安装器 --verify 也报「数据库不在数据目录内」（与另两份实现覆盖面一致）" ;;
   *) bad "Linux 安装器 --verify 漏了"数据库不在数据目录内"" ;;
@@ -1146,13 +1174,13 @@ cfgnote() { printf '  · %s\n' "$*"; }
 
 # ① 飞牛：install_callback 会写配置（并并入系统给的目录）
 mkdir -p "$CW/fnos"
-TRIM_APPDEST="$CW/fnos/app" TRIM_PKGETC="$CW/fnos/etc" TRIM_PKGVAR="$CW/fnos/var" \
+TRIM_APPDEST="$CW/platform/fnos/app" TRIM_PKGETC="$CW/platform/fnos/etc" TRIM_PKGVAR="$CW/platform/fnos/var" \
   TRIM_SERVICE_PORT="$CW_PORT" TRIM_DATA_ACCESSIBLE_PATHS="$CW/media" \
-  sh "$ROOT/fnos/zizvideo/cmd/main" install_callback >/dev/null 2>&1 || true
+  sh "$ROOT/platform/fnos/zizvideo/cmd/main" install_callback >/dev/null 2>&1 || true
 # ② 容器：entrypoint.sh 首次启动写配置
 mkdir -p "$CW/docker"
 ZV_LISTEN="127.0.0.1:$CW_PORT" ZV_DATA_DIR="$CW/docker/data" ZV_MEDIA_ROOTS="$CW/media" ZV_BIN=/bin/true \
-  sh "$ROOT/docker/entrypoint.sh" >/dev/null 2>&1 || true
+  sh "$ROOT/platform/docker/entrypoint.sh" >/dev/null 2>&1 || true
 # ③ Linux 安装器：真装一遍（假 systemctl，file:// 当镜像）；配置在它 start 之前就写好，
 #    服务起不来不影响我们取配置（但要求配置必须存在，不许"什么都没写"）
 mkdir -p "$CW/lin/apps/zizvideo/9.9.9" "$CW/lin/media"
@@ -1164,11 +1192,11 @@ if python3 "$ROOT/tools/make-app-index.py" "$CW/lin/apps/zizvideo/9.9.9" 9.9.9 >
   ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$CW/lin/bin" ZV_SYSTEMD_DIR="$CW/lin/systemd" \
     ZV_DATA_ROOT="$CW/lin/data" ZV_CONF_DIR="$CW/lin/conf" ZV_FAKE_SYSTEMCTL=/bin/true \
     ZV_FAKE_USERADD=/bin/true ZV_FAKE_ID=/usr/bin/id ZV_ACCESS_PROBE_WAIT=0 \
-    bash "$ROOT/install-zizvideo-linux.sh" --mirror "file://$CW/lin" --listen "127.0.0.1:$CW_PORT" \
+    bash "$ROOT/platform/linux/install-zizvideo-linux.sh" --mirror "file://$CW/lin" --listen "127.0.0.1:$CW_PORT" \
     >/dev/null 2>&1 || true
 fi
 
-for spec in "飞牛cmd/main:$CW/fnos/etc/config.json" "容器entrypoint:$CW/docker/data/config.json" "Linux安装器:$CW/lin/conf/config.json"; do
+for spec in "飞牛cmd/main:$CW/platform/fnos/etc/config.json" "容器entrypoint:$CW/docker/data/config.json" "Linux安装器:$CW/lin/conf/config.json"; do
   name="${spec%%:*}"; cfg="${spec#*:}"
   if [ ! -f "$cfg" ]; then
     bad "$name 没有生成配置：$cfg"
@@ -1218,7 +1246,7 @@ print("yes" if (checks.get("db") or {}).get("ok") else "no")' 2>/dev/null || ech
 done
 # ④b 三个生成器的**字段集必须一致**（同一应用不该按平台给不同默认：
 #     `scan_workers` 原来只有 Linux 安装器写了 2，飞牛/容器漏了 ⇒ 小 NAS 上并发 4 个探测偏重）
-python3 - "$CW/fnos/etc/config.json" "$CW/docker/data/config.json" "$CW/lin/conf/config.json" <<'PYFS' \
+python3 - "$CW/platform/fnos/etc/config.json" "$CW/docker/data/config.json" "$CW/lin/conf/config.json" <<'PYFS' \
   && ok "三个配置生成器的字段集一致（同一应用同一套默认）" \
   || bad "三个配置生成器的字段集不一致（平台间默认漂移）"
 import json, sys
@@ -1233,7 +1261,7 @@ if "scan_workers" not in sets[0]:
 PYFS
 
 # ④ 记下一条**语义**：媒体根不存在 ⇒ /readyz 503（"服务在跑但没就绪"）。容器编排器会把 503 当没就绪，
-#    所以容器入口已经改成"只把存在的媒体根写进配置"（见 docker/entrypoint.sh）。
+#    所以容器入口已经改成"只把存在的媒体根写进配置"（见 platform/docker/entrypoint.sh）。
 printf '#!/bin/sh\nexit 0\n' >"$CW/media-probe.json"
 mkdir -p "$CW/missing-test"
 printf '{"listen":"127.0.0.1:7798","data_dir":"%s/missing-test","database_path":"%s/missing-test/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$CW" "$CW" "$CW" >"$CW/missing.json"
@@ -1267,8 +1295,8 @@ printf '{"listen":"127.0.0.1:7799","data_dir":"%s/var","database_path":"%s/var/z
 printf '#!/bin/sh\nexec %s/dist/zizvideo --config "%s/etc/config.json"\n' "$ROOT" "$FR" >"$FR/app/bin/zizvideo"
 chmod 0755 "$FR/app/bin/zizvideo"
 fout="$(TRIM_APPDEST="$FR/app" TRIM_PKGETC="$FR/etc" TRIM_PKGVAR="$FR/var" TRIM_SERVICE_PORT=7799 \
-  sh "$ROOT/fnos/zizvideo/cmd/main" start 2>&1 || true)"
-TRIM_APPDEST="$FR/app" TRIM_PKGETC="$FR/etc" TRIM_PKGVAR="$FR/var" sh "$ROOT/fnos/zizvideo/cmd/main" stop >/dev/null 2>&1 || true
+  sh "$ROOT/platform/fnos/zizvideo/cmd/main" start 2>&1 || true)"
+TRIM_APPDEST="$FR/app" TRIM_PKGETC="$FR/etc" TRIM_PKGVAR="$FR/var" sh "$ROOT/platform/fnos/zizvideo/cmd/main" stop >/dev/null 2>&1 || true
 case "$fout" in
   *"自检没过（HTTP 503）"*) ok "飞牛 start 日志把 503 说清楚（不是「服务没起来」）" ;;
   *) bad "飞牛 start 没解释 503：$(printf '%s' "$fout" | tail -2 | tr '\n' ' ')" ;;
@@ -1313,7 +1341,7 @@ chmod 0755 "$VH/lc"
 vsrv=$!
 i=0; until curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null | grep -q 200 || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
 HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
-  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify >/dev/null 2>&1
 rc_i=$?
 vout_ok="$(bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
   --bin "$VH/bin/zizvideo" --no-service 2>&1)"
@@ -1329,7 +1357,7 @@ printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/Library/Application Suppo
 vsrv2=$!
 i=0; until [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null || echo 000)" = "503" ] || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
 HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
-  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify >/dev/null 2>&1
 rc_i2=$?
 bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
   --bin "$VH/bin/zizvideo" --no-service >/dev/null 2>&1
@@ -1339,7 +1367,7 @@ rc_v2=$?
 kill "$vsrv2" 2>/dev/null || true; wait "$vsrv2" 2>/dev/null || true
 # ③ 服务没起来（把服务停掉再验）：应给 1（"服务不可用"，与"没就绪"区分开）
 HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
-  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/install-zizvideo.sh" --verify >/dev/null 2>&1
+  ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify >/dev/null 2>&1
 rc_i3=$?
 [ "$rc_i3" = "1" ] && ok "服务不可用场景：安装器 --verify 退出码 1（与"没就绪"区分）" || bad "安装器 --verify 退出码 ${rc_i3}（期望 1）"
 rm -rf "$VH"
@@ -1350,7 +1378,7 @@ rm -rf "$CW"
 #
 # 为什么必须这样测：安装器与索引生成器是两个独立组件，只在"字段名/形状一致"这一层耦合。
 # 各自用假数据都能过，但真发出去就会"挑不到架构/校验不过"。这里让两个真组件对接一次。
-printf '==> 真索引端到端（make-app-index.py → install-zizvideo-linux.sh）\n'
+printf '==> 真索引端到端（make-app-index.py → platform/linux/install-zizvideo-linux.sh）\n'
 RELVER_NOW="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 REAL_AMD64="$ROOT/dist/apps/zizvideo/$RELVER_NOW/zizvideo_${RELVER_NOW}_linux_amd64"
 REAL_ARM64="$ROOT/dist/apps/zizvideo/$RELVER_NOW/zizvideo_${RELVER_NOW}_linux_arm64"
@@ -1370,7 +1398,7 @@ if [ -f "$REAL_AMD64" ] && [ -f "$REAL_ARM64" ]; then
     ldrive() { ZV_ALLOW_ANY_OS=1 ZV_ALLOW_NONROOT=1 ZV_INSTALL_PREFIX="$IDX/bin" \
       ZV_SYSTEMD_DIR="$IDX/systemd" ZV_DATA_ROOT="$IDX/data" ZV_CONF_DIR="$IDX/conf" \
       ZV_FAKE_SYSTEMCTL=/bin/true ZV_FAKE_USERADD=/bin/true ZV_FAKE_ID=/usr/bin/id \
-      bash "$ROOT/install-zizvideo-linux.sh" --mirror "file://$IDX" "$@"; }
+      bash "$ROOT/platform/linux/install-zizvideo-linux.sh" --mirror "file://$IDX" "$@"; }
     if lout="$(ldrive --dry-run 2>&1)"; then
       case "$lout" in
         *"版本 $VERFAKE"*) ok "安装器从**真索引**里读到版本 $VERFAKE" ;;

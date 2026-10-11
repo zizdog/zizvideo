@@ -1,5 +1,5 @@
-# 用法（先 make release，再把对应架构的静态二进制放到 docker/zizvideo）：
-#   docker compose -f docker/docker-compose.yml up -d
+# 用法（先 make release，再把对应架构的静态二进制放到 platform/docker/zizvideo）：
+#   docker compose -f platform/docker/docker-compose.yml up -d
 services:
   zizvideo:
     build:

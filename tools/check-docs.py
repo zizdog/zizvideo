@@ -2,7 +2,7 @@
 """check-docs.py —— 文档 ↔ 实现一致性检查（文档腐烂是长期风险）
 
 检查三件事（都是"写死了必腐"或"改名后没人改文档"的典型）：
-  ① 文档里提到的仓库内路径（tools/… 、docker/… 、fnos/… 、dist/… 、install-*.sh…）必须存在；
+  ① 文档里提到的仓库内路径（platform/… 、tools/… 、docker/… 、fnos/… 、dist/… 、install-*.sh…）必须存在；
   ② 文档里写的 `make <目标>` 必须在 Makefile 里真的有；
   ③ 文档里提到的 `ZV_*` 环境开关必须在代码里真的存在（文档写了、代码没有 = 用户照着设了没用）；
   ④ 文档**不许写死门禁条数**（例如"覆盖（92 条 ok）"）—— 条数会涨，写死了必腐，
@@ -23,13 +23,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #   · docs/给面板的*.md      —— 面向面板仓库的接口说明，引用的路径在**面板仓库**里。
 #   · AGENTS.md             —— 工作区规则，里面是示意（`docs/ITERATION-` 前缀等）。
 # CONTRACT.md 是**跨仓库契约**（面板侧照它实现）⇒ 也纳入活文档检查：它写错的代价最大
-LIVING = ["docs/独立部署.md", "docs/验收清单.md", "README.md", "CONTRACT.md"]
+LIVING = ["docs/独立部署.md", "docs/验收清单.md", "README.md", "CONTRACT.md",
+          "platform/README.md", "platform/panel/README.md"]
 SKIP = ("坑清单.md", "给面板的")
 DOCS = [os.path.join(ROOT, p) for p in LIVING if os.path.isfile(os.path.join(ROOT, p))]
 
 # 只认"仓库根下的实际路径"（tree 图里的相对路径如 `cmd/main` 不算 —— 它是 fnos 包内的相对路径）
 PATH_RE = re.compile(
-    r"(?<![\w./])((?:tools|docker|fnos|docs|dist)/[A-Za-z0-9_./\u4e00-\u9fff\-]+"
+    # ⚠️ `platform` 必须在这里：搬到 platform/ 之后，`platform/macos/install-zizvideo.sh` 前面有 `/`，
+    # 既匹配不上旧前缀、也不匹配"裸文件名"那条 ⇒ 会被**静默跳过**（引用数从 116 掉到 92 就是这个信号）
+    r"(?<![\w./])((?:platform|tools|docker|fnos|docs|dist)/[A-Za-z0-9_./\u4e00-\u9fff\-]+"
     r"|install-zizvideo[a-z\-]*\.sh)"
 )
 MAKE_RE = re.compile(r"\bmake ([a-z][a-z0-9\-]*)")
@@ -51,6 +54,13 @@ def main() -> int:
             # 紧跟 `<`（占位符）或 `*`（glob）的都不是"路径声明"，是模板
             if text[m.end():m.end() + 1] in ("<", "*"):
                 continue
+            # **URL 里的文件名不是仓库路径**（镜像按文件名存：.../apps/zizvideo/install-zizvideo.sh）——
+            # 不排除会把它们当"仓库根下的 install-zizvideo.sh"而误报（我的路径扫描曾真把 URL 改坏过）
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            prefix = text[line_start:m.start()]
+            toks = prefix.rsplit(None, 1)
+            if toks and "://" in toks[-1]:
+                continue
             p = m.group(1).rstrip(".,;)`'\"")
             if "//" in p:
                 continue
@@ -58,9 +68,9 @@ def main() -> int:
             full = os.path.join(ROOT, p)
             if p.endswith("/"):
                 if not os.path.isdir(full):
-                    problems.append("%s: 目录不存在 %s" % (os.path.basename(doc), p))
+                    problems.append("%s: 目录不存在 %s" % (os.path.relpath(doc, ROOT), p))
             elif not os.path.exists(full):
-                problems.append("%s: 路径不存在 %s" % (os.path.basename(doc), p))
+                problems.append("%s: 路径不存在 %s" % (os.path.relpath(doc, ROOT), p))
         for t in sorted(set(MAKE_RE.findall(text))):
             checked += 1
             if t not in known_targets and t not in IGNORE_MAKE:
