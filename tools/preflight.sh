@@ -183,6 +183,23 @@ if wanted mirror; then
   else
     step_bad "镜像漂移 —— 同版本（${local_ver}）却字节不同：${drifted}（违反"同版本不许换字节"）"
   fi
+
+  # 发货中的安装器 × 线上真实索引：**真跑一次 dry-run**（只读、不写系统状态）。
+  # 为什么值得单列：门禁全是离线的（假镜像），"安装器能不能读懂线上那份索引"没人验 ——
+  # 索引 schema 一变、安装器一改，只有真用户会发现。这里用 --dry-run 把这条真实路径跑通：
+  #   · 能读到索引、挑得出本架构的产物、打印出的 sha256 是 64 位 hex（应与线上产物一致）；
+  #   · 退出码 0。
+  begin_step
+  printf '\n──── 安装器 × 线上索引（dry-run，只读）────\n'
+  if drout="$(cd "$ROOT" && bash install-zizvideo.sh --dry-run 2>&1)"; then
+    if printf '%s' "$drout" | grep -Eq '核 sha256 [0-9a-f]{64}'; then
+      step_ok "安装器能读懂线上索引并挑出本架构产物（dry-run 通过，sha256 已列出）"
+    else
+      step_bad "安装器 dry-run 成功但没列出 sha256 —— 输出变了，去看一眼：$(printf '%s' "$drout" | tail -3 | tr '\n' ' ')"
+    fi
+  else
+    step_bad "安装器 dry-run 失败（安装器与线上索引对不上了）：$(printf '%s' "$drout" | tail -2 | tr '\n' ' ')"
+  fi
 fi
 
 # ---- 发布后复核：线上产物是不是"索引里写的那份字节" ------------------------------
