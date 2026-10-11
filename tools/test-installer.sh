@@ -396,86 +396,24 @@ fi
 # 真正的 `fnpack build` 与真机安装要在有 fnpack / 飞牛设备的地方做（脚本会如实说）。
 printf '==> 飞牛 fnOS 包（.fpk 源目录）：结构 + 生命周期 + 最小权限\n'
 FNOS="$ROOT/fnos/zizvideo"
-for f in manifest ICON.PNG ICON_256.PNG cmd/main config/privilege config/resource app/ui/config; do
-  [ -e "$FNOS/${f}" ] && ok "存在 ${f}" || bad "缺 ${f}（fnOS 判定包不完整）"
-done
-# manifest：键值格式（不是 JSON）+ 必需键 + 第三方来源 + 架构不是 all（我们带原生二进制）
-# manifest 与入口配置的静态校验合并到 tools/check-fnos-manifest.py（**取值**、**拼错的键**、
-# **重复键静默覆盖**、入口 port↔service_port、desktop_applaunchname 是否指向真入口 —— 这些
-# fnpack 都不查，本机又没有飞牛设备，只能静态查）
-if mout="$(python3 "$ROOT/tools/check-fnos-manifest.py" "$FNOS" 2>&1)"; then
-  ok "飞牛 manifest/入口通过静态校验：$(printf '%s' "$mout" | tail -1)"
+# **静态契约**合并成一个强检查（tools/check-fnos-project.py）：必需文件/目录、manifest 取值与
+# **拼错的键**（fnOS 静默忽略）、**重复键**（后写的静默覆盖）、入口交叉引用、权限最小形态、
+# resource 合法、向导形状与字段类型（只认 fnpack 实测接受的三种）、图标尺寸。
+# 一串弱断言（"存在 manifest"“privilege 是合法 JSON”…）换成它，覆盖面反而更大。
+if fout="$(python3 "$ROOT/tools/check-fnos-project.py" "$FNOS" 2>&1)"; then
+  ok "飞牛包静态校验通过：$(printf '%s' "$fout" | tail -1)"
 else
-  bad "飞牛 manifest/入口有问题：$(printf '%s' "$mout" | grep '✗' | head -3 | tr '\n' ' ')"
+  bad "飞牛包静态校验不过：$(printf '%s' "$fout" | grep '✗' | head -3 | tr '\n' ' ')"
 fi
 # 反例：拼错的键（fnOS 会静默忽略）必须被报出来 —— 否则这个校验是摆设
 MBAD="$(mktemp -d)"; cp -R "$FNOS" "$MBAD/pkg"
 printf '\ndescripton=拼错的键\n' >>"$MBAD/pkg/manifest"
-if python3 "$ROOT/tools/check-fnos-manifest.py" "$MBAD/pkg" >/dev/null 2>&1; then
+if python3 "$ROOT/tools/check-fnos-project.py" "$MBAD/pkg" >/dev/null 2>&1; then
   bad "manifest 里拼错的键（descripton）没被校验出来"
 else
   ok "manifest 里拼错的键会被报出来（fnOS 自己会静默忽略）"
 fi
 rm -rf "$MBAD"
-# 权限：不许 root、必须 run-as=package
-if grep -q '"run-as"[[:space:]]*:[[:space:]]*"package"' "$FNOS/config/privilege"; then
-  ok "config/privilege 用 run-as=package（最小权限）"
-else
-  bad "config/privilege 没有 run-as=package"
-fi
-grep -qE '"run-as"[[:space:]]*:[[:space:]]*"root"' "$FNOS/config/privilege" && bad "不该用 root 常驻" || ok "没有用 root 常驻"
-python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/privilege" && ok "privilege 是合法 JSON" || bad "privilege 不是合法 JSON"
-# 按官方模板保持最小：只有 defaults.run-as（多了 username/groupname 没有用，还可能指到不存在的组）
-python3 - "$FNOS/config/privilege" <<'PYV' && ok "privilege 只有 defaults.run-as（官方模板的最小形态）" || bad "privilege 多了字段"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert set(d.keys()) == {"defaults"}, d.keys()
-assert set(d["defaults"].keys()) == {"run-as"}, d["defaults"].keys()
-PYV
-# 桌面入口的端口必须与 manifest 的 service_port 一致（两份真源不能漂移；fnpack 实测**不**替换 {port}）
-python3 - "$FNOS/manifest" "$FNOS/app/ui/config" <<'PYP' && ok "桌面入口端口与 manifest.service_port 一致" || bad "桌面入口端口与 service_port 不一致"
-import json, re, sys
-mf = open(sys.argv[1]).read()
-m = re.search(r"^\s*service_port\s*=\s*(\d+)", mf, re.M)
-assert m, "manifest 里没有 service_port"
-port = m.group(1)
-cfg = json.load(open(sys.argv[2]))
-entries = cfg.get(".url") or {}
-assert entries, "入口配置里没有 .url"
-for eid, e in entries.items():
-    got = str(e.get("port") or "")
-    assert got == port, "%s 的 port=%r ≠ service_port=%s" % (eid, got, port)
-# desktop_applaunchname 必须真的存在
-launch = re.search(r"^\s*desktop_applaunchname\s*=\s*(\S+)", mf, re.M)
-assert launch and launch.group(1) in entries, "desktop_applaunchname 在入口配置里找不到"
-PYP
-python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/config/resource" && ok "resource 是合法 JSON" || bad "resource 不是合法 JSON"
-python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$FNOS/app/ui/config" && ok "app/ui/config 是合法 JSON" || bad "app/ui/config 不是合法 JSON"
-for w in install config; do
-  if [ -f "$FNOS/wizard/$w" ]; then
-    python3 - "$FNOS/wizard/$w" "$w" <<'PYW' && ok "wizard/${w} 是合法 JSON 且形状正确" || bad "wizard/${w} 不是合法 JSON / 形状不对"
-import json, sys
-steps = json.load(open(sys.argv[1]))
-assert isinstance(steps, list) and steps, "向导必须是**步骤数组**"
-for st in steps:
-    assert isinstance(st, dict) and st.get("stepTitle") and isinstance(st.get("items"), list), "每步要有 stepTitle 与 items"
-    for it in st["items"]:
-        # ⚠️ 只认 **fnpack 1.2.3 实测通过**的三种类型。官方那套开发 Skill 文档里列的
-        # radio/checkbox/select/tips **会被打包器拒绝**（我照文档写完，fnpack 直接报
-        # "File install is not valid ... content validation failure"）—— 以真打包器为准。
-        assert it.get("type") in ("text", "password", "switch"), "字段类型不被 fnpack 接受：%r" % it.get("type")
-        if it["type"] != "tips":
-            assert it.get("field"), "非 tips 的项必须有 field"
-# 端口只能由 manifest 的 service_port + 桌面入口的 port 声明一次；向导里**不许**再出现端口字段，
-# 否则用户一改，桌面入口还指着老端口（两份真源必然漂移）。
-if sys.argv[2] == "config":
-    assert not any(i.get("field") == "wizard_port" for st in steps for i in st["items"]), \
-        "wizard/config 不该带端口字段（端口由 manifest/桌面入口声明）"
-PYW
-  else
-    bad "缺 wizard/$w"
-  fi
-done
 # 配置变更钩子：幂等地合并端口/媒体根并重启
 #  ① 没有可执行文件时：配置**照样要写对**，但必须**如实非零退出**（不许假装服务起来了）
 #  ② 放一个只会 sleep 的假二进制：应当成功退出、并落下 pid 文件
