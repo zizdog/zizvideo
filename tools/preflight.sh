@@ -305,6 +305,62 @@ PYC
         bad_items=$((bad_items + 1))
       fi
     fi
+    # ===== 产物级签名核验（下载件已经在 $tmpd 里，顺手做；以后每次发版都会自动证明"是我们的密钥签的"）=====
+    # 为什么放在发布后复核里：这两条以前只能手工查一次（darwin 的固定指纹链、APK 的 v2 签名者），
+    # 而"线上那份到底是不是我们签的"是**使用者安全**事实 ⇒ 让它成为每次发版的固定动作。
+    darwin_bin="$(ls -1 "$tmpd"/zizvideo_*_darwin_* 2>/dev/null | head -1 || true)"
+    if [ -n "$darwin_bin" ]; then
+      if command -v codesign >/dev/null 2>&1; then
+        if sigout="$(codesign --verify --strict --verbose=2 "$darwin_bin" 2>&1)"; then
+          dr="$(codesign -d -r- "$darwin_bin" 2>&1 | sed -n 's/.*certificate root = H"\([0-9a-f]*\)".*/\1/p' | tail -1)"
+          printf '  ✓ darwin 产物签名有效（%s）\n' "$(printf '%s' "$sigout" | head -1)"
+          if [ -n "$dr" ]; then
+            crt_tmp="$tmpd/zizvideo-codesign.crt"
+            if curl -fsS --max-time 30 "$MIRROR/apps/zizvideo/zizvideo-codesign.crt" -o "$crt_tmp" 2>/dev/null; then
+              crt_sha1="$(openssl x509 -in "$crt_tmp" -noout -fingerprint -sha1 2>/dev/null \
+                | sed 's/.*=//' | tr -d ':' | tr 'A-Z' 'a-z')"
+              crt_der="$(openssl x509 -in "$crt_tmp" -outform der 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+              if [ "$crt_sha1" = "$dr" ]; then
+                printf '  ✓ 签名链对得上：DR 的 certificate root（%s…）== 线上 crt 的 SHA-1\n' "${dr:0:12}"
+              else
+                printf '  ✗ 签名链对不上：DR root %s… ≠ 线上 crt %s…（用户会被导入一张不是签名者的信任根）\n' "${dr:0:12}" "${crt_sha1:0:12}"
+                bad_items=$((bad_items + 1))
+              fi
+              pinned="$(sed -n 's/^EXPECTED_CRT_SHA256="\([0-9a-f]*\)".*/\1/p' "$ROOT/install-zizvideo.sh" | head -1)"
+              if [ -n "$pinned" ] && [ "$crt_der" != "$pinned" ]; then
+                printf '  ✗ 线上 crt 的 DER sha256 与安装器写死的指纹不一致（签名版安装会拒绝导入 ⇒ 退化成未签名）\n'
+                bad_items=$((bad_items + 1))
+              elif [ -n "$pinned" ]; then
+                printf '  ✓ 线上 crt 的 DER sha256 == 安装器写死的固定指纹（%s…）\n' "${crt_der:0:12}"
+              fi
+            else
+              printf '  · 线上没有 zizvideo-codesign.crt（则本次是未签名部署，每次升级都要重新授权）\n'
+            fi
+          fi
+        else
+          # codesign 的 stderr 末尾常是 "In architecture: arm64" 这种**次要**信息，
+          # 真正说明问题的是前面那行（"code object is not signed at all"）⇒ 取第一行有效信息
+          printf '  ✗ darwin 产物签名**核验失败**：%s\n' \
+            "$(printf '%s' "$sigout" | grep -v '^In architecture' | head -1)"
+          bad_items=$((bad_items + 1))
+        fi
+      else
+        printf '  · 本机没有 codesign，跳过 darwin 签名核验（不是"验过了"）\n'
+      fi
+    fi
+    apk_bin="$(ls -1 "$tmpd"/*.apk 2>/dev/null | head -1 || true)"
+    if [ -n "$apk_bin" ] && [ -f "$ROOT/tools/apk-signer-info.py" ]; then
+      if apkout="$(python3 "$ROOT/tools/apk-signer-info.py" "$apk_bin" 2>&1)"; then
+        case "$apkout" in
+          *"CN=zizvideo"*) printf '  ✓ APK 的 v2 签名者是我们（CN=zizvideo）：%s\n' \
+              "$(printf '%s' "$apkout" | sed -n 's/^签名证书 DER sha256：\([0-9a-f]*\).*/\1/p' | head -1 | cut -c1-12)…" ;;
+          *) printf '  ✗ APK 签名者不是 CN=zizvideo —— 线上包可能被人重签了！\n'; bad_items=$((bad_items + 1)) ;;
+        esac
+      else
+        printf '  ✗ APK 签名抽取失败：%s\n' "$(printf '%s' "$apkout" | tail -1)"; bad_items=$((bad_items + 1))
+      fi
+    fi
+
     rm -rf "$tmpd"
     # 顺序很重要：**只要有 ✗ 就是失败**（第一版把"没读到可比对资产"排在前面，
     # 于是"漏传了 linux.json/android.json"被当成 skip 放过去了 —— 判据顺序错了等于没有判据）
