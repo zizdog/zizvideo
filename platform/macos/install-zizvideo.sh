@@ -68,6 +68,7 @@ PLIST=""
 OTHER_PLIST=""
 CONFIG_PATH=""
 DATA_DIR=""
+DATA_DIR_OVERRIDE=""
 LOG_DIR=""
 CONFIG_NEW=0
 DATA_DIR_NEW=0
@@ -105,9 +106,10 @@ zizvideo 独立部署安装器
   --user          用户级 LaunchAgent，只在有人登录后运行；无 sudo 才用它。
 
 其它：
+  --data-dir <路径>  自定义数据目录（默认 ~/zizvideo；给了它就不再自动迁移旧目录）。
   默认镜像 https://mirror.zizdog.com:8888，读 apps/zizvideo/manifest.json 的应用级索引。
   装到 ~/.local/bin/zizvideo；日志在 ~/Library/Logs/。
-  数据目录 ~/Library/Application Support/zizvideo，卸载默认保留，--purge 才删（需二次确认）。
+  数据目录 ~/zizvideo，卸载默认保留，--purge 才删（需二次确认）。
   与面板托管互斥：系统域有 cn.zizpanel.zizvideo 时拒绝独立安装。
   签名：镜像同目录有 zizvideo-codesign.crt 时导入系统钥匙串并复核签名，外置盘完全磁盘访问授权一次跨升级有效；
         证书指纹写死在本脚本里，对不上直接拒绝（不把来路不明的根证书装进系统）；
@@ -139,6 +141,8 @@ parse_args() {
       --verify) ACTION="verify" ;;
       --mirror) shift; [ $# -gt 0 ] || die "--mirror 缺参数"; MIRROR="$1" ;;
       --mirror=*) MIRROR="${1#--mirror=}" ;;
+      --data-dir) shift; [ $# -gt 0 ] || die "--data-dir 缺参数"; DATA_DIR_OVERRIDE="${1%/}" ;;
+      --data-dir=*) DATA_DIR_OVERRIDE="${1#--data-dir=}"; DATA_DIR_OVERRIDE="${DATA_DIR_OVERRIDE%/}" ;;
       --listen) shift; [ $# -gt 0 ] || die "--listen 缺参数"; LISTEN="$1"; LISTEN_GIVEN=1 ;;
       --listen=*) LISTEN="${1#--listen=}"; LISTEN_GIVEN=1 ;;
       *) die "未知参数：$1（--help 看用法）" ;;
@@ -153,8 +157,9 @@ parse_args() {
 derive_paths() {
   TARGET_USER=$(id -un)
   BIN="$INSTALL_ROOT/bin/zizvideo"
-  CONFIG_PATH="$HOME_DIR/Library/Application Support/zizvideo/config.json"
-  DATA_DIR="$HOME_DIR/Library/Application Support/zizvideo"
+  # 默认数据目录 ~/zizvideo：用户可见、好备份，且**不是 TCC 受保护位置** ⇒ 应用自己的库/封面不需要完全磁盘访问。
+  DATA_DIR="${DATA_DIR_OVERRIDE:-$HOME_DIR/zizvideo}"
+  CONFIG_PATH="$DATA_DIR/config.json"
   LOG_DIR="$HOME_DIR/Library/Logs"
   if [ "$MODE" = "system" ]; then
     PLIST="$SYSTEM_DAEMON_DIR/$LABEL.plist"
@@ -1177,7 +1182,7 @@ data_dir_from_config() {
 # 允许根：默认只有 $HOME/Library/Application Support/，外加显式 ZV_ALLOW_PURGE_ROOT（都要绝对路径）。
 # ⚠️ 允许根里含空格（"Application Support"），只能按行读/数组，绝不能 `for r in $(...)`（词会被拆开）。
 purge_allow_roots() {
-  printf '%s\n' "$HOME_DIR/Library/Application Support"
+  printf '%s\n' "$HOME_DIR/zizvideo"
   if [ -n "${ZV_ALLOW_PURGE_ROOT:-}" ]; then printf '%s\n' "${ZV_ALLOW_PURGE_ROOT%/}"; fi
 }
 
@@ -1211,13 +1216,20 @@ validate_purge_target() {
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     case "$t" in
-      "$root") die "拒绝清除：data_dir=\"$orig\" 就是允许根本身，不是某个应用的数据目录（什么都没删）" ;;
+      "$root")
+        # 新默认下 data_dir 恰好**就是** ~/zizvideo（允许根本身）⇒ 末级名像本应用就放行；
+        # 而 ~/Library/Application Support 这种**父目录**（末级不是 zizvideo）仍然拒绝
+        case "${t##*/}" in
+          *zizvideo*) ok=1 ;;
+          *) die "拒绝清除：data_dir=\"$orig\" 就是允许根本身，不是某个应用的数据目录（什么都没删）" ;;
+        esac
+        ;;
       "$root"/*) ok=1 ;;
     esac
   done <<EOF
 $(purge_allow_roots)
 EOF
-  [ "$ok" = "1" ] || die "拒绝清除：data_dir=\"$orig\" 不在允许根内。只允许删 $HOME_DIR/Library/Application Support/ 之下${ZV_ALLOW_PURGE_ROOT:+，或 ZV_ALLOW_PURGE_ROOT=$ZV_ALLOW_PURGE_ROOT 之下}。
+  [ "$ok" = "1" ] || die "拒绝清除：data_dir=\"$orig\" 不在允许根内。只允许删 $HOME_DIR/zizvideo/ 之下${ZV_ALLOW_PURGE_ROOT:+，或 ZV_ALLOW_PURGE_ROOT=$ZV_ALLOW_PURGE_ROOT 之下}。
       数据放在别处时请把 ZV_ALLOW_PURGE_ROOT 指到它的父目录后重跑（什么都没删）"
   if [ -L "$t" ]; then die "拒绝清除：data_dir=\"$orig\" 是符号链接，拒绝沿链接删除（什么都没删；要清就指到真实路径）" ; fi
   base="${t##*/}"

@@ -102,7 +102,7 @@ chmod 0755 "$SHIM/sudo"
 PATH="$SHIM:$PATH"
 export PATH
 
-CFG_DIR="$HOME/Library/Application Support/zizvideo"
+CFG_DIR="$HOME/zizvideo"
 mkdir -p "$CFG_DIR"
 write_cfg() { printf '{\n  "data_dir": "%s"\n}\n' "$1" >"$CFG_DIR/config.json"; }
 OUT="$SB/out.txt"
@@ -124,10 +124,10 @@ for t in "/tmp" "$HOME" "/" "relative/dir" "/Users" "/Volumes/ExternalDisk"; do
   fi
 done
 
-printf '==> --purge 合法 data_dir（$HOME/Library/Application Support/ 之下）要放行并打印计划\n'
+printf '==> --purge 合法 data_dir（$HOME/zizvideo 之下）要放行并打印计划\n'
 write_cfg "$CFG_DIR"
 if bash "$SCRIPT" --purge --dry-run >"$OUT" 2>&1 && grep -q "将删除" "$OUT" && grep -qF "${CFG_DIR}（含数据库" "$OUT"; then
-  ok "合法 data_dir 打印了删除计划：$CFG_DIR"
+  ok "合法 data_dir 打印了删除计划：${CFG_DIR}"
 else
   bad "合法 data_dir 没通过守门：$(head -c 300 "$OUT")"
 fi
@@ -145,7 +145,7 @@ printf '==> 配置里的 listen（缺键要真插入、有键要真改掉；老�
 listen_case() { # $1 = 初始 config 内容；$2 = 期望的 listen
   (
     export HOME="$SB/home-listen"
-    mkdir -p "$HOME/Library/Application Support/zizvideo"
+    mkdir -p "$HOME/zizvideo"
     export ZV_LIB_ONLY=1
     # shellcheck disable=SC1090
     . "$SCRIPT"
@@ -155,7 +155,7 @@ listen_case() { # $1 = 初始 config 内容；$2 = 期望的 listen
     ensure_config >/dev/null
   )
 }
-LCFG="$SB/home-listen/Library/Application Support/zizvideo/config.json"
+LCFG="$SB/home-listen/zizvideo/config.json"
 if listen_case '{\n  "data_dir": "/tmp/x"\n}\n' "127.0.0.1:7799" && \
    [ "$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(o.listen))' "$LCFG" 2>/dev/null)" = "127.0.0.1:7799" ]; then
   ok "配置里没有 listen 键 → 真写进去了，且仍是合法 JSON"
@@ -608,9 +608,9 @@ rm -rf "$T6"
 # 带**空格**的媒体根必须被当成一个目标（`for target in $targets` 会按空格切分 ——
 # macOS 上 `/Volumes/My Drive/…` 太常见；被切开后用户看到的是"探了几个不存在的位置"）
 printf '==> 带空格的媒体根：--verify 与权限阶段都不许被切碎\n'
-SP="$(mktemp -d)"; mkdir -p "$SP/My Drive/视频" "$SP/home/Library/Application Support/zizvideo" "$SP/bin" "$SP/daemons"
-printf '{"listen":"127.0.0.1:7817","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/var/zizvideo.db","media_allow_roots":["%s/My Drive/视频"],"allow_register":false}\n' "$SP" "$SP" "$SP" \
-  >"$SP/home/Library/Application Support/zizvideo/config.json"
+SP="$(mktemp -d)"; mkdir -p "$SP/My Drive/视频" "$SP/home/zizvideo" "$SP/bin" "$SP/daemons"
+printf '{"listen":"127.0.0.1:7817","data_dir":"%s/home/zizvideo","database_path":"%s/var/zizvideo.db","media_allow_roots":["%s/My Drive/视频"],"allow_register":false}\n' "$SP" "$SP" "$SP" \
+  >"$SP/home/zizvideo/config.json"
 cat >"$SP/lc" <<'FAKELC4'
 #!/bin/sh
 if [ "$1" = "print" ]; then echo "	state = running"; exit 0; fi
@@ -870,9 +870,9 @@ rm -rf "$FM"
 # 这两处都会回答"守护进程到底读不读得到媒体根"（安装器复用安装时那套一次性 launchd 作业，
 # 自查脚本是另一份实现）。两份实现给出不同答案 = 用户会拿到互相矛盾的结论，比只有一份更糟。
 printf '==> 安装器 --verify（单文件体检）+ 与自查脚本结论一致\n'
-VA="$(mktemp -d)"; mkdir -p "$VA/home/Library/Application Support/zizvideo" "$VA/bin" "$VA/daemons" "$VA/media"
-printf '{"listen":"127.0.0.1:7796","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/media"]}\n' "$VA" "$VA" "$VA" \
-  >"$VA/home/Library/Application Support/zizvideo/config.json"
+VA="$(mktemp -d)"; mkdir -p "$VA/home/zizvideo" "$VA/bin" "$VA/daemons" "$VA/media"
+printf '{"listen":"127.0.0.1:7796","data_dir":"%s/home/zizvideo","database_path":"%s/home/zizvideo/zizvideo.db","media_allow_roots":["%s/media"]}\n' "$VA" "$VA" "$VA" \
+  >"$VA/home/zizvideo/config.json"
 printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }; exit 0\n' >"$VA/bin/zizvideo"
 chmod 0755 "$VA/bin/zizvideo"
 cat >"$VA/lc" <<'FAKELC2'
@@ -897,10 +897,10 @@ inst_verify() {
 vd_verify() {
   ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VA/lc" \
     ZV_SYSTEM_DAEMON_DIR="$VA/daemons" ZV_ACCESS_PROBE_WAIT=0 ZV_FAKE_PROBE_JSON="$1" \
-    bash "$ROOT/tools/verify-deploy.sh" --config "$VA/home/Library/Application Support/zizvideo/config.json" \
+    bash "$ROOT/tools/verify-deploy.sh" --config "$VA/home/zizvideo/config.json" \
       --bin "$VA/bin/zizvideo" --as-daemon --no-service 2>&1
 }
-cfg_before="$(cat "$VA/home/Library/Application Support/zizvideo/config.json")"
+cfg_before="$(cat "$VA/home/zizvideo/config.json")"
 out_i="$(inst_verify '{"path":"x","readable":true}')"
 out_v="$(vd_verify '{"path":"x","readable":true}')"
 case "$out_i" in
@@ -927,15 +927,15 @@ case "$out_v" in
   *) bad "自查脚本给出不同结论：$(printf '%s' "$out_v" | grep -E '守护进程' | head -2)" ;;
 esac
 # --verify 必须"只读"：不改配置、不在 LaunchDaemons 里留东西
-[ "$cfg_before" = "$(cat "$VA/home/Library/Application Support/zizvideo/config.json")" ] \
+[ "$cfg_before" = "$(cat "$VA/home/zizvideo/config.json")" ] \
   && ok "--verify 不改动配置（只体检）" || bad "--verify 动了配置文件"
 [ "$(ls -1 "$VA/daemons" 2>/dev/null | wc -l | tr -d ' ')" = "0" ] \
   && ok "--verify 没在 LaunchDaemons 里留东西" || bad "--verify 留了 plist 残渣"
 # 两份体检实现的**覆盖面必须对齐**（否则会出现"安装器说全过、自查脚本却报某项没过"，让人困惑）：
 # 拿一个"故意有问题"的配置跑安装器 --verify，要求它把自查脚本会报的几项也报出来
-VH2="$(mktemp -d)"; mkdir -p "$VH2/home/Library/Application Support/zizvideo" "$VH2/bin" "$VH2/daemons" "$VH2/media"
-printf '{"listen":"127.0.0.1:7822","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"/tmp/elsewhere.db","media_allow_roots":["%s/media","%s/不存在"]}\n' "$VH2" "$VH2" "$VH2" \
-  >"$VH2/home/Library/Application Support/zizvideo/config.json"
+VH2="$(mktemp -d)"; mkdir -p "$VH2/home/zizvideo" "$VH2/bin" "$VH2/daemons" "$VH2/media"
+printf '{"listen":"127.0.0.1:7822","data_dir":"%s/home/zizvideo","database_path":"/tmp/elsewhere.db","media_allow_roots":["%s/media","%s/不存在"]}\n' "$VH2" "$VH2" "$VH2" \
+  >"$VH2/home/zizvideo/config.json"
 printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }; [ "$1" = "check-access" ] && { printf %s "{\"readable\":true}"; exit 0; }; exit 0\n' >"$VH2/bin/zizvideo"
 chmod 0755 "$VH2/bin/zizvideo"
 printf '#!/bin/sh\n[ "$1" = "print" ] && { echo "	state = running"; exit 0; }; exit 0\n' >"$VH2/lc"; chmod 0755 "$VH2/lc"
@@ -1312,9 +1312,9 @@ kill "$msrv" 2>/dev/null || true; wait "$msrv" 2>/dev/null || true
 rm -rf "$FR"
 # 结论必须能区分"服务在跑但没就绪"（退出码 3）与"服务没起来"（1）：两件事该做的不一样。
 # 两个实现（安装器 --verify 与自查脚本）在**同一场景**要给出同样的退出码。
-VH="$(mktemp -d)"; mkdir -p "$VH/media" "$VH/home/Library/Application Support/zizvideo" "$VH/bin" "$VH/daemons"
-printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/media"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
-  >"$VH/home/Library/Application Support/zizvideo/config.json"
+VH="$(mktemp -d)"; mkdir -p "$VH/media" "$VH/home/zizvideo" "$VH/bin" "$VH/daemons"
+printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/zizvideo","database_path":"%s/home/zizvideo/zizvideo.db","media_allow_roots":["%s/media"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
+  >"$VH/home/zizvideo/config.json"
 # 假二进制要能回答 verifier 的两种调用：--version 与 check-access <路径>
 cat >"$VH/bin/zizvideo" <<'FAKEBIN'
 #!/bin/sh
@@ -1340,13 +1340,13 @@ exit 0
 FAKELC3
 chmod 0755 "$VH/lc"
 # ① 健康场景（真服务在跑、媒体根存在）：两个实现都应给 0
-"$ROOT/dist/zizvideo" --config "$VH/home/Library/Application Support/zizvideo/config.json" >"$VH/srv.log" 2>&1 &
+"$ROOT/dist/zizvideo" --config "$VH/home/zizvideo/config.json" >"$VH/srv.log" 2>&1 &
 vsrv=$!
 i=0; until curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null | grep -q 200 || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
 HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
   ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify >/dev/null 2>&1
 rc_i=$?
-vout_ok="$(bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
+vout_ok="$(bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/zizvideo/config.json" \
   --bin "$VH/bin/zizvideo" --no-service 2>&1)"
 rc_v=$?
 [ "$rc_i" = "0" ] && ok "健康场景：安装器 --verify 退出码 0" || bad "健康场景安装器 --verify 退出码 ${rc_i}（期望 0）"
@@ -1354,15 +1354,15 @@ rc_v=$?
   || bad "健康场景自查脚本退出码 ${rc_v}（期望 0）：$(printf '%s' "$vout_ok" | grep '✗' | head -3 | tr '\n' ' ')"
 kill "$vsrv" 2>/dev/null || true; wait "$vsrv" 2>/dev/null || true
 # ② 在跑但没就绪（媒体根不存在）：两个实现都应给 **3**（≠1，因为服务确实在跑）
-printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"%s/home/Library/Application Support/zizvideo/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
-  >"$VH/home/Library/Application Support/zizvideo/config.json"
-"$ROOT/dist/zizvideo" --config "$VH/home/Library/Application Support/zizvideo/config.json" >"$VH/srv2.log" 2>&1 &
+printf '{"listen":"127.0.0.1:7808","data_dir":"%s/home/zizvideo","database_path":"%s/home/zizvideo/zizvideo.db","media_allow_roots":["%s/不存在"],"allow_register":false}\n' "$VH" "$VH" "$VH" \
+  >"$VH/home/zizvideo/config.json"
+"$ROOT/dist/zizvideo" --config "$VH/home/zizvideo/config.json" >"$VH/srv2.log" 2>&1 &
 vsrv2=$!
 i=0; until [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7808/readyz 2>/dev/null || echo 000)" = "503" ] || [ "$i" -ge 30 ]; do sleep 0.3; i=$((i+1)); done
 HOME="$VH/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH/lc" \
   ZV_SYSTEM_DAEMON_DIR="$VH/daemons" ZV_INSTALL_ROOT="$VH" bash "$ROOT/platform/macos/install-zizvideo.sh" --verify >/dev/null 2>&1
 rc_i2=$?
-bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/Library/Application Support/zizvideo/config.json" \
+bash "$ROOT/tools/verify-deploy.sh" --config "$VH/home/zizvideo/config.json" \
   --bin "$VH/bin/zizvideo" --no-service >/dev/null 2>&1
 rc_v2=$?
 [ "$rc_i2" = "3" ] && ok "没就绪场景：安装器 --verify 退出码 3（在跑但没就绪，≠1）" || bad "安装器 --verify 退出码 ${rc_i2}（期望 3）"
@@ -1470,7 +1470,7 @@ fi
 fda_case() { # $1 = config JSON；$2 = 探测结果 JSON；$3 = 等待秒数；回显 check_full_disk_access 的输出
   (
     export HOME="$SB/home-fda"
-    mkdir -p "$HOME/Library/Application Support/zizvideo"
+    mkdir -p "$HOME/zizvideo"
     export ZV_LIB_ONLY=1
     # shellcheck disable=SC1090
     . "$SCRIPT"
@@ -1486,7 +1486,7 @@ CFG_ROOT='{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s"]\n}\n'
 
 # ① 读得到：如实报告、不打扰用户
 : >"$OPEN_LOG"
-out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/Library/Application Support/zizvideo" "$SB/media")" \
+out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
   '{"path":"PROBE","readable":true}' 0 2>&1)
 case "$out" in
   *"✓ 守护进程读得到"*) ok "探测到可读时如实报告" ;;
@@ -1499,7 +1499,7 @@ esac
 
 # ② 读不到：必须引导（系统设置 + 二进制路径 + 影响），ZV_ACCESS_PROBE_WAIT=0 时不等待、不失败
 : >"$OPEN_LOG"
-if out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/Library/Application Support/zizvideo" "$SB/media")" \
+if out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
      '{"path":"PROBE","readable":false,"reason":"未授予"}' 0 2>&1); then
   ok "缺授权时**不阻断安装**（返回 0，如实报告）"
 else
@@ -1528,10 +1528,10 @@ else
 fi
 
 # ②b 带**空格**的媒体根：权限阶段必须把它当成一个目标（切碎了就会报"探了几个不存在的位置"）
-SP2="$(mktemp -d)"; mkdir -p "$SP2/home-fda/Library/Application Support/zizvideo" "$SP2/My Drive/视频"
+SP2="$(mktemp -d)"; mkdir -p "$SP2/home-fda/zizvideo" "$SP2/My Drive/视频"
 printf '{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s/My Drive/视频"]\n}\n' "$SP2/data" "$SP2" \
-  >"$SP2/home-fda/Library/Application Support/zizvideo/config.json"
-out=$(fda_case "$(cat "$SP2/home-fda/Library/Application Support/zizvideo/config.json")" \
+  >"$SP2/home-fda/zizvideo/config.json"
+out=$(fda_case "$(cat "$SP2/home-fda/zizvideo/config.json")" \
   '{"path":"x","readable":true}' 0 2>&1)
 n_sp="$(printf '%s' "$out" | grep -c "守护进程读得到：$SP2/My Drive/视频" || true)"
 [ "$n_sp" = "1" ] && ok "权限阶段把带空格的媒体根当成一个目标（没被空格切碎）" \

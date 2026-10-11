@@ -84,8 +84,10 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
 
 ## 共用契约
 - 端口 **7766**；面板托管的二进制固定在 `/opt/zizvideo/bin/zizvideo`。
-- 数据目录 `~/Library/Application Support/zizvideo/`（DB、封面、config.json）；
-  升级/卸载**默认保留**，只有 `--purge`（二次确认）才删。
+- 数据目录 **`~/zizvideo/`**（DB、封面、config.json）；升级/卸载**默认保留**，只有 `--purge`（二次确认）才删。
+  - ⚠️ **契约变更（0.6.7 起）**：旧默认是 `~/Library/Application Support/zizvideo/`，**不做自动迁移、也不做旧位置兼容**。
+    改动原因：用户可见、好备份，且 `~/zizvideo` **不是 TCC 受保护位置** ⇒ 应用自己的库/封面不需要完全磁盘访问。
+    **面板侧需要跟进**：面板托管写 config 时把 `data_dir` 指到 `~/zizvideo`。
 - install 的 `--listen <host:port>`（默认 `127.0.0.1:7766`）就是**写 config.json 的 `listen`**；
   `0.0.0.0:7766` = 局域网直连（首次绑非回环时 macOS 防火墙要放行）。
 - **label 是两侧共同的判据**：面板托管的作业叫 `cn.zizpanel.zizvideo`（泛化通用轨会变成

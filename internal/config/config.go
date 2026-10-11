@@ -57,7 +57,9 @@ type Config struct {
 // (a system folder on every Mac), so nothing points at an external volume.
 func Default() *Config {
 	home, _ := os.UserHomeDir()
-	dataDir := filepath.Join(home, "Library", "Application Support", "zizvideo")
+	// 0.6.7 起默认数据目录是 ~/zizvideo（用户可见、好备份，且**不是 TCC 受保护位置** ⇒ 库/封面不需要完全磁盘访问）。
+	// 旧默认（~/Library/Application Support/zizvideo）由安装器/迁移工具负责搬过来，见 tools/migrate-data-dir.sh。
+	dataDir := filepath.Join(home, "zizvideo")
 	return &Config{
 		Listen:             "127.0.0.1:7766",
 		DataDir:            dataDir,

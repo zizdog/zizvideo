@@ -20,7 +20,7 @@ zizvideo 有**两种运行方式，互斥**（同一个 7766 端口只能有一�
   `android.json` 是**平台专属清单**，面板不读、也不要当 manifest 的变体，更不要清理
   （它们都在应用级路径，不在版本目录里 ⇒ 面板的"清理旧版本目录"天然不会碰到）。
 - **二进制路径**：面板托管的固定在 `/opt/zizvideo/bin/zizvideo`；数据目录
-  `~/Library/Application Support/zizvideo/`（升级/卸载默认保留）。
+  **`~/zizvideo/`**（0.6.7 起；升级/卸载默认保留）。契约变更与面板侧跟进项见 `CONTRACT.md`。
 - **发布**：`make publish` 走 mini 面板的文件接口写 `apps/zizvideo/`（凭据 `.panel-credential.local`，
   只有生产机的面板进程能写那块外置盘），**顶层索引最后传**，传完复验线上可达。
 - **面板改 label 时**：`platform/macos/install-zizvideo.sh` 的 `PANEL_LABELS` 数组要跟着加一项，

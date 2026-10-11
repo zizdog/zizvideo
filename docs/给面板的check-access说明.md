@@ -132,7 +132,7 @@ zizvideo 侧已经跟上：`platform/macos/install-zizvideo.sh` 的 `PANEL_LABEL
 sudo -n -u "$(id -un)" /opt/zizvideo/bin/zizvideo check-access "$HOME/Movies"
 
 # 3) 参数顺序（新版两种都认；老版本只认 --config 在**前面**，别踩那个坑）
-/opt/zizvideo/bin/zizvideo check-access "$HOME/Movies" --config "$HOME/Library/Application Support/zizvideo/config.json"
+/opt/zizvideo/bin/zizvideo check-access "$HOME/Movies" --config "$HOME/zizvideo/config.json"
 
 # 4) 面板侧解析自测（stub 输出上面那行 JSON，断言 readable 被读到）
 ```

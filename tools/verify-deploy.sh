@@ -54,7 +54,11 @@ hdr()  { printf '\n== %s\n' "$*"; }
 # 默认路径（与两份安装器一致）
 if [ "$OS" = "Darwin" ]; then
   [ -n "$BIN" ] || BIN="$HOME/.local/bin/zizvideo"
-  [ -n "$CONFIG" ] || CONFIG="$HOME/Library/Application Support/zizvideo/config.json"
+  if [ -z "$CONFIG" ]; then
+    # 0.6.7 起默认在 ~/zizvideo；旧位置也认（还没迁移的机器）
+    if [ -f "$HOME/zizvideo/config.json" ]; then CONFIG="$HOME/zizvideo/config.json"
+    else CONFIG="$HOME/Library/Application Support/zizvideo/config.json"; fi
+  fi
   SERVICE_LABEL="com.zizvideo.server"
 else
   [ -n "$BIN" ] || BIN="/opt/zizvideo/zizvideo"

@@ -52,7 +52,7 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 - 写 `/Library/LaunchDaemons` 并 bootstrap 系统域，这一步**脚本会提示 sudo**（只提权那几步）。
 - 无头 Mac 必须用默认模式；`--user` 模式只在有人登录后运行。
 - 装到 `~/.local/bin/zizvideo`，日志在 `~/Library/Logs/zizvideo.out.log|err.log`。
-- 数据目录 `~/Library/Application Support/zizvideo`，卸载默认保留。
+- 数据目录 **`~/zizvideo`**（0.6.7 起；`--data-dir` 可改），卸载默认保留。
 - 与面板托管**互斥**：机器上已被面板托管时，脚本会拒绝并给出两条出路（先用面板，或先在面板卸载再独立装）。
 
 常用参数（`bash platform/macos/install-zizvideo.sh --help` 看全）：
@@ -137,7 +137,7 @@ zizvideo roots remove "$HOME/Movies"       --config config.json
 
 只要求**新增**的那条路径存在：旧根所在外接盘拔掉后，加/删别的根不会被它连坐；
 旧根会以「不可用（路径不存在）」显示，可直接删除。配置文件永远在数据目录
-（`~/Library/Application Support/zizvideo/config.json`），与允许根无关。
+（`~/zizvideo/config.json`），与允许根无关。
 
 媒体库根路径必须：绝对路径、`filepath.Clean` 后与原串完全一致、存在且是目录、可读、
 且落在允许根内（`EvalSymlinks` 之后仍在白名单内，`/tmp` → `/private/tmp` 这类别名按真实路径比对）。

@@ -1,6 +1,6 @@
 {
   "listen": "127.0.0.1:7766",
-  "data_dir": "/Users/CHANGE_ME/Library/Application Support/zizvideo",
+  "data_dir": "/Users/CHANGE_ME/zizvideo",
   "database_path": "/Users/CHANGE_ME/Library/Application Support/zizvideo/zizvideo.db",
   "media_allow_roots": [
     "/Users/CHANGE_ME/Movies"
