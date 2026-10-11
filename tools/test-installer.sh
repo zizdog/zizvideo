@@ -823,6 +823,12 @@ if dout="$(python3 "$ROOT/tools/check-docs.py" 2>&1)"; then
 else
   bad "文档与实现不一致：$(printf '%s' "$dout" | grep -v '^✓' | head -4 | tr '\n' ' ')"
 fi
+# 状态文档（新会话第一入口）里**可机器核对的事实**：工作树版本、未推送、速览里不许写死条数
+if sout="$(python3 "$ROOT/tools/check-status-doc.py" 2>&1)"; then
+  ok "状态文档的事实对得上：$(printf '%s' "$sout" | tail -1)"
+else
+  bad "状态文档有过期断言：$(printf '%s' "$sout" | grep '✗' | head -3 | tr '\n' ' ')"
+fi
 
 # ---------------------------------------------------------------------------
 # 发布前总检（tools/preflight.sh）：步骤清单 + 镜像漂移的两条判据（正常待发布 vs 真漂移）
