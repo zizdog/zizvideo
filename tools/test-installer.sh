@@ -1334,6 +1334,22 @@ print("yes" if (checks.get("db") or {}).get("ok") else "no")' 2>/dev/null || ech
     fi
   fi
 done
+# ④b 三个生成器的**字段集必须一致**（同一应用不该按平台给不同默认：
+#     `scan_workers` 原来只有 Linux 安装器写了 2，飞牛/容器漏了 ⇒ 小 NAS 上并发 4 个探测偏重）
+python3 - "$CW/fnos/etc/config.json" "$CW/docker/data/config.json" "$CW/lin/conf/config.json" <<'PYFS' \
+  && ok "三个配置生成器的字段集一致（同一应用同一套默认）" \
+  || bad "三个配置生成器的字段集不一致（平台间默认漂移）"
+import json, sys
+sets = []
+for p in sys.argv[1:]:
+    with open(p) as f:
+        sets.append(set(json.load(f)))
+if not all(s == sets[0] for s in sets):
+    print("字段集不同：%s" % [sorted(s) for s in sets]); raise SystemExit(1)
+if "scan_workers" not in sets[0]:
+    print("scan_workers 没写（NAS 上并发探测数应显式给）"); raise SystemExit(1)
+PYFS
+
 # ④ 记下一条**语义**：媒体根不存在 ⇒ /readyz 503（"服务在跑但没就绪"）。容器编排器会把 503 当没就绪，
 #    所以容器入口已经改成"只把存在的媒体根写进配置"（见 docker/entrypoint.sh）。
 printf '#!/bin/sh\nexit 0\n' >"$CW/media-probe.json"

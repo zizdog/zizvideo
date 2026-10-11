@@ -114,6 +114,8 @@ cfg = {
     "database_path": os.path.join(var, "zizvideo.db"),
     "media_allow_roots": roots,
     "allow_register": False,
+    # 与 Linux 安装器/容器入口**保持一致**：这类设备（NAS/盒子）并发 4 个探测偏重，2 个够用
+    "scan_workers": 2,
 }
 tmp = cfg_path + ".tmp"
 with open(tmp, "w") as handle:
@@ -129,7 +131,8 @@ PYEOF
   "data_dir": "$TRIM_PKGVAR",
   "database_path": "$TRIM_PKGVAR/zizvideo.db",
   "media_allow_roots": ["$TRIM_PKGVAR/media"],
-  "allow_register": false
+  "allow_register": false,
+  "scan_workers": 2
 }
 JSONEOF
   fi

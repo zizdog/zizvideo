@@ -25,7 +25,7 @@ mkdir -p "$DATA_DIR"
 if [ ! -f "$CONFIG" ]; then
   echo "==> 首次启动：生成 ${CONFIG}（listen=${LISTEN}，媒体根=${MEDIA_ROOTS}）"
   python3 - "$CONFIG" "$LISTEN" "$DATA_DIR" "$MEDIA_ROOTS" <<'PYEOF' 2>/dev/null || \
-  printf '{"listen":"%s","data_dir":"%s","database_path":"%s/zizvideo.db","media_allow_roots":["%s"],"allow_register":false}\n' \
+  printf '{"listen":"%s","data_dir":"%s","database_path":"%s/zizvideo.db","media_allow_roots":["%s"],"allow_register":false,"scan_workers":2}\n' \
     "$LISTEN" "$DATA_DIR" "$DATA_DIR" "$(printf '%s' "$MEDIA_ROOTS" | cut -d: -f1)" >"$CONFIG"
 import json, os, sys
 cfg_path, listen, data, roots = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -46,6 +46,8 @@ cfg = {
     "database_path": os.path.join(data, "zizvideo.db"),
     "media_allow_roots": keep,
     "allow_register": False,
+    # 与飞牛 cmd/main、Linux 安装器一致（NAS/盒子并发 4 个探测偏重）
+    "scan_workers": 2,
 }
 tmp = cfg_path + ".tmp"
 with open(tmp, "w") as handle:
