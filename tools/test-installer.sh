@@ -843,6 +843,42 @@ PYCRT
 else
   bad "安装器取证书的路径与 publish 不一致 ⇒ 真机会降级成未签名部署：${crtchk}"
 fi
+# 面板托管互斥（安全关键：判错会让两条作业抢 7766、打断面板托管）。沙箱里用假 launchctl/假端口占位。
+# 之所以补这一节：真机上"面板 label 命中"与"端口被占用"这两条判据此前**一条断言都没有**（见提交说明）。
+printf '==> 面板托管互斥：label 命中 / 端口被占用 都必须拒绝独立安装\n'
+PANEL_LABEL_REAL="$(sed -n 's/^PANEL_LABEL="\([^"]*\)".*/\1/p' "$SCRIPT" | head -1)"
+# ① 契约与说明文档必须写着同一个 label（一面改一面忘 ⇒ 互斥检测就会漏掉面板实例）
+for doc in "$ROOT/CONTRACT.md" "$ROOT/platform/panel/README.md"; do
+  if [ -n "$PANEL_LABEL_REAL" ] && grep -qF "$PANEL_LABEL_REAL" "$doc"; then
+    ok "$(basename "$doc") 里的面板 label 与安装器一致（${PANEL_LABEL_REAL}）"
+  else
+    bad "$(basename "$doc") 里的面板 label 与安装器（${PANEL_LABEL_REAL}）对不上"
+  fi
+done
+# ② 假 launchctl 报"面板 label 在跑" ⇒ 必须拒绝独立安装
+CL="$SB/conflict-lc"; printf '#!/bin/sh\ncase "$*" in *%s*) printf "\tstate = running\n"; exit 0 ;; *) exit 1 ;; esac\n' \
+  "$PANEL_LABEL_REAL" >"$CL"; chmod 0755 "$CL"
+clash="$(HOME="$SB/home-conflict" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$CL" \
+  bash "$SCRIPT" --dry-run 2>&1 || true)"
+case "$clash" in
+  *互斥*|*拒绝*) ok "面板 label 命中时拒绝独立安装（不会两条作业抢 7766）" ;;
+  *) bad "面板 label 命中时没拒绝：$(printf '%s' "$clash" | tail -2 | tr '\n' ' ')" ;;
+esac
+# ③ 端口被占用（label 检测不到时的那道兜底）⇒ 也必须拒绝
+CONFLICT_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+python3 -c 'import socket,sys,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(25)' "$CONFLICT_PORT" &
+PORT_HOLDER=$!
+sleep 1
+pclash="$(HOME="$SB/home-port" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$FAKE_LC" \
+  bash "$SCRIPT" --dry-run --listen "127.0.0.1:${CONFLICT_PORT}" 2>&1 || true)"
+kill "$PORT_HOLDER" 2>/dev/null || true
+case "$pclash" in
+  *占用*) ok "端口被占用时拒绝安装（label 检测漏掉时的兜底）" ;;
+  *) bad "端口被占用时没拒绝：$(printf '%s' "$pclash" | tail -2 | tr '\n' ' ')" ;;
+esac
+
 # 状态文档（新会话第一入口）里**可机器核对的事实**：工作树版本、未推送、速览里不许写死条数
 if sout="$(python3 "$ROOT/tools/check-status-doc.py" 2>&1)"; then
   ok "状态文档的事实对得上：$(printf '%s' "$sout" | tail -1)"

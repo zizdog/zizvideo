@@ -10,7 +10,7 @@
 > `../zizpanel/docs/zizvideo-接入契约.md`：**2026-10-10 与那边逐条核对过**，本文件只写 zizvideo 侧。
 
 zizvideo 以两种方式运行，**共用**同一份二进制、config.json、数据目录与端口 7766；
-两种方式**互斥**（安装器检测到系统域有面板托管的 `cn.zizpanel.zizvideo` 就拒绝独立安装）。
+两种方式**互斥**（安装器检测到系统域有面板托管的 `com.zizdog.zizvideo` 就拒绝独立安装）。
 无论怎么重构，下面这些都不许丢。
 
 ## 前置：二进制的真实接口（两种模式共用）
@@ -38,7 +38,7 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
 - launchd 启动的是**面板二进制**（`/opt/zizpanel/bin/zizpanel`）：
   `<面板二进制> zizvideo-supervise --user <u> --zizvideo /opt/zizvideo/bin/zizvideo --config <数据目录>/config.json --home <h> --listen <host:port> --log-dir <h>/Library/Logs`
 - supervisor 以 root fork 后 `SysProcAttr.Credential` setuid 到真实用户（**不经 sudo**）；
-  plist 由面板写（`/Library/LaunchDaemons/cn.zizpanel.zizvideo.plist`，**不写 UserName**，
+  plist 由面板写（`/Library/LaunchDaemons/com.zizdog.zizvideo.plist`，**不写 UserName**，
   `RunAtLoad`+`KeepAlive`，stdout/stderr → `zizvideo-supervise.{out,err}.log`）。
 - 它给 zizvideo 的子进程命令**只有** `zizvideo --config <config.json>`；面板的 `--listen`
   **经环境变量 `ZV_LISTEN` 真传给子进程**（env 优先于 config.json 的 `listen`，`internal/config/config.go:125`），
@@ -90,13 +90,13 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
     **面板侧需要跟进**：面板托管写 config 时把 `data_dir` 指到 `~/zizvideo`。
 - install 的 `--listen <host:port>`（默认 `127.0.0.1:7766`）就是**写 config.json 的 `listen`**；
   `0.0.0.0:7766` = 局域网直连（首次绑非回环时 macOS 防火墙要放行）。
-- **label 是两侧共同的判据**：面板托管的作业叫 `cn.zizpanel.zizvideo`（泛化通用轨会变成
-  `com.zizdog.zizvideo`，见面板侧文档 §6.1-2），本仓库独立部署的叫 `com.zizvideo.server`
-  （plist label 与签名 identifier 都是它，`platform/macos/install-zizvideo.sh:9-11`）。
-  `platform/macos/install-zizvideo.sh` 的 `PANEL_LABELS` 数组**把面板的两个 label 都认**（plist 在、或
-  `launchctl print` 起得来都算命中 ⇒ 拒绝独立安装），并且独立安装时还有一道与 label 无关的
-  兜底："7766 已被占用就拒绝"。**面板再改 label，往那个数组里加一项**，否则两条作业会抢 7766
-  （面板侧文档 §6.1-2/§6.2/§8⑨）。面板侧注册表里另有一组过时常量
+- **label 是两侧共同的判据**：面板托管的作业叫 **`com.zizdog.zizvideo`**（通用轨惯例 `com.zizdog.<id>`，
+  plist 在 `/Library/LaunchDaemons/com.zizdog.zizvideo.plist`；2026-10-11 面板侧定稿后**不再使用**
+  `cn.zizpanel.zizvideo`，也不做旧 label 兼容）。本仓库独立部署的叫 `com.zizvideo.server`
+  （plist label 与签名 identifier 都是它，`platform/macos/install-zizvideo.sh`）。
+  `platform/macos/install-zizvideo.sh` 的 `PANEL_LABELS` 数组认面板 label（plist 在、或 `launchctl print`
+  起得来都算命中 ⇒ 拒绝独立安装），并且独立安装时另有一道与 label 无关的兜底："7766 已被占用就拒绝"
+  —— 所以面板**再改** label 时即使数组没跟上，也不会出现两条作业抢端口；改了就把数组同步成新值。面板侧注册表里另有一组过时常量
   （`internal/permissions/registry.go` 的 `cn.zizvideo.serve`，条目 `Enabled=false`、无运行时影响），
   那是面板侧要收拾的，本仓库不用跟。
 - 版本真源在镜像：`apps/zizvideo/manifest.json`

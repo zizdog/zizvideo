@@ -2,7 +2,7 @@
 # zizvideo 独立部署安装器（单文件，可 curl | bash）。
 # 默认 system 模式：系统级 LaunchDaemon，开机即起，不需要任何人登录（无头 Mac 可用）。
 # --user 模式：用户级 LaunchAgent，只在有人登录后运行，仅作无 sudo 的备选。
-# 两种模式都与面板托管（cn.zizpanel.zizvideo）互斥，见 check_conflicts。
+# 两种模式都与面板托管（com.zizdog.zizvideo）互斥，见 check_conflicts。
 set -euo pipefail
 
 INSTALLER_VERSION="1.1.2"
@@ -10,11 +10,13 @@ DEFAULT_MIRROR="https://mirror.zizdog.com:8888"
 DEFAULT_LABEL="com.zizvideo.server"
 # ⚠️ 面板托管的 label：互斥检查就靠它（见 check_conflicts）。**面板改一次名，这里就要跟一次**，
 # 否则两条作业会同时抢 7766（面板侧文档 `../zizpanel/docs/zizvideo-接入契约.md` §6.1-2/§6.2/§8⑨）：
-#   · cn.zizpanel.zizvideo —— 现在的专用托管入口；
+#   · com.zizdog.zizvideo —— 面板托管的**惯例 label**（通用轨硬编码 com.zizdog.<id>）；
 #   · com.zizdog.zizvideo  —— 面板正在做的"声明驱动通用轨"硬编码 com.zizdog.<id>（同上前提 §6.1-2）。
 # 两个都认；将来再加新名字，往这个数组里加一项即可。
-PANEL_LABEL="cn.zizpanel.zizvideo"
-PANEL_LABELS=("$PANEL_LABEL" "com.zizdog.zizvideo")
+# 面板托管 label（2026-10-11 面板侧定稿）：只用惯例值，**不再认 cn.zizpanel.zizvideo，也不做旧 label 兼容**
+# （项目原则：不考虑历史版本兼容）。真机上万一还跑着旧 label 的面板实例，"7766 被占用就拒绝"那道兜底仍会拦住。
+PANEL_LABEL="com.zizdog.zizvideo"
+PANEL_LABELS=("$PANEL_LABEL")
 APP_ID="zizvideo"
 HEALTH_PATH="/healthz"
 DEFAULT_LISTEN="127.0.0.1:7766"
@@ -132,7 +134,7 @@ zizvideo 独立部署安装器
   默认镜像 https://mirror.zizdog.com:8888，读 apps/zizvideo/manifest.json 的应用级索引。
   装到 ~/.local/bin/zizvideo；日志在 ~/Library/Logs/。
   数据目录 ~/zizvideo，卸载默认保留，--purge 才删（需二次确认）。
-  与面板托管互斥：系统域有 cn.zizpanel.zizvideo 时拒绝独立安装。
+  与面板托管互斥：系统域有 com.zizdog.zizvideo 时拒绝独立安装（另有"7766 被占用就拒绝"的兜底）。
   签名：镜像同目录有 zizvideo-codesign.crt 时导入系统钥匙串并复核签名，外置盘完全磁盘访问授权一次跨升级有效；
         证书指纹写死在本脚本里，对不上直接拒绝（不把来路不明的根证书装进系统）；
         镜像没有 crt 则降级为未签名部署，每次升级都要重新授权。

@@ -4,7 +4,7 @@ zizvideo 有**两种运行方式，互斥**（同一个 7766 端口只能有一�
 
 | 方式 | 谁持有 macOS 的 TCC（完全磁盘访问）授权 | 作业/label |
 |---|---|---|
-| **面板托管**（本目录关注的方式） | **面板**持有，zizvideo 作为它的子进程**继承** | `cn.zizpanel.zizvideo`（泛化通用轨会变成 `com.zizdog.zizvideo`） |
+| **面板托管**（本目录关注的方式） | **面板**持有，zizvideo 作为它的子进程**继承** | **`com.zizdog.zizvideo`**（通用轨惯例 `com.zizdog.<id>`；2026-10-11 定稿，不再认旧 label） |
 | 独立部署 | zizvideo 自己的二进制（见 `platform/macos/`） | `com.zizvideo.server`（plist label 与签名 identifier 都是它） |
 
 **契约在仓库根 `CONTRACT.md`**（放根目录是刻意的：它是**跨仓库**契约，面板仓库也照它实现；
