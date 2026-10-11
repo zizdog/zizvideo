@@ -1604,10 +1604,12 @@ if printf '%s' "$out" | grep -qF "$SB/media" && printf '%s' "$out" | grep -q '�
 else
   bad "可读时没有报告成功：$out"
 fi
-if [ -s "$OPEN_LOG" ]; then
-  bad "可读时不该去打开系统设置：$(cat "$OPEN_LOG")"
+# 用户 2026-10-11 起：第 6 步**每次都问**（启发式可能假阳性，实测删掉 FDA 后它仍报"能读"）
+# ⇒ 媒体根可读时也照样引导；给了 --yes（本用例全局 ZV_ASSUME_YES=1）就应当打开设置页。
+if grep -q "Privacy_AllFiles" "$OPEN_LOG" 2>/dev/null; then
+  ok "媒体根可读时仍然问、并在确认后打开设置页（不再靠启发式决定是否引导）"
 else
-  ok "可读时不打扰用户（没有打开系统设置）"
+  bad "媒体根可读时没有走引导（新行为是每次都问）：$(cat "$OPEN_LOG" 2>/dev/null)"
 fi
 
 # ② 读不到：必须引导（系统设置 + 二进制路径 + 影响），ZV_ACCESS_PROBE_WAIT=0 时不等待、不失败

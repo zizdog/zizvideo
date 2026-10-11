@@ -99,6 +99,9 @@ else
   C_B=""; C_D=""; C_Y=""; C_G=""; C_R=""; C_0=""
 fi
 RULE="────────────────────────────────────────────────────────────────────────"
+# 有没有可以读写的终端？`curl … | bash` 时 stdin 是管道，但 /dev/tty 仍可用 ⇒ 交互要靠它（坑 169）。
+HAS_TTY=0
+if (printf '' >/dev/tty) 2>/dev/null; then HAS_TTY=1; fi
 STEPS_TOTAL=6
 # 「先说清楚要弹什么、再弹」的闸门（用户 2026-10-11 要求：弹窗前必须高亮说明并请用户授权）。
 #   ask_dialog <enter|y> <非交互时默认:yes|no> <第一行> [更多行...]
@@ -106,36 +109,43 @@ STEPS_TOTAL=6
 ask_dialog() {
   mode="$1"; shift
   nidef="$1"; shift
-  printf '\n  %s┌── 即将弹出授权窗口 · 请先看一眼 ────────────────────────%s\n' "$C_Y$C_B" "$C_0"
-  for aline in "$@"; do
-    printf '  %s│%s %s\n' "$C_Y$C_B" "$C_0" "$aline"
-  done
-  printf '  %s└────────────────────────────────────────────────────────%s\n' "$C_Y$C_B" "$C_0"
+  # ⚠️ 用户 2026-10-11 实测：用 `curl … | bash` 安装时 **stdin 是管道**，老实现按"非交互"处理 ⇒
+  # 只打印说明、不等确认就直接弹窗。所以这里从 **/dev/tty** 读写：管道安装也看得见、也等你回答。
+  tty_extra=0
+  if [ "$HAS_TTY" = "1" ] && [ ! -t 1 ]; then tty_extra=1; fi   # stdout 被重定向时，也往终端写一份
+  abox() {
+    printf '\n  %s┌── 即将弹出授权窗口 · 请先看一眼 ────────────────────────%s\n' "$C_Y$C_B" "$C_0"
+    for aline in "$@"; do
+      printf '  %s│%s %s\n' "$C_Y$C_B" "$C_0" "$aline"
+    done
+    printf '  %s└────────────────────────────────────────────────────────%s\n' "$C_Y$C_B" "$C_0"
+  }
+  abox "$@"
+  if [ "$tty_extra" = "1" ]; then abox "$@" >/dev/tty 2>/dev/null || true; fi
   if [ "${ZV_ASSUME_YES:-0}" = "1" ] || [ "$ASSUME_YES" = "1" ]; then
     printf '  · 已确认（--yes / ZV_ASSUME_YES=1）：继续\n'
+    [ "$tty_extra" = "1" ] && printf '  · 已确认（--yes）：继续\n' >/dev/tty 2>/dev/null
     return 0
   fi
-  if [ ! -t 0 ]; then
+  if [ "$HAS_TTY" != "1" ] && [ ! -t 0 ]; then
     if [ "$nidef" = "yes" ]; then
-      printf '  · 非交互环境：按默认继续（想静默请加 --yes）\n'; return 0
+      printf '  · 没有终端可用：按默认继续（想静默执行请加 --yes）\n'; return 0
     fi
-    printf '  · 非交互环境：跳过这一步（想静默执行请加 --yes）\n'; return 1
+    printf '  · 没有终端可用：跳过这一步（想静默执行请加 --yes）\n'; return 1
   fi
   if [ "$mode" = "y" ]; then
-    printf '  %s★ 输入 y 再回车才会弹出；直接回车＝跳过：%s' "$C_Y$C_B" "$C_0"
+    ask_txt="  ${C_Y}${C_B}★ 输入 y 再回车才会弹出；直接回车＝跳过：${C_0}"
   else
-    printf '  %s★ 看清楚后按回车继续（Ctrl-C 取消）：%s' "$C_Y$C_B" "$C_0"
+    ask_txt="  ${C_Y}${C_B}★ 看清楚后按回车继续（Ctrl-C 取消）：${C_0}"
   fi
+  printf '%s' "$ask_txt"
+  [ "$tty_extra" = "1" ] && printf '%s' "$ask_txt" >/dev/tty 2>/dev/null
   ans=""
-  if ! read -r ans; then
-    printf '\n'
-    if [ "$nidef" = "yes" ]; then return 0; fi
-    return 1
-  fi
+  if [ "$HAS_TTY" = "1" ]; then read -r ans </dev/tty 2>/dev/null || ans=""; else read -r ans || ans=""; fi
   if [ "$mode" = "y" ]; then
     case "$ans" in
       y|Y|yes|YES) return 0 ;;
-      *) printf '  · 已跳过（没有弹出任何窗口）\n'; return 1 ;;
+      *) printf '  · 已跳过（没有弹出任何窗口）\n'; [ "$tty_extra" = "1" ] && printf '  · 已跳过（没有弹出任何窗口）\n' >/dev/tty 2>/dev/null; return 1 ;;
     esac
   fi
   return 0
@@ -541,6 +551,7 @@ import_trust_cert() {
       sudo security delete-certificate -c "$cn" -t "$kc" >/dev/null 2>&1 || true
     fi
   fi
+  hl "马上会弹出钥匙串授权窗（就是上面那段说明里讲的）—— 请授权"
   say "导入并信任证书到钥匙串（需要 sudo）：$kc"
   if [ "$FAKE_SUDO" = "1" ]; then
     security add-trusted-cert -d -r trustRoot -k "$kc" "$crt" >/dev/null 2>&1
@@ -1266,19 +1277,19 @@ check_full_disk_access() {
     return 0
   fi
 
-  # ① 先用 `--fda` **启发式**判断"到底给没给"（可能假阳性，所以措辞是"通常说明"，不当判决）
+  # ① `--fda` 启发式只当**提示**（它可能假阳性：实测把 FDA 删掉后它照样说"能读"）——
+  #    所以引导不再依赖它，改成**每次都问用户**（用户 2026-10-11："安装过程让用户授权全部文件的权限"）。
   fda_line="$(probe_access_in_daemon_context "--fda")"
   case "$fda_line" in
-    *'"readable":true'*)
-      okl "看起来已经授予了完全磁盘访问（启发式：能读受保护位置；最可靠的判据是下面每个媒体根的结果）"
-      ;;
-    *)
-      warnl "看起来**还没有**授予完全磁盘访问（这不影响安装，只影响受保护位置里的视频能不能被扫到）"
-      hl "要做的事（一次就够，升级不用重做）："
-      hl "  ① 打开「系统设置 → 隐私与安全性 → 完全磁盘访问」"
-      hl "  ② 点左下角 + ，按 ⌘⇧G 粘这个路径：${BIN}"
-      hl "  ③ 打开右边的开关"
-      hl "  ④ 回到这里按回车，我立刻复验（最多等 ${ZV_ACCESS_PROBE_WAIT:-60}s，Ctrl-C 可跳过）"
+    *'"readable":true'*) hl "启发式提示：当前看着像是已授权（**仅供参考，可能不准**）" ;;
+    *) hl "启发式提示：当前看着像是未授权（仅供参考，可能不准）" ;;
+  esac
+  hl "要做的事（一次就够，升级不用重做）："
+  hl "  ① 打开「系统设置 → 隐私与安全性 → 完全磁盘访问」"
+  hl "  ② 点左下角 + ，按 ⌘⇧G 粘这个路径：${BIN}"
+  hl "  ③ 打开右边的开关"
+  hl "  ④ 回到这里按回车，我立刻复验（最多等 ${ZV_ACCESS_PROBE_WAIT:-60}s，Ctrl-C 可跳过）"
+  hl "为什么要给：不给的话，外置盘 / 桌面 / 文稿 / 下载里的视频不会被扫到（${HOME_DIR}/Movies 不受影响）"
       # 弹窗前先说清楚"会弹出什么、你要点哪里"，并**等用户输入 y**（用户 2026-10-11 要求）
       fda_opened=0
       if ask_dialog y no \
@@ -1300,7 +1311,7 @@ check_full_disk_access() {
         tip "已为你打开「系统设置」并在 Finder 里选中二进制 —— 授权完按回车，我马上复验"
         waited=0
         while [ "$waited" -lt "$wait_secs" ]; do
-          read -r -t 5 _ 2>/dev/null || true
+          if [ "$HAS_TTY" = "1" ]; then read -r -t 5 _ </dev/tty 2>/dev/null || true; else read -r -t 5 _ 2>/dev/null || true; fi
           waited=$((waited + 5))
           fda_line="$(probe_access_in_daemon_context "--fda")"
           case "$fda_line" in
@@ -1318,8 +1329,6 @@ check_full_disk_access() {
           *) warnl "仍未确认授权。不影响安装：以后在「完全磁盘访问」里加上 ${BIN} 即可（不用重装）" ;;
         esac
       fi
-      ;;
-  esac
 
   # ② 再探**实际媒体根**：这才是"你的视频到底能不能被扫到"的权威判据
   say ""
