@@ -378,7 +378,11 @@ download_verify() {
 # ---------------------------------------------------------------------------
 fetch_cert() {
   dst="$1"
-  url="$MIRROR/apps/$APP_ID/$ASSET_VER/$CRT_NAME"
+  # ⚠️ 证书在**应用级稳定路径**（`apps/<app>/zizvideo-codesign.crt`），不是版本目录 —— `make publish`
+  # 就是传到那儿的（版本目录会被 prune 掉，所以当初才挪到应用级）。这里曾拼成 `…/<版本>/crt` ⇒ 真机上
+  # 永远取不到、每次都降级成"未签名部署"（沙箱门禁没发现，坑 165）。版本目录只作兜底。
+  url="$MIRROR/apps/$APP_ID/$CRT_NAME"
+  url_fallback="$MIRROR/apps/$APP_ID/$ASSET_VER/$CRT_NAME"
   if curl -fsSL --max-time 30 --retry 1 -o "$dst" "$url" 2>/dev/null && [ -s "$dst" ]; then
     say "已取签名证书：$url"
     return 0
@@ -571,7 +575,10 @@ xml_escape() {
 # system 模式写 UserName 让 launchd 在开机时以该用户身份启动（无需登录）；
 # 同时显式给 HOME（LaunchDaemon 不保证带 HOME）；日志写用户目录，进程才写得进。
 write_plist() {
-  tmp="$PLIST.zv-tmp.$$"
+  # ⚠️ 临时文件必须落在**用户可写**的地方：原来写成 `$PLIST.zv-tmp.$$`（即 `/Library/LaunchDaemons/…`），
+  # 而 `} >"$tmp"` 这个重定向是**以当前用户身份**执行的 ⇒ 真机上必然 Permission denied（沙箱里 DAEMON_DIR
+  # 指向可写临时目录，所以门禁一直是绿的 —— 坑 164）。改成 mktemp + `run_priv install` 落位 + 回读校验。
+  tmp="$(mktemp -t zizvideo-plist)"
   # LaunchAgent 目录可能还不存在（/Library/LaunchDaemons 系统自带）。
   if [ "$MODE" = "user" ]; then mkdir -p "$(dirname "$PLIST")"; fi
   {
@@ -624,11 +631,16 @@ EOF
     else
       sudo install -m 0644 -o root -g wheel "$tmp" "$PLIST" || { rm -f "$tmp"; die "写 $PLIST 失败（sudo 被拒或无权限）"; }
     fi
-    say "已写 LaunchDaemon：$PLIST"
+    # 回读校验：plist 真在那儿且能过 plutil（不信"install 返回 0"）
+    if [ ! -f "$PLIST" ] || ! run_priv plutil -lint "$PLIST" >/dev/null 2>&1; then
+      rm -f "$tmp"; die "写 $PLIST 之后回读校验没过（文件不在或 plist 不合法）"
+    fi
+    say "已写 LaunchDaemon：${PLIST}（回读校验通过）"
   else
     mkdir -p "$(dirname "$PLIST")"
     install -m 0644 "$tmp" "$PLIST" || { rm -f "$tmp"; die "写 $PLIST 失败"; }
-    say "已写 LaunchAgent：$PLIST"
+    plutil -lint "$PLIST" >/dev/null 2>&1 || { rm -f "$tmp"; die "写 $PLIST 之后回读校验没过"; }
+    say "已写 LaunchAgent：${PLIST}（回读校验通过）"
   fi
   rm -f "$tmp"
 }
@@ -1010,6 +1022,9 @@ for r in cfg.get("media_allow_roots") or []:
 PYEOF
 )
   fi
+  # ⚠️ 配置里**没写** media_allow_roots 时，应用用的是**内置默认 `$HOME/Movies`**（internal/config 的 Default）。
+  # 体检/探测必须与应用一致，否则会误报"媒体根是空的、建不了库"（真机上就撞到了，坑 167）。
+  if [ -z "$roots" ] && [ -d "$HOME_DIR/Movies" ]; then roots="$HOME_DIR/Movies"; fi
   if [ -n "$roots" ]; then printf '%s\n' "$roots"; else printf '%s\n' "--fda"; fi
 }
 
@@ -1019,6 +1034,7 @@ probe_access_in_daemon_context() {
   label="${LABEL}.accessprobe.$$"
   plist="$SYSTEM_DAEMON_DIR/${label}.plist"
   out="$(mktemp -t zv-accessprobe.XXXXXX)"
+  tmp="$(mktemp -t zv-accessprobe-plist.XXXXXX)"   # ⚠️ 用户可写处：写进 $SYSTEM_DAEMON_DIR 的重定向是用户身份，真机必失败
   if [ "$MODE" = "user" ]; then plist="$HOME_DIR/Library/LaunchAgents/${label}.plist"; mkdir -p "$(dirname "$plist")"; fi
   {
     cat <<EOF
@@ -1052,13 +1068,21 @@ EOF
 </dict>
 </plist>
 EOF
-  } >"$plist.zv-tmp.$$" 2>/dev/null || { rm -f "$out"; return 0; }
+  } >"$tmp" 2>/dev/null || { rm -f "$out" "$tmp"; return 0; }
   if [ "$MODE" = "system" ]; then
-    run_priv cp -f "$plist.zv-tmp.$$" "$plist" >/dev/null 2>&1 || { rm -f "$plist.zv-tmp.$$" "$out"; return 0; }
-    run_priv rm -f "$plist.zv-tmp.$$" >/dev/null 2>&1 || true
-    lc bootstrap system "$plist" >/dev/null 2>&1 || true
+    if [ "$FAKE_SUDO" = "1" ]; then
+      install -m 0644 "$tmp" "$plist" >/dev/null 2>&1 || { rm -f "$tmp" "$out"; return 0; }
+    else
+      run_priv install -m 0644 -o root -g wheel "$tmp" "$plist" >/dev/null 2>&1 \
+        || { rm -f "$tmp" "$out"; return 0; }
+    fi
+    rm -f "$tmp"
+    [ -f "$plist" ] || { rm -f "$out"; return 0; }     # 回读：真在那儿才 bootstrap
+    # ⚠️ 系统域 bootstrap **必须走 run_priv**（普通用户 bootstrap system 会失败）——
+    # 少了 sudo 这一步，探测作业根本没加载、输出永远为空，用户会被误报"没授权"（真机坑 168）。
+    run_priv "$LAUNCHCTL_BIN" bootstrap system "$plist" >/dev/null 2>&1 || true
   else
-    mv -f "$plist.zv-tmp.$$" "$plist" 2>/dev/null || { rm -f "$out"; return 0; }
+    mv -f "$tmp" "$plist" 2>/dev/null || { rm -f "$out" "$tmp"; return 0; }
     lc bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
   fi
   # 等结果：作业是短命的，通常 <1s；最多等 8 秒
@@ -1396,7 +1420,13 @@ PYCFG
           *) vbad "数据库不在数据目录内：${VDB} —— 备份/卸载只会处理 ${VDATA}（**自查脚本也会报这一条**）" ;;
         esac
         [ -n "$VDATA" ] && [ -d "$VDATA" ] && df -h "$VDATA" 2>/dev/null | awk 'NR==2{printf "  · 数据所在卷剩余 %s（已用 %s）\n", $4, $5}'
-        [ -n "$VROOTS" ] && vok "媒体根：$VROOTS" || vbad "media_allow_roots 是空的（建不了媒体库）"
+        if [ -n "$VROOTS" ]; then
+          vok "媒体根：$VROOTS"
+        elif [ -d "$HOME_DIR/Movies" ]; then
+          vok "媒体根：未配置 ⇒ 用应用默认 ${HOME_DIR}/Movies（与 /readyz 一致）"
+        else
+          vbad "media_allow_roots 没配、默认的 ~/Movies 也不存在（建不了媒体库）"
+        fi
       else
         vbad "配置不是合法 JSON：$cfg_out"
       fi
@@ -1460,6 +1490,9 @@ PYRZ2
   fi
 
   say "== 媒体根可读性（在**守护进程上下文**里探，这个结论才可信）"
+  # 配置里没写就按应用默认（$HOME/Movies）—— 与 access_probe_targets 的口径一致，否则新装机器会被
+  # 误报成"没有媒体根、跳过"（真机上撞到过，坑 167）。
+  if [ -z "${VROOTS:-}" ] && [ -d "$HOME_DIR/Movies" ]; then VROOTS="$HOME_DIR/Movies"; fi
   if [ -n "${VROOTS:-}" ]; then
     oldifs="$IFS"; IFS=','; set -f   # 关掉通配展开：路径里出现 * 也不该被 glob 吃掉
     for r in $VROOTS; do

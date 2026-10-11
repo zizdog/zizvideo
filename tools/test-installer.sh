@@ -811,6 +811,38 @@ if [ -z "$upout" ]; then
 else
   bad "publish 的上传名带了目录（会传到镜像子目录，使用者的一键 URL 会 404）：${upout}"
 fi
+# 往**系统目录**写临时文件的写法一律禁止：`tmp="$PLIST.zv-tmp…"` / `>"$plist.zv-tmp…"` 这类重定向
+# 是**用户身份**执行的，真机上必然 Permission denied（沙箱里 DAEMON_DIR 可写 ⇒ 门禁看不见，坑 164/166）。
+# 正确写法：mktemp 到用户可写处 + run_priv install 落位 + 回读。
+if sys_tmp_bad="$(grep -nE 'tmp="\$\{?(PLIST|plist)[^"]*zv-tmp|>\s*"\$\{?(PLIST|plist)[^"]*zv-tmp' \
+     "$ROOT/platform/macos/install-zizvideo.sh" | grep -vE '^\s*[0-9]+:\s*#|mktemp' | head -3)"; then
+  bad "安装器里还有"往系统目录写临时文件"的写法（真机必失败）：$(printf '%s' "$sys_tmp_bad" | tr '\n' ' ' | cut -c1-140)"
+else
+  ok "安装器没有"往系统目录写临时文件"的写法（plist 一律 mktemp + run_priv install）"
+fi
+# 安装器取签名证书的路径必须与 publish 上传的路径**一致**（不一致 = 真机上永远取不到 ⇒ 悄悄降级成未签名部署）
+# 这条属铁律 8 例外：沙箱夹具自己在"版本目录"里放了证书，所以门禁一直没发现（坑 165，真机才暴露）。
+if crtchk="$(python3 - "$ROOT/platform/macos/install-zizvideo.sh" "$ROOT/tools/publish-mirror.sh" <<'PYCRT'
+import re, sys
+inst = open(sys.argv[1], encoding="utf-8").read()
+pub = open(sys.argv[2], encoding="utf-8").read()
+crt_name = re.search(r'^CRT_NAME="([^"]+)"', inst, re.M)
+url = re.search(r'url="\$MIRROR/apps/\$APP_ID/\$CRT_NAME"', inst)
+up = re.search(r'queue_upload "\$APP_DIR" [^\n]*?"(zizvideo-codesign\.crt)"', pub)
+if not crt_name:
+    print("安装器里找不到 CRT_NAME"); raise SystemExit(1)
+if not url:
+    print("安装器取证书的 URL 不是应用级路径（形如 $MIRROR/apps/$APP_ID/$CRT_NAME）"); raise SystemExit(1)
+if not up:
+    print("publish 里找不到证书上传行"); raise SystemExit(1)
+if crt_name.group(1) != up.group(1):
+    print("安装器取 %r，而 publish 传到 %r" % (crt_name.group(1), up.group(1))); raise SystemExit(1)
+PYCRT
+)"; then
+  ok "安装器取证书的路径与 publish 上传的一致（应用级路径）"
+else
+  bad "安装器取证书的路径与 publish 不一致 ⇒ 真机会降级成未签名部署：${crtchk}"
+fi
 # 状态文档（新会话第一入口）里**可机器核对的事实**：工作树版本、未推送、速览里不许写死条数
 if sout="$(python3 "$ROOT/tools/check-status-doc.py" 2>&1)"; then
   ok "状态文档的事实对得上：$(printf '%s' "$sout" | tail -1)"

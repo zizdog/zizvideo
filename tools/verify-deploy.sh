@@ -144,7 +144,13 @@ PYEOF
     *) note "数据库不在数据目录内：$db_path —— 备份/卸载只会处理 ${data_dir}（zizvideo 启动时也会警告这一条）" ;;
   esac
   if [ "${roots:-}" = "?" ] || [ -z "${roots:-}" ]; then
-    bad "media_allow_roots 是空的：没有允许根就建不了媒体库"
+    # ⚠️ 配置里没写 media_allow_roots 时，应用用的是**内置默认 `$HOME/Movies`**（internal/config 的 Default）：
+    # 体检必须跟应用一致，否则新装机器会被误报"建不了媒体库"（真机上撞到过，坑 167）。
+    if [ -d "$HOME/Movies" ]; then
+      ok "媒体根：未配置 ⇒ 用应用默认 $HOME/Movies（与 /readyz 一致）"
+    else
+      bad "media_allow_roots 没配、默认的 ~/Movies 也不存在：建不了媒体库"
+    fi
   else
     ok "媒体允许根：$roots"
   fi
