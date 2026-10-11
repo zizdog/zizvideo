@@ -8,8 +8,8 @@
 **如果你用 macOS，强烈建议让 [ZizPanel](https://github.com/zizdog/zizpanel) 来安装和管理 zizvideo。**
 
 - 面板会把一切都代劳：**完全磁盘访问授权**、媒体库、**更新**、卸载，都不用碰命令行。
-- 面板入口 👉 **<https://panel.zizdog.com:8888/>**（也可以在自己机器上装一份面板，用本机地址打开）
-- 面板本身怎么装、怎么用：[ZizPanel 仓库](https://github.com/zizdog/zizpanel)
+- 面板入口 👉 **<https://github.com/zizdog/zizpanel>**（安装说明、使用文档、下载都在那儿）
+- 装好面板后，在面板「应用市场 → zizvideo」里一键安装 zizvideo 即可。
 
 > 想让 zizvideo 由面板托管，就**不用往下看**了 —— 在面板「应用市场 → zizvideo」里装即可。
 > 下面的命令是**独立部署**（不装面板也能用），两种方式**二选一**。
