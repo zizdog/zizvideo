@@ -852,6 +852,19 @@ if [ -z "$upout" ]; then
 else
   bad "publish 的上传名带了目录（会传到镜像子目录，使用者的一键 URL 会 404）：${upout}"
 fi
+# 轻量发版路径（--installer-only）必须**只**传安装器：一旦它把索引/版本产物也列进去，
+# 就会出现"只改脚本却重建 50MB 产物"的浪费（用户 2026-10-11 指出）——用离线 --list 断言。
+if lightlist="$(bash "$ROOT/tools/publish-mirror.sh" --installer-only --list 2>&1)"; then
+  bad_light="$(printf '%s' "$lightlist" | grep -cE 'manifest\.json|linux\.json|fnos\.json|docker\.json|\.fpk|\.tar\.gz|zizvideo_[0-9]|apk' || true)"
+  n_inst="$(printf '%s' "$lightlist" | grep -c 'install-zizvideo' || true)"
+  if [ "$bad_light" = "0" ] && [ "$n_inst" -ge 1 ]; then
+    ok "轻量发版路径只传安装器（$n_inst 个），不碰索引/版本产物"
+  else
+    bad "轻量发版路径混进了索引/版本产物（${bad_light} 项）：$(printf '%s' "$lightlist" | tr '\n' ' ')"
+  fi
+else
+  bad "tools/publish-mirror.sh --installer-only --list 跑不起来：$(printf '%s' "$lightlist" | head -2 | tr '\n' ' ')"
+fi
 # 往**系统目录**写临时文件的写法一律禁止：`tmp="$PLIST.zv-tmp…"` / `>"$plist.zv-tmp…"` 这类重定向
 # 是**用户身份**执行的，真机上必然 Permission denied（沙箱里 DAEMON_DIR 可写 ⇒ 门禁看不见，坑 164/166）。
 # 正确写法：mktemp 到用户可写处 + run_priv install 落位 + 回读。

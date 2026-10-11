@@ -46,6 +46,11 @@
        并重新 `bash android/tools/build.sh assembleRelease`，让发布目录里的包名每次都不同；
      · **安卓代码没变就不要出新包**（用户 2026-09-24："如果安卓代码不变，就不要生成新的包"）——
        沿用上次那份 APK 即可，别为了"每次都换号"白造一个包。
+   - **只改了安装器/脚本（应用级、不带版本的文件）时走轻量路径**：`make publish-installer`
+     （只传 `install-zivvideo.sh`、`install-zivvideo-linux.sh`、`zizvideo-codesign.crt` + 逐字节回读；
+     **不 bump 版本、不重建二进制/fpk/容器、不动索引与版本目录**）。
+     判据：安装器不在 `manifest.json` 里、URL 不带版本 ⇒ 它独立于应用本体。
+     只有**应用行为或二进制**变了（含版本号本身）才走完整链路。
    - 用户点名发版后：`make release` → `make publish` → 让用户**在面板后台手动更新**测试
      （面板读镜像索引的 `latest`，zizvideo 单方面发版即可生效）。**不要替用户升级任何机器。**
    - 换机器/换凭据后先 `bash tools/publish-mirror.sh --self-test`（上传探针即删），别拿真版本试。

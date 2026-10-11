@@ -22,6 +22,10 @@
 #        --no-prune         保留镜像上的旧版本目录（便于回滚；默认只留最近几版）
 #        --self-test        只验证"能不能写镜像"（传个探针再删掉），换机器/换凭据后先跑它
 #        --app-only         只发安卓客户端（APK + android.json），不动服务端版本与索引
+#        --installer-only   轻量发版：只传**应用级**的安装器（install-zivideo.sh / install-zivideo-linux.sh
+#                           / zizvideo-codesign.crt）+ 逐字节回读；**不 bump 版本、不重建产物、不动索引**
+#                           （安装器不在 manifest.json 里、URL 也不带版本 ⇒ 它本来就独立于应用本体）
+#        --list             离线列出"这次会传什么"然后退出（不登录、不联网；门禁与自检用）
 #        --allow-existing-version  显式允许"同版本换字节重传"（正常绝不该用）
 #  凭据：.panel-credential.local（gitignored，600）里的
 #    ZP_MINI_URL / ZP_MINI_USER / ZP_MINI_PASS
@@ -48,6 +52,8 @@ KEEP_VERSIONS="${ZV_KEEP_VERSIONS:-3}"
 ALLOW_EXISTING=0
 SELF_TEST=0
 APP_ONLY=0
+INSTALLER_ONLY=0
+LIST_ONLY=0
 DEEP="${VERIFY_DEEP:-0}"
 PRUNE="${PRUNE:-1}"
 for arg in "$@"; do
@@ -56,11 +62,29 @@ for arg in "$@"; do
     --allow-existing-version) ALLOW_EXISTING=1 ;;
     --app-only) APP_ONLY=1 ;;
     --self-test) SELF_TEST=1 ;;
+    --installer-only) INSTALLER_ONLY=1 ;;
+    --list) LIST_ONLY=1 ;;
     --deep) DEEP=1 ;;
     --no-prune) PRUNE=0 ;;
     *) echo "!! 未知参数：$arg"; exit 2 ;;
   esac
 done
+
+# --list：**离线**列出这次会传什么（不登录、不联网）——门禁用它断言"轻量路径只传安装器"。
+if [ "$LIST_ONLY" = "1" ]; then
+  if [ "$INSTALLER_ONLY" = "1" ]; then
+    printf '%s\t%s\n' "platform/macos/install-zizvideo.sh" "install-zizvideo.sh"
+    printf '%s\t%s\n' "platform/linux/install-zivideo-linux.sh" "install-zivideo-linux.sh"
+    [ -f .release-key/codesign/zp-codesign.crt ] && printf '%s\t%s\n' ".release-key/codesign/zp-codesign.crt" "zizvideo-codesign.crt"
+  else
+    printf '%s\t%s\n' "$VERDIR" "(整个版本目录的产物)"
+    printf '%s\t%s\n' "platform/macos/install-zizvideo.sh" "install-zivideo.sh"
+    printf '%s\t%s\n' "platform/linux/install-zivideo-linux.sh" "install-zivideo-linux.sh"
+    printf '%s\t%s\n' "$APPDIR/linux.json" "linux.json"
+    printf '%s\t%s\n' "$APPDIR/manifest.json" "manifest.json"
+  fi
+  exit 0
+fi
 
 ok()   { printf '  ✓ %s\n' "$*"; }
 # 分段计时：发布慢在哪一段，用数字说话（用户 2026-09-22 要求提速）
@@ -522,7 +546,17 @@ if [ "$SELF_TEST" = "1" ]; then
 fi
 
 [ -d "$VERDIR" ] || die "缺 $VERDIR —— 先跑 make release"
-[ -f "$APPDIR/manifest.json" ] || die "缺 $APPDIR/manifest.json —— 先跑 make release"
+if [ "$INSTALLER_ONLY" != "1" ]; then
+  [ -f "$APPDIR/manifest.json" ] || die "缺 $APPDIR/manifest.json —— 先跑 make release"
+fi
+
+# ── 轻量路径（--installer-only）：只发**应用级**的安装器文件 ───────────────────
+# 安装器不在索引里、不带版本号、用户的一键 URL 也不带版本 ⇒ 只改安装器时不需要 bump 版本、
+# 不需要重建二进制/fpk/容器，更不该动索引与版本目录（2026-10-11 用户指出：为 82KB 的脚本
+# 重建 ~50MB 产物、还重跑一遍真 Linux 验证，是浪费）。
+if [ "$INSTALLER_ONLY" = "1" ]; then
+  info "轻量发版：只传安装器（不动索引 / 版本目录 / 二进制 / fpk / 容器）"
+fi
 
 # 同版本换字节会让新老用户拿到不同产物 —— 默认拒绝，除非显式放行。
 EXISTING="$(curl -fsSk -b "$JAR" -G --data-urlencode "path=$APP_DIR/$VERSION" "$MINI_URL/api/v1/files" 2>/dev/null \
@@ -533,12 +567,15 @@ except Exception:
     print(""); raise SystemExit
 names = [e.get("name","") for e in (data.get("data") or {}).get("entries") or []]
 print(",".join(names))' 2>/dev/null || true)"
-if [ -n "$EXISTING" ] && [ "$ALLOW_EXISTING" != "1" ]; then
+if [ -n "$EXISTING" ] && [ "$ALLOW_EXISTING" != "1" ] && [ "$INSTALLER_ONLY" != "1" ]; then
   die "镜像上已存在 apps/zizvideo/${VERSION}（${EXISTING}）。同版本不许换字节：请 bump VERSION 重发，或明确加 --allow-existing-version"
 fi
 
 # 面板的上传接口**不会自动建目录**（实测：目标目录不存在 → 400「文件不存在」），
 # 所以每个新版本必须先 mkdir；`--allow-existing-version` 重传时目录已存在，属正常不算错。
+if [ "$INSTALLER_ONLY" = "1" ]; then
+  ok "跳过版本目录检查（轻量路径不碰版本目录）"
+else
 info "确保版本目录存在 $APP_DIR/$VERSION/"
 mkdir_body="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$APP_DIR/$VERSION")"
 if api POST /api/v1/files/mkdir -H 'Content-Type: application/json' -d "$mkdir_body" >/dev/null 2>&1; then
@@ -547,6 +584,7 @@ elif [ "$ALLOW_EXISTING" = "1" ]; then
   ok "$VERSION/ 已存在（--allow-existing-version）"
 else
   die "创建版本目录失败：$APP_DIR/${VERSION}（面板接口不建目录，先确认权限/路径）"
+fi
 fi
 
 # 上传：**并行**（大二进制和小文件同时走，省掉串行等待），每个文件只传一次。
@@ -568,10 +606,14 @@ queue_upload() { # queue_upload <目录> <本地文件> <线上文件名>
   UP_NAMES+=("$name"); UP_FILES+=("$file"); UP_ALL_RESP+=("$resp")
 }
 
+if [ "$INSTALLER_ONLY" = "1" ]; then
+  info "跳过版本目录产物（轻量路径）"
+else
 info "上传产物到 $UPLOAD_DIR/（并行）"
 for f in "$VERDIR"/*; do
   queue_upload "$UPLOAD_DIR" "$f" "$(basename "$f")"
 done
+fi
 # ⚠️ 第三个参数是**镜像上的名字**：必须是 basename。搬到 platform/ 后这里曾被路径扫描改成带目录的
 # 名字 ⇒ 安装器会被传到 apps/zizvideo/platform/... 下，而使用者的一键 URL 是 apps/zizvideo/install-*.sh ⇒ 404
 if [ -f platform/macos/install-zizvideo.sh ]; then
@@ -583,7 +625,7 @@ if [ -f platform/linux/install-zizvideo-linux.sh ]; then
 fi
 # Linux 平台清单（platform/linux/install-zizvideo-linux.sh 只读它）：**不能塞进面板契约的 manifest.json**
 # —— 那份按 arch 选包，同 arch 塞两个平台会让 macOS 装到 Linux 二进制。
-if [ -f "$APPDIR/linux.json" ]; then
+if [ "$INSTALLER_ONLY" != "1" ] && [ -f "$APPDIR/linux.json" ]; then
   queue_upload "$APP_DIR" "$APPDIR/linux.json" "linux.json"
 fi
 if [ -f .release-key/codesign/zp-codesign.crt ]; then
@@ -699,6 +741,27 @@ api POST /api/v1/files/upload -F "dir=$APP_DIR" -F "on_conflict=overwrite" \
 ok "manifest.json（版本真源：latest=${VERSION}）"
 phase "上传顶层索引"
 
+if [ "$INSTALLER_ONLY" = "1" ]; then
+  # 轻量路径的复核：① 拉**索引**确认 latest 没被我们改动；② 逐个回读上传的安装器并比 sha256。
+  idx_tmp="$(mktmp)"; curl -fsS --max-time 30 "$MIRROR_BASE/apps/zizvideo/manifest.json" -o "$idx_tmp/manifest.json" \
+    || die "拉不到镜像索引（复核失败）"
+  if [ -f "$APPDIR/manifest.json" ] && ! cmp -s "$APPDIR/manifest.json" "$idx_tmp/manifest.json"; then
+    die "轻量路径竟然改动了索引 manifest.json（不该发生）"
+  fi
+  ok "索引未被改动（latest 仍是 $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["latest"])' "$idx_tmp/manifest.json" 2>/dev/null || echo '?'))"
+  i=0
+  while [ $i -lt ${#UP_NAMES[@]} ]; do
+    fn="${UP_NAMES[$i]}"; ff="${UP_FILES[$i]}"
+    if curl -fsS --max-time 60 "$MIRROR_BASE/apps/zizvideo/$fn" -o "$idx_tmp/remote" 2>/dev/null; then
+      if cmp -s "$ff" "$idx_tmp/remote"; then ok "$fn 回读一致（逐字节）"; else die "$fn 回读与本地不一致"; fi
+    else
+      die "$fn 线上不可达"
+    fi
+    i=$((i + 1))
+  done
+  echo; info "轻量发版完成：安装器已更新，索引/版本目录未动。"
+  exit 0
+fi
 MIRROR_BASE="$MIRROR_BASE" verify_remote
 if [ "$PRUNE" = "1" ]; then
   prune_old_versions

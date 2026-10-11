@@ -143,6 +143,12 @@ publish: ## 把 dist/apps/zizvideo/ 传到公网镜像 apps/zizvideo/（走 mini
 	@bash tools/check-release-dir.sh
 	@bash tools/publish-mirror.sh
 
+# 只改了安装器（或其它**应用级、不带版本**的脚本）时用这条：只传安装器 + 逐字节回读，
+# 不 bump 版本、不重建二进制/fpk/容器、不动索引与版本目录。
+# 依据：安装器不在 manifest.json 里、URL 不带版本 ⇒ 它本来就独立于应用本体。
+publish-installer: ## 只重传安装器（macOS/Linux），不动索引与版本产物（轻量发版）
+	@bash tools/publish-mirror.sh --installer-only
+
 # DEEP=1 走整包下载复算（快验只比 Content-Length，发现不了"同长度被换过"）。
 # ⚠️ 老写法 `make verify DEEP=1` 是**静默退化**成快验的（Makefile 没把它 export 给脚本），
 # 2026-10-11 审计抓到：操作者以为做了字节级复验。现在真传下去。
