@@ -23,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #   · docs/给面板的*.md      —— 面向面板仓库的接口说明，引用的路径在**面板仓库**里。
 #   · AGENTS.md             —— 工作区规则，里面是示意（`docs/ITERATION-` 前缀等）。
 # CONTRACT.md 是**跨仓库契约**（面板侧照它实现）⇒ 也纳入活文档检查：它写错的代价最大
-LIVING = ["docs/独立部署.md", "docs/验收清单.md", "README.md", "CONTRACT.md",
+LIVING = ["docs/独立部署.md", "docs/验收清单.md", "docs/配置.md", "README.md", "CONTRACT.md",
           "platform/README.md", "platform/panel/README.md"]
 SKIP = ("坑清单.md", "给面板的")
 DOCS = [os.path.join(ROOT, p) for p in LIVING if os.path.isfile(os.path.join(ROOT, p))]
