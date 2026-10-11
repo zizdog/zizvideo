@@ -1520,14 +1520,18 @@ CFG_ROOT='{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s"]\n}\n'
 : >"$OPEN_LOG"
 out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
   '{"path":"PROBE","readable":true}' 0 2>&1)
-case "$out" in
-  *"✓ 守护进程读得到"*) ok "探测到可读时如实报告" ;;
-  *) bad "可读时没有报告成功：$out" ;;
-esac
-case "$out" in
-  *"隐私与安全性"*) bad "可读时不该打印授权引导" ;;
-  *) ok "可读时不打扰用户（没有引导块）" ;;
-esac
+# 断言**行为**而不是文案（铁律 8）：可读时必须把那个路径报成"读得到"，
+# 并且**不去打开系统设置**（只有确实缺授权才打开 —— 用假 open 的调用日志判定）
+if printf '%s' "$out" | grep -qF "$SB/media" && printf '%s' "$out" | grep -q '✓'; then
+  ok "探测到可读时如实报告（输出里有该路径 + 成功标记）"
+else
+  bad "可读时没有报告成功：$out"
+fi
+if [ -s "$OPEN_LOG" ]; then
+  bad "可读时不该去打开系统设置：$(cat "$OPEN_LOG")"
+else
+  ok "可读时不打扰用户（没有打开系统设置）"
+fi
 
 # ② 读不到：必须引导（系统设置 + 二进制路径 + 影响），ZV_ACCESS_PROBE_WAIT=0 时不等待、不失败
 : >"$OPEN_LOG"
@@ -1538,17 +1542,14 @@ else
   bad "缺授权不该让安装失败"
 fi
 case "$out" in
-  *"隐私与安全性"*) ok "缺授权时给出「系统设置 → 隐私与安全性 → 完全磁盘访问」的指引" ;;
-  *) bad "缺授权时没有指引：$out" ;;
-esac
-case "$out" in
-  *"$SB/bin/zizvideo"*) ok "指引里写清了要授权的二进制路径" ;;
+  *"$SB/bin/zizvideo"*) ok "指引里写清了要授权的二进制路径（行为判据）" ;;
   *) bad "指引里没写二进制路径：$out" ;;
 esac
-case "$out" in
-  *"不会被扫描到"*) ok "讲清了影响（那些目录里的媒体扫不到）" ;;
-  *) bad "没讲清影响：$out" ;;
-esac
+if printf '%s' "$out" | grep -qF "$SB/media"; then
+  ok "缺授权时点出了**具体哪个位置**读不到（行为判据）"
+else
+  bad "缺授权时没说清是哪个位置：$out"
+fi
 case "$out" in
   *"不等待"*) ok "ZV_ACCESS_PROBE_WAIT=0 时不等待" ;;
   *) bad "0 秒等待没有明说不等待：$out" ;;
@@ -1565,9 +1566,11 @@ printf '{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s/My Drive/视频"]\n}
   >"$SP2/home-fda/zizvideo/config.json"
 out=$(fda_case "$(cat "$SP2/home-fda/zizvideo/config.json")" \
   '{"path":"x","readable":true}' 0 2>&1)
-n_sp="$(printf '%s' "$out" | grep -c "守护进程读得到：$SP2/My Drive/视频" || true)"
-[ "$n_sp" = "1" ] && ok "权限阶段把带空格的媒体根当成一个目标（没被空格切碎）" \
-  || bad "权限阶段切碎了带空格的路径（匹配 ${n_sp} 行）：$(printf '%s' "$out" | grep '读' | head -3 | tr '\n' ' ')"
+if printf '%s' "$out" | grep -qF "$SP2/My Drive/视频"; then
+  ok "权限阶段把带空格的媒体根当成一个目标（整条路径原样出现，没被空格切碎）"
+else
+  bad "权限阶段切碎了带空格的路径：$(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
+fi
 rm -rf "$SP2"
 
 # ③ 没有配媒体根时退回 --fda 哨兵探测

@@ -69,6 +69,7 @@ OTHER_PLIST=""
 CONFIG_PATH=""
 DATA_DIR=""
 DATA_DIR_OVERRIDE=""
+SKIP_FDA=0
 LOG_DIR=""
 CONFIG_NEW=0
 DATA_DIR_NEW=0
@@ -85,6 +86,26 @@ INSTALL_DONE=0
 PURGE_TARGET=""
 
 say()  { printf '%s\n' "$*"; }
+
+# ── 安装过程的"讲解与高亮"组件 ─────────────────────────────────────────────
+# 只在**真终端**上色（重定向到日志/管道时纯文本，方便 grep 与贴给他人看）；ZV_NO_COLOR=1 / NO_COLOR 可关。
+if [ -t 1 ] && [ -z "${ZV_NO_COLOR:-}" ] && [ -z "${NO_COLOR:-}" ]; then
+  C_B="$(printf '\033[1m')"; C_D="$(printf '\033[2m')"; C_Y="$(printf '\033[33m')"
+  C_G="$(printf '\033[32m')"; C_R="$(printf '\033[31m')"; C_0="$(printf '\033[0m')"
+else
+  C_B=""; C_D=""; C_Y=""; C_G=""; C_R=""; C_0=""
+fi
+RULE="────────────────────────────────────────────────────────────────────────"
+STEPS_TOTAL=6
+step() {                       # step <序号> <标题>
+  printf '\n%s%s%s\n' "$C_D" "$RULE" "$C_0"
+  printf '%s  ▶ 第 %s/%s 步  %s%s\n' "$C_B" "$1" "$STEPS_TOTAL" "$2" "$C_0"
+  printf '%s%s%s\n' "$C_D" "$RULE" "$C_0"
+}
+hl()   { printf '  %s▶%s %s\n' "$C_B" "$C_0" "$*"; }                 # 关键信息
+tip()  { printf '  %s★ 需要你操作：%s%s\n' "$C_Y$C_B" "$*" "$C_0"; } # 要用户动手的地方
+okl()  { printf '  %s✓%s %s\n' "$C_G" "$C_0" "$*"; }
+warnl(){ printf '  %s⚠%s %s\n' "$C_Y" "$C_0" "$*"; }
 warn() { printf '警告：%s\n' "$*" >&2; }
 die()  { printf '错误：%s\n' "$*" >&2; exit 1; }
 
@@ -106,6 +127,7 @@ zizvideo 独立部署安装器
   --user          用户级 LaunchAgent，只在有人登录后运行；无 sudo 才用它。
 
 其它：
+  --skip-fda         跳过"完全磁盘访问"授权引导（无人值守/CI 用；之后可 --verify 复查）
   --data-dir <路径>  自定义数据目录（默认 ~/zizvideo；给了它就不再自动迁移旧目录）。
   默认镜像 https://mirror.zizdog.com:8888，读 apps/zizvideo/manifest.json 的应用级索引。
   装到 ~/.local/bin/zizvideo；日志在 ~/Library/Logs/。
@@ -133,6 +155,7 @@ parse_args() {
       --help|-h) usage; exit 0 ;;
       --version) say "platform/macos/install-zizvideo.sh $INSTALLER_VERSION"; exit 0 ;;
       --dry-run) DRY_RUN=1 ;;
+      --skip-fda) SKIP_FDA=1 ;;
       --system) MODE="system" ;;
       --user) MODE="user" ;;
       --upgrade) ACTION="upgrade" ;;
@@ -844,15 +867,19 @@ on_exit_install() {
 #  安装 / 升级
 # ---------------------------------------------------------------------------
 do_install_or_upgrade() {
+  step 1 "环境与冲突检查（不做任何改动）"
+  hl "要装什么：zizvideo 单个二进制 + 一个系统服务；数据放 ${DATA_DIR}"
+  hl "检查项：CPU 架构 / 网络工具 / 是否以真实用户运行（不要 sudo 整个脚本）/ 与面板托管是否冲突"
   check_arch
   check_curl
   check_identity
   check_conflicts_install
+  okl "环境检查通过"
 
   if [ "$MODE" = "user" ]; then
-    warn "当前是 --user 模式：用户级 LaunchAgent 只在有人登录后才运行；无头/不登录的机器请用默认 --system 模式"
+    warnl "当前是 --user 模式：用户级 LaunchAgent 只在有人登录后才运行；无头/不登录的机器请用默认 --system 模式"
   else
-    say "system 模式：写 $SYSTEM_DAEMON_DIR 与 bootstrap 系统域时会调 sudo；开机即起、不需要登录"
+    hl "system 模式：装成系统服务（开机即起、不需要登录）；写系统目录时会**单独**向你要 sudo"
   fi
 
   UPGRADING=0
@@ -868,6 +895,8 @@ do_install_or_upgrade() {
     die "--upgrade 但没检测到 $MODE 模式独立部署（$PLIST 不存在）；首次安装请直接运行不带 --upgrade 的本脚本"
   fi
 
+  step 2 "从镜像取版本并**逐字节校验**"
+  hl "索引：${MIRROR}/apps/${APP_ID}/manifest.json（面板也读它，是版本真源）"
   index_tmp=$(mktemp -t zv-index.XXXXXX)
   bin_tmp=$(mktemp -t zv-bin.XXXXXX)
   crt_tmp=$(mktemp -t zv-crt.XXXXXX)
@@ -875,7 +904,8 @@ do_install_or_upgrade() {
   fetch_index "$index_tmp"
   resolve_release "$index_tmp"
   rm -f "$index_tmp"
-  say "索引 latest=${LATEST}，arm64 产物=${ASSET}，size=$ASSET_SIZE"
+  hl "本次版本：${LATEST}（架构 ${ASSET}，${ASSET_SIZE} 字节）"
+  hl "下载后会核对 sha256：${ASSET_SHA}（对不上就中止，绝不装来路不明的包）"
 
   check_disk "$ASSET_SIZE"
 
@@ -918,12 +948,20 @@ do_install_or_upgrade() {
   fi
 
   download_verify "$bin_tmp"
-  # 证书和产物同目录；没有（老镜像/离线）不算失败，走未签名模式（见 prepare_signature）。
+  step 3 "签名与信任根（决定「完全磁盘访问」授权能不能跨升级保留）"
+  hl "做法：从镜像取 ${CRT_NAME} → 核对脚本里**写死的证书指纹**（对不上直接拒绝）→ 导入系统钥匙串并复核签名"
+  hl "为什么要这一步：macOS 的隐私授权是**按代码签名**记账的；有稳定签名，授权一次就跨升级有效"
+  warnl "镜像上没有证书时会降级为**未签名部署**（不算失败）：代价是每次升级都要重新授权"
+  # 证书在**应用级路径**；没有（老镜像/离线）不算失败，走未签名模式（见 prepare_signature）。
   if fetch_cert "$crt_tmp"; then HAVE_CRT=1; fi
   # 核指纹 + 导入信任根必须在**写二进制之前**：证书没被信任就往下装，等于先装后用不了的半截状态。
   # 这一步失败是致命的（die），此时还没动任何安装文件。
   prepare_signature
 
+  step 4 "落地文件（从这一步开始动磁盘；失败会**回滚**）"
+  hl "二进制：${BIN}（0755）"
+  hl "配置：${CONFIG_PATH}（listen=${EFFECTIVE_LISTEN}；已有配置里的其它字段不会被覆盖）"
+  hl "数据目录：${DATA_DIR}（数据库/封面/收件箱都在这里；卸载默认保留）"
   # 从这里开始会动文件：任何失败都回滚（见 fail_with_rollback 与 EXIT trap）。
   INSTALL_STARTED=1
   trap on_exit_install EXIT
@@ -943,6 +981,12 @@ do_install_or_upgrade() {
   mkdir -p "$LOG_DIR"
   if [ "$HAVE_CRT" = "1" ]; then cp -f "$crt_tmp" "$DATA_DIR/$CRT_NAME"; fi
 
+  step 5 "安装系统服务（这一步会向你要 sudo）"
+  if [ "$MODE" = "system" ]; then
+    tip "接下来会调用 sudo 写 ${PLIST} 并加载系统服务（只提权这几步，不是把整个脚本 sudo 跑）"
+  else
+    hl "用户级 LaunchAgent：${PLIST}（只在有人登录后运行）"
+  fi
   if [ -f "$PLIST" ]; then
     PLIST_BACKUP="$PLIST.zv-backup.$$"
     if [ "$MODE" = "system" ]; then
@@ -977,19 +1021,28 @@ do_install_or_upgrade() {
   rm -f "$bin_tmp" "$crt_tmp"
   if [ -n "$BIN_BACKUP" ] && [ -f "$BIN_BACKUP" ]; then rm -f "$BIN_BACKUP"; fi
   if [ -n "$PLIST_BACKUP" ] && [ -f "$PLIST_BACKUP" ]; then remove_file "$PLIST_BACKUP"; fi
-  say ""
+  printf '\n%s%s%s\n' "$C_G" "$RULE" "$C_0"
+  printf '%s  ✅ 安装完成%s（%s 模式）\n' "$C_G$C_B" "$C_0" "$MODE"
+  printf '%s%s%s\n' "$C_G" "$RULE" "$C_0"
   if [ "$HAVE_CRT" = "1" ]; then
-    say "安装完成（$MODE 模式，已签名并复核）：$BIN"
+    okl "已签名并复核（identifier=${SIGN_IDENTIFIER}）：完全磁盘访问授权跨升级保留"
   else
-    warn "本次是**未签名部署**（镜像上没有 ${CRT_NAME}）：外置盘完全磁盘访问授权每次升级都要重新授权"
-    say "安装完成（$MODE 模式，未签名部署）：$BIN"
+    warnl "本次是**未签名部署**（镜像上没有 ${CRT_NAME}）：每次升级都要重新授权完全磁盘访问"
+  fi
+  hl "程序：${BIN}（版本 ${LATEST}）"
+  hl "数据：${DATA_DIR}（数据库/封面/收件箱；卸载默认保留，--purge 才删）"
+  hl "日志：${LOG_DIR}/zizvideo.out.log、zizvideo.err.log"
+  tip "打开 http://$(host_of "$EFFECTIVE_LISTEN"):$(port_of "$EFFECTIVE_LISTEN")/ 初始化管理员（首次访问）"
+  tip "随时体检：sudo bash $0 --verify   （二进制/配置/服务/健康端点/媒体根可读性，只读不改）"
+  hl "卸载：bash $0 --uninstall（保留数据）｜ bash $0 --purge（连数据一起删，需二次确认）"
+  hl "加/换媒体根：网页里「媒体库 → 添加目录」；外置盘记得先挂载"
+  if [ "$MODE" = "system" ]; then
+    hl "服务：launchd 系统域 ${LABEL}（开机自启、不需要登录）；mDNS/局域网无需额外配置"
   fi
   case ":$PATH:" in
     *":$INSTALL_ROOT/bin:"*) ;;
-    *) say "提示：把 $INSTALL_ROOT/bin 加进 PATH：echo 'export PATH=\"$INSTALL_ROOT/bin:\$PATH\"' >> ~/.zshrc" ;;
+    *) hl "把 ${INSTALL_ROOT}/bin 加进 PATH（可选）：echo 'export PATH=\"${INSTALL_ROOT}/bin:\$PATH\"' >> ~/.zshrc" ;;
   esac
-  say "打开 http://$(host_of "$EFFECTIVE_LISTEN"):$(port_of "$EFFECTIVE_LISTEN")/ 首次访问是初始化页"
-  say "日志：$LOG_DIR/zizvideo.out.log / zizvideo.err.log"
   if [ "$MODE" = "user" ]; then
     warn "提醒：--user 模式的作业只在有人登录后运行；无头机器请改用默认 --system 模式重装"
   fi
@@ -1105,87 +1158,83 @@ EOF
 
 # 权限阶段：探 → 缺就引导 + 等待 → 复探。**绝不因此让安装失败**（如实报告即可）。
 check_full_disk_access() {
+  step 6 "完全磁盘访问（FDA）：让 zizvideo 能读你所有的视频目录"
+  hl "为什么装完还要你点一下：macOS 的隐私保护拦的是「读」这个动作，而**独立部署时没人替你申请**这张授权"
+  hl "授权给谁：必须是**这个二进制** ${BIN}"
+  hl "为什么不能给终端/安装器：TCC 把权限记在**发起进程**上，给终端只会验出假结论"
+  hl "授权一次跨升级有效（二进制是签名的）；不授权也不影响 ${HOME_DIR}/Movies 这类**非受保护**位置"
+  tip "系统设置 → 隐私与安全性 → 完全磁盘访问 → 点 +（或按 ⌘⇧G 直接粘路径）→ 打开开关"
+
+  if [ "${SKIP_FDA:-0}" = "1" ]; then
+    warnl "--skip-fda：跳过授权引导（之后可随时用 ${BIN} check-access <目录> 自查，或重跑 --verify）"
+    return 0
+  fi
+
+  # ① 先用 `--fda` **启发式**判断"到底给没给"（可能假阳性，所以措辞是"通常说明"，不当判决）
+  fda_line="$(probe_access_in_daemon_context "--fda")"
+  case "$fda_line" in
+    *'"readable":true'*)
+      okl "看起来已经授予了完全磁盘访问（启发式：能读受保护位置；最可靠的判据是下面每个媒体根的结果）"
+      ;;
+    *)
+      warnl "看起来**还没有**授予完全磁盘访问（这不影响安装，只影响受保护位置里的视频能不能被扫到）"
+      hl "要做的事（一次就够，升级不用重做）："
+      hl "  ① 打开「系统设置 → 隐私与安全性 → 完全磁盘访问」"
+      hl "  ② 点左下角 + ，按 ⌘⇧G 粘这个路径：${BIN}"
+      hl "  ③ 打开右边的开关"
+      hl "  ④ 回到这里按回车，我立刻复验（最多等 ${ZV_ACCESS_PROBE_WAIT:-60}s，Ctrl-C 可跳过）"
+      # 把人带到该去的地方：Finder 里选中二进制 + 打开设置面板（沙箱里被 ZV_FAKE_OPEN 拦掉）
+      open_ui -R "$BIN"
+      open_ui "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+      wait_secs="${ZV_ACCESS_PROBE_WAIT:-60}"
+      if [ "$wait_secs" = "0" ]; then
+        warnl "（ZV_ACCESS_PROBE_WAIT=0：不等待；授权后重跑本脚本即可复验）"
+      else
+        tip "已为你打开「系统设置」并在 Finder 里选中二进制 —— 授权完按回车，我马上复验"
+        waited=0
+        while [ "$waited" -lt "$wait_secs" ]; do
+          read -r -t 5 _ 2>/dev/null || true
+          waited=$((waited + 5))
+          fda_line="$(probe_access_in_daemon_context "--fda")"
+          case "$fda_line" in
+            *'"readable":true'*)
+              okl "现在读得到了：完全磁盘访问已生效（启发式判据）"
+              break
+              ;;
+          esac
+          if [ "$waited" = "5" ] || [ $((waited % 20)) = "0" ]; then
+            say "  （还没生效：TCC 有时要几秒。已等 ${waited}s / ${wait_secs}s）"
+          fi
+        done
+        case "$fda_line" in
+          *'"readable":true'*) ;;
+          *) warnl "仍未确认授权。不影响安装：以后在「完全磁盘访问」里加上 ${BIN} 即可（不用重装）" ;;
+        esac
+      fi
+      ;;
+  esac
+
+  # ② 再探**实际媒体根**：这才是"你的视频到底能不能被扫到"的权威判据
   say ""
-  say "==> 完全磁盘访问检查（独立部署没有面板替你申请，这一步要你自己点两下）"
+  hl "逐个媒体根复验（在**守护进程自己的身份**里探，这个结论才可信）："
   targets=$(access_probe_targets)
   missing=""
   probed=0
-  # ⚠️ 一行一个路径：`for target in $targets` 会按空格切分 ⇒ `/Volumes/My Drive/视频` 会被切成
-  # 两个不存在的路径，用户看到的是"探了两个不存在的位置"（坑 107/115 的同类）。
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     probed=$((probed + 1))
     line=$(probe_access_in_daemon_context "$target")
     case "$line" in
-      *'"readable":true'*)
-        say "  ✓ 守护进程读得到：$target"
-        ;;
-      '')
-        warn "  无法判定：${target}（一次性探测作业没有产出结果；可手动跑 $BIN check-access $target 看看）"
-        missing="${missing}${target}
-"
-        ;;
-      *)
-        warn "  ✗ 守护进程读不到：$target"
-        missing="${missing}${target}
-"
-        ;;
+      *'"readable":true'*) okl "读得到：${target}" ;;
+      '') warnl "无法判定：${target}（探测作业没产出结果；可手动跑 ${BIN} check-access ${target} 看看）" ;;
+      *) warnl "读不到：${target} —— 若它在受保护位置（外置卷/桌面/文稿/下载），按上面授权后即可" ;;
     esac
   done <<EOF
 $targets
 EOF
-  if [ "$probed" = "0" ] || [ -z "$missing" ]; then
-    if [ "$probed" != "0" ]; then say "  全部可读：受保护位置里的媒体能正常扫描"; fi
-    return 0
+  if [ "$probed" = "0" ]; then
+    warnl "没有可探的媒体根（也没有 ${HOME_DIR}/Movies）—— 装好后在网页里加媒体库即可"
   fi
-
-  # 缺授权：把"为什么/怎么做"讲清楚，并把人带到该去的地方（不代按、不假装已授权）。
-  say ""
-  warn "有 $probed 个位置里，至少一个现在的守护进程读不到。"
-  say "  影响：那些目录里的视频**不会被扫描到**（TCC 拦的就是「读」这个动作，权限位看着是好的也没用）。"
-  say "  修法（一次授权，跨升级有效，因为二进制是签名的）："
-  say "    ① 系统设置 → 隐私与安全性 → 完全磁盘访问"
-  say "    ② 点 + ，选择：$BIN"
-  say "    ③ 打开右边的开关，然后回到这里按回车"
-  # Finder 里选中二进制 + 打开对应设置面板（沙箱用 ZV_FAKE_OPEN 拦掉）
-  open_ui -R "$BIN"
-  open_ui "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-
-  wait_secs="${ZV_ACCESS_PROBE_WAIT:-60}"
-  if [ "$wait_secs" = "0" ]; then
-    warn "（ZV_ACCESS_PROBE_WAIT=0：不等待。授权后重跑本脚本即可复验）"
-    return 0
-  fi
-  say "  等你授权……（最多 ${wait_secs}s；授权完按回车立即复验，Ctrl-C 跳过）"
-  waited=0
-  while [ "$waited" -lt "$wait_secs" ]; do
-    read -r -t 5 _ 2>/dev/null || true
-    waited=$((waited + 5))
-    still=""
-    while IFS= read -r target; do
-      [ -n "$target" ] || continue
-      line=$(probe_access_in_daemon_context "$target")
-      case "$line" in
-        *'"readable":true'*) say "  ✓ 现在读得到了：$target" ;;
-        *) still="${still}${target}
-" ;;
-      esac
-    done <<EOF
-$missing
-EOF
-    if [ -z "$still" ]; then
-      say "  权限检查通过：目录里的媒体能被扫描"
-      return 0
-    fi
-    missing="$still"
-    if [ "$waited" = "5" ] || [ $((waited % 20)) = "0" ]; then
-      say "  （还没生效：TCC 有时要几秒。已等 ${waited}s / ${wait_secs}s；仍未授权的位置：${missing}）"
-    fi
-  done
-  say ""
-  warn "仍未授权的位置：$missing"
-  say "  服务已经装好并在跑；这些目录要等你在「完全磁盘访问」里加上 $BIN 之后才会被扫到。"
-  say "  授权之后不用重装：跑一次「扫描媒体库」或重启服务即可（升级也不会丢这个授权）。"
   return 0
 }
 
