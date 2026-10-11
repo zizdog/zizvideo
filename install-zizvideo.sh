@@ -1332,6 +1332,16 @@ do_verify() {
     vok "可执行：$BIN"
     vv="$("$BIN" --version 2>&1 | head -1)"
     case "$vv" in *"zizvideo "*) vok "--version：$vv" ;; *) vbad "--version 输出异常：$vv" ;; esac
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+      # ⚠️ `set -euo pipefail` 下，对**未签名**的二进制 `codesign -dv` 返回非零 ⇒ 管道失败 ⇒ 脚本直接中断
+      # （表现出来就是"报告只出了二进制那两行"）。必须 `|| true` 兜住。
+      sig="$(codesign -dv --verbose=2 "$BIN" 2>&1 | awk -F= '/^Authority=/{print $2; exit}' || true)"
+      if [ -n "$sig" ]; then
+        vok "签名身份：${sig}（有稳定签名，完全磁盘访问授权才能跨升级保留）"
+      else
+        say "  · 未签名部署：每次升级都要重新授权完全磁盘访问"
+      fi
+    fi
   else
     vbad "找不到可执行文件：${BIN}（装过吗？还是换过 --user/--system？）"
   fi
@@ -1348,18 +1358,26 @@ roots = [r for r in (cfg.get("media_allow_roots") or []) if isinstance(r, str) a
 print(cfg.get("listen") or "")
 print(cfg.get("data_dir") or "")
 print(",".join(roots))
+print(cfg.get("database_path") or "")
 PYCFG
 )"; then
         vok "配置能解析"
         VLISTEN="$(printf '%s\n' "$cfg_out" | sed -n 1p)"
         VDATA="$(printf '%s\n' "$cfg_out" | sed -n 2p)"
         VROOTS="$(printf '%s\n' "$cfg_out" | sed -n 3p)"
+        VDB="$(printf '%s\n' "$cfg_out" | sed -n 4p)"
         [ -n "$VLISTEN" ] && vok "listen=$VLISTEN" || vbad "配置里没有 listen"
         if [ -n "$VDATA" ] && [ -d "$VDATA" ]; then
           [ -w "$VDATA" ] && vok "数据目录可写：$VDATA" || say "  · 数据目录当前用户不可写（守护进程身份可能可以）：$VDATA"
         else
           vbad "数据目录不存在：${VDATA:-（配置里没写）}"
         fi
+        case "$VDB" in
+          "${VDATA%/}"/*) vok "数据库在数据目录内（备份/卸载不会漏掉它）" ;;
+          "") : ;;
+          *) vbad "数据库不在数据目录内：${VDB} —— 备份/卸载只会处理 ${VDATA}（**自查脚本也会报这一条**）" ;;
+        esac
+        [ -n "$VDATA" ] && [ -d "$VDATA" ] && df -h "$VDATA" 2>/dev/null | awk 'NR==2{printf "  · 数据所在卷剩余 %s（已用 %s）\n", $4, $5}'
         [ -n "$VROOTS" ] && vok "媒体根：$VROOTS" || vbad "media_allow_roots 是空的（建不了媒体库）"
       else
         vbad "配置不是合法 JSON：$cfg_out"
@@ -1427,6 +1445,10 @@ PYRZ2
   if [ -n "${VROOTS:-}" ]; then
     oldifs="$IFS"; IFS=','; set -f   # 关掉通配展开：路径里出现 * 也不该被 glob 吃掉
     for r in $VROOTS; do
+      if [ ! -e "$r" ]; then
+        vbad "目录不存在：${r} —— 挂盘了吗？（路径写错/盘没挂都会这样，这也算读不到）"
+        continue
+      fi
       line="$(probe_access_in_daemon_context "$r")"
       prc=$?
       case "$prc" in

@@ -1035,6 +1035,37 @@ esac
   && ok "--verify 不改动配置（只体检）" || bad "--verify 动了配置文件"
 [ "$(ls -1 "$VA/daemons" 2>/dev/null | wc -l | tr -d ' ')" = "0" ] \
   && ok "--verify 没在 LaunchDaemons 里留东西" || bad "--verify 留了 plist 残渣"
+# 两份体检实现的**覆盖面必须对齐**（否则会出现"安装器说全过、自查脚本却报某项没过"，让人困惑）：
+# 拿一个"故意有问题"的配置跑安装器 --verify，要求它把自查脚本会报的几项也报出来
+VH2="$(mktemp -d)"; mkdir -p "$VH2/home/Library/Application Support/zizvideo" "$VH2/bin" "$VH2/daemons" "$VH2/media"
+printf '{"listen":"127.0.0.1:7822","data_dir":"%s/home/Library/Application Support/zizvideo","database_path":"/tmp/elsewhere.db","media_allow_roots":["%s/media","%s/不存在"]}\n' "$VH2" "$VH2" "$VH2" \
+  >"$VH2/home/Library/Application Support/zizvideo/config.json"
+printf '#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }; [ "$1" = "check-access" ] && { printf %s "{\"readable\":true}"; exit 0; }; exit 0\n' >"$VH2/bin/zizvideo"
+chmod 0755 "$VH2/bin/zizvideo"
+printf '#!/bin/sh\n[ "$1" = "print" ] && { echo "	state = running"; exit 0; }; exit 0\n' >"$VH2/lc"; chmod 0755 "$VH2/lc"
+vout2="$(HOME="$VH2/home" ZV_FAKE_SUDO=1 ZV_FAKE_SUDO_BIN=/usr/bin/env ZV_FAKE_LAUNCHCTL="$VH2/lc" \
+  ZV_SYSTEM_DAEMON_DIR="$VH2/daemons" ZV_INSTALL_ROOT="$VH2" \
+  bash "$ROOT/install-zizvideo.sh" --verify 2>&1 || true)"
+case "$vout2" in
+  *"数据库不在数据目录内"*) ok "安装器 --verify 也会报「数据库不在数据目录内」（与自查脚本覆盖面一致）" ;;
+  *) bad "安装器 --verify 漏了"数据库不在数据目录内"（两份实现覆盖面不一致）" ;;
+esac
+case "$vout2" in
+  *"数据所在卷剩余"*) ok "安装器 --verify 给出磁盘余量" ;;
+  *) bad "安装器 --verify 没给磁盘余量" ;;
+esac
+case "$vout2" in
+  *"目录不存在"*"挂盘了吗"*) ok "安装器 --verify 对不存在的媒体根说「挂盘了吗」" ;;
+  *) bad "安装器 --verify 没说清"目录不存在"" ;;
+esac
+# ⚠️ set -e + pipefail 下 codesign 对**未签名**二进制返回非零会**直接中断报告**
+# （表现出来是"报告只出了二进制那两行"）—— 断言报告确实跑到了结论段
+case "$vout2" in
+  *"标准结论"*|*"== 结论"*) ok "安装器 --verify 的报告没被中途截断（跑到结论段）" ;;
+  *) bad "安装器 --verify 报告被截断了（很可能 set -e 下某个命令返回非零）：$(printf '%s' "$vout2" | tail -2 | tr '\n' ' ')" ;;
+esac
+rm -rf "$VH2"
+
 rm -rf "$VA"
 
 # ---------------------------------------------------------------------------
