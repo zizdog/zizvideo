@@ -1025,6 +1025,20 @@ if [ -z "$b4" ]; then
 else
   bad "用了 bash 4 专有语法（3.2 下会报 command not found）：$b4"
 fi
+# preflight 的"发布件完整性"必须**真会抓缺失**（不是只列清单）：临时把 linux 产物挪走试一次
+RELVER_PF="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+PFBIN="$ROOT/dist/apps/zizvideo/$RELVER_PF/zizvideo_${RELVER_PF}_linux_amd64"
+if [ -f "$PFBIN" ]; then
+  mv "$PFBIN" "$PFBIN.hidden"
+  if bash "$ROOT/tools/preflight.sh" --only release >/dev/null 2>&1; then
+    bad "缺了 linux 产物时 preflight 的发布件完整性竟然通过"
+  else
+    ok "缺了 linux 产物时发布件完整性如实失败（不会静默少发 Linux）"
+  fi
+  mv "$PFBIN.hidden" "$PFBIN"
+else
+  note_skip "没有 ${PFBIN}，跳过发布件完整性用例"
+fi
 if /bin/bash "$ROOT/tools/preflight.sh" --list >/dev/null 2>&1; then
   ok "preflight.sh 在 /bin/bash（$(/bin/bash --version | head -1 | grep -o '3\.[0-9]*\.[0-9]*' | head -1)）下能跑"
 else

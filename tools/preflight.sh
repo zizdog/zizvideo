@@ -85,7 +85,13 @@ if wanted fpk; then
   if ! command -v fnpack >/dev/null 2>&1 && [ ! -x "$ROOT/.tools/fnpack" ]; then
     step_skip "飞牛包" "没有 fnpack（官方打包器）"
   elif ( cd "$ROOT" && make fpk >/dev/null 2>&1 ) && ( cd "$ROOT" && make fpk-check ); then
-    step_ok "飞牛包（真打包 + 23 项自检）"
+    # **判据**（不只是展示）：既然构建步骤跑成功了，产物与索引就必须在 —— 否则"少发一个平台"没人拦
+    fpk_n="$(ls -1 "$ROOT/dist/apps/zizvideo/fnos"/*.fpk 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$fpk_n" -ge 1 ] && [ -f "$ROOT/dist/apps/zizvideo/fnos.json" ]; then
+      step_ok "飞牛包（真打包 + 23 项自检 + fnos.json ${fpk_n} 个架构）"
+    else
+      step_bad "飞牛包 —— 构建"成功"却没有产物/索引（fpk=${fpk_n}，fnos.json $([ -f "$ROOT/dist/apps/zizvideo/fnos.json" ] && echo 有 || echo 无)）"
+    fi
   else
     step_bad "飞牛包 —— 自检没过（含"包内二进制与发行件同源"那条）"
   fi
@@ -107,12 +113,34 @@ if wanted docker; then
   if ! docker info >/dev/null 2>&1; then
     step_skip "容器镜像 tar" "没有可用的 docker daemon（**用户就拿不到离线镜像**；有 docker 的机器上跑 make docker-tar）"
   elif ( cd "$ROOT" && make docker-tar DOCKER_ARCH="$( [ "$(uname -m)" = "arm64" ] && echo arm64 || echo amd64 )" ); then
-    step_ok "容器镜像 tar（离线可 docker load 导入，docker.json 已刷新）"
+    tar_n="$(ls -1 "$ROOT/dist/apps/zizvideo/docker"/*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$tar_n" -ge 1 ] && [ -f "$ROOT/dist/apps/zizvideo/docker.json" ]; then
+      step_ok "容器镜像 tar（离线可 docker load 导入 + docker.json，${tar_n} 个架构）"
+    else
+      step_bad "容器镜像 tar —— 导出"成功"却没有产物/索引（tar=${tar_n}，docker.json $([ -f "$ROOT/dist/apps/zizvideo/docker.json" ] && echo 有 || echo 无)）"
+    fi
   else
     step_bad "容器镜像 tar —— 导出失败（看上面输出）"
   fi
 fi
 if wanted release; then
+  # 发布件完整性：`make release` 该出的东西（darwin 签名件 + linux 两架构 + linux.json）必须都在
+  begin_step
+  printf '\n──── 发布件完整性（该出的都在吗）────\n'
+  relver="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
+  vdir="$ROOT/dist/apps/zizvideo/$relver"
+  miss=""
+  [ -f "$vdir/zizvideo_${relver}_darwin_arm64" ] || miss="$miss darwin_arm64"
+  for a in amd64 arm64; do
+    [ -f "$vdir/zizvideo_${relver}_linux_$a" ] || miss="$miss linux_$a"
+  done
+  [ -f "$ROOT/dist/apps/zizvideo/linux.json" ] || miss="$miss linux.json"
+  [ -f "$ROOT/dist/apps/zizvideo/manifest.json" ] || miss="$miss manifest.json"
+  if [ -z "$miss" ]; then
+    step_ok "发布件完整性（darwin + linux 两架构 + manifest.json/linux.json 都在）"
+  else
+    step_bad "发布件缺失：${miss} —— 先 make release（这些是 Linux/容器/独立部署的基础）"
+  fi
   run_make "发布目录对账" "索引与产物不一致（宁可重跑 make release）" release-check
 fi
 
