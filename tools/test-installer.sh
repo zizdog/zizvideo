@@ -847,76 +847,8 @@ else
   bad "镜像还是上一版时 preflight 竟然判失败（发布前必然如此，会天天误报）"
 fi
 rm -rf "$FM"
-# 发布后复核：线上产物与索引 sha256 **逐字节**对账（用本地假镜像测正反两例）
-PM="$(mktemp -d)"; mkdir -p "$PM/apps/zizvideo/9.9.9"
-printf 'hello-zizvideo-9.9.9\n' >"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
-PMSHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64")"
-PMSIZE="$(wc -c <"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64" | tr -d ' ')"
-python3 - "$PM/apps/zizvideo" "$PMSHA" "$PMSIZE" <<'PYP'
-import json, sys
-base, sha, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
-rows = [{"name": "zizvideo_9.9.9_darwin_arm64", "version": "9.9.9", "arch": "arm64", "sha256": sha, "size": size}]
-json.dump({"app": "zizvideo", "latest": "9.9.9", "assets": rows}, open(base + "/manifest.json", "w"))
-json.dump({"app": "zizvideo", "version": "9.9.9", "assets": rows}, open(base + "/9.9.9/manifest.json", "w"))
-PYP
-# 版本目录那份 manifest 也要读得到（idx 里带斜杠 ⇒ 落盘文件名必须 sanitize，
-# 否则会被报成"镜像上没有" —— 这个名字带斜杠的坑第三次踩了）
-pfp="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
-case "$pfp" in
-  *"顶层索引与版本目录索引一致"*) ok "顶层索引与版本目录索引都读到了且一致（idx 带斜杠的文件名处理正确）" ;;
-  *) bad "版本目录 manifest 没被正确读取：$(printf '%s' "$pfp" | grep -E 'manifest|✗' | head -3 | tr '\n' ' ')" ;;
-esac
-case "$pfp" in
-  *"线上字节与索引 sha256 一致"*) ok "线上产物与索引逐字节一致时报 ✓" ;;
-  *) bad "线上产物复核没报一致：$(printf '%s' "$pfp" | grep -E '✗|·' | head -2 | tr '\n' ' ')" ;;
-esac
-# 两份索引资产不一致 ⇒ 必须报错（面板读顶层、安装器读版本目录，打架会"显示一个版本、装另一个"）
-python3 - "$PM/apps/zizvideo/9.9.9/manifest.json" <<'PYD'
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["assets"][0]["sha256"] = "1" * 64
-json.dump(d, open(p, "w"))
-PYD
-pfpm="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
-case "$pfpm" in
-  *"顶层索引与版本目录索引**不一致**"*) ok "两份索引资产不一致时如实报错（否则会"显示一个版本、装另一个"）" ;;
-  *) bad "两份索引不一致时没报错：$(printf '%s' "$pfpm" | grep -E '索引|✗' | head -2 | tr '\n' ' ')" ;;
-esac
-python3 - "$PM/apps/zizvideo/9.9.9/manifest.json" "$PMSHA" <<'PYP'
-import json, sys
-p, sha = sys.argv[1], sys.argv[2]
-d = json.load(open(p))
-d["assets"][0]["sha256"] = sha
-json.dump(d, open(p, "w"))
-PYP
-printf 'tampered\n' >>"$PM/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
-pfp2="$(ZV_PREFLIGHT_MIRROR="file://$PM" bash "$PF" --only post-artifacts 2>&1 || true)"
-case "$pfp2" in
-  *"大小不符"*|*"sha256 不符"*) ok "线上产物被换过/被截断时如实报错（大小或 sha256 不符）" ;;
-  *) bad "产物被改后没报错：$(printf '%s' "$pfp2" | grep -E '✗' | head -2 | tr '\n' ' ')" ;;
-esac
-rm -rf "$PM"
-# 发布后复核：**本地有、镜像没有**的索引 = 本次发布漏传（必须失败，不能被"老版本没这类产物"糊过去）
-PM2="$(mktemp -d)"; mkdir -p "$PM2/apps/zizvideo"
-PFV="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
-printf '{"app":"zizvideo","latest":"%s","assets":[]}\n' "$PFV" >"$PM2/apps/zizvideo/manifest.json"
-# 本地确实有 linux.json（dist 下），所以这就是"漏传"场景
-if [ -f "$ROOT/dist/apps/zizvideo/linux.json" ]; then
-  if ZV_PREFLIGHT_MIRROR="file://$PM2" bash "$PF" --only post-artifacts >"$PM2/o" 2>&1; then
-    bad "镜像 latest 就是本次版本、却缺本地有的 linux.json 时，复核竟然通过（漏传会被放过去）"
-  else
-    case "$(cat "$PM2/o")" in
-      *"漏传"*) ok "本地有、镜像没有的索引被如实判为「漏传」（发布后能抓到"少传了东西"）" ;;
-      *) bad "漏传场景的报错不清：$(grep '✗' "$PM2/o" | head -2 | tr '\n' ' ')" ;;
-    esac
-  fi
-else
-  note_skip "本地没有 dist/apps/zizvideo/linux.json，跳过漏传用例"
-fi
-rm -rf "$PM2"
-
-rm -rf "$PM"
+# 发布后复核的**场景**（线上字节 / 漏传 / 两份索引一致 / 产物被换过）已合并到
+# tools/check-release-flow.py（假镜像七种场景，可独立运行）—— 这里只留脚本级检查。
 
 # ---------------------------------------------------------------------------
 # 安装器 --verify 与自查脚本 --as-daemon：两个**独立实现**在同一场景下必须给出同样判定
@@ -1486,168 +1418,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 发版前自检（tools/check-release-dir.sh）：索引与产物对不平时**必须**红
-printf '==> 发版前自检（索引 ↔ 产物）\n'
+# 发版前自检与发布链路判据：**假镜像七种场景**合并到 tools/check-release-flow.py
+# （一致的目录能过 / sha256 改坏必须指名报错 / latest 不符 / 线上字节一致 / 产物被换过 /
+#  本地有镜像没有=漏传 / 两份索引不一致）—— 一堆零散断言换成一个可独立运行的校验器
+printf '==> 发版前自检与发布链路判据（索引 ↔ 产物 / 线上字节 / 漏传 / latest）\n'
+if rflow="$(python3 "$ROOT/tools/check-release-flow.py" 2>&1)"; then
+  ok "发布链路判据自测：$(printf '%s' "$rflow" | tail -1)"
+else
+  bad "发布链路判据自测不过：$(printf '%s' "$rflow" | grep '✗' | head -3 | tr '\n' ' ')"
+fi
 CRD="$ROOT/tools/check-release-dir.sh"
 bash -n "$CRD" && ok "check-release-dir.sh 通过语法检查" || bad "check-release-dir.sh 语法错"
-# 造一个最小"发布目录"：正确时通过、把 sha 改坏后必须失败
-FAKE="$(mktemp -d)"; mkdir -p "$FAKE/apps/zizvideo/v9.9.9" "$FAKE/rel/v9.9.9"
-printf '#!/bin/sh\necho "zizvideo 9.9.9"\n' >"$FAKE/rel/v9.9.9/zizvideo_9.9.9_darwin_arm64"
-chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_darwin_arm64"
-# linux 那条必须放**真的静态 ELF**（否则"静态性"检查会替索引检查背锅，测出来的红不是我们要的红）
-REAL_LINUX="$ROOT/dist/apps/zizvideo/$RELVER/zizvideo_${RELVER}_linux_amd64"
-if [ -f "$REAL_LINUX" ]; then
-  cp "$REAL_LINUX" "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_amd64"
-  chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_amd64"
-  cp "$ROOT/dist/apps/zizvideo/$RELVER/zizvideo_${RELVER}_linux_arm64" "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_arm64"
-  chmod 0755 "$FAKE/rel/v9.9.9/zizvideo_9.9.9_linux_arm64"
-else
-  note_skip "没有 ${REAL_LINUX}，跳过发布目录自检的假目录用例"
-fi
-python3 - "$FAKE/rel/v9.9.9" <<'PYM'
-import hashlib, json, os, sys
-vdir = sys.argv[1]
-def row(name, arch):
-    p = os.path.join(vdir, name)
-    with open(p, "rb") as h:
-        d = hashlib.sha256(h.read()).hexdigest()
-    return {"name": name, "version": "9.9.9", "arch": arch, "sha256": d, "size": os.path.getsize(p)}
-rows = [row("zizvideo_9.9.9_darwin_arm64", "arm64")]
-json.dump({"app": "zizvideo", "version": "9.9.9", "assets": rows}, open(os.path.join(vdir, "manifest.json"), "w"))
-json.dump({"app": "zizvideo", "latest": "9.9.9", "assets": rows}, open(os.path.join(vdir, "..", "manifest.json"), "w"))
-linux = [row("zizvideo_9.9.9_linux_amd64", "amd64"), row("zizvideo_9.9.9_linux_arm64", "arm64")]
-json.dump({"app": "zizvideo", "platform": "linux", "latest": "9.9.9", "assets": linux},
-          open(os.path.join(vdir, "..", "linux.json"), "w"))
-PYM
-# 把 linux.json 里的 sha 改坏：**必须**红（这正是"发出去用户装不上"的那种事故）
-python3 - "$FAKE/rel/linux.json" <<'PYB'
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["assets"][0]["sha256"] = "0" * 64
-json.dump(d, open(p, "w"))
-PYB
-crout="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
-case "$crout" in
-  *"sha256 不符"*) ok "索引 sha256 与产物不符时自检如实报错（指名道姓）" ;;
-  *) bad "sha 不符没有被点名报错：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
-esac
-# 顶层索引 latest 与版本目录不一致：也要红（面板会去装一个不存在的版本）
-python3 - "$FAKE/rel/manifest.json" <<'PYC'
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["latest"] = "0.0.1"
-json.dump(d, open(p, "w"))
-PYC
-crout="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
-case "$crout" in
-  *"latest"*) ok "顶层 latest 与版本目录不符时自检如实报错" ;;
-  *) bad "latest 不符没有被报出来：$(printf '%s' "$crout" | grep '✗' | head -2)" ;;
-esac
-# 容器镜像清单（docker.json）：有 tar.gz 才写；版本对不上必须拒绝写（与 fnos.json 同一套规矩）
-DK="$(mktemp -d)"; mkdir -p "$DK/apps/zizvideo/9.9.9" "$DK/apps/zizvideo/docker"
-printf 'stub darwin\n' >"$DK/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
-printf 'stub tar\n' >"$DK/apps/zizvideo/docker/zizvideo-9.9.9-amd64.tar.gz"
-if python3 "$ROOT/tools/make-app-index.py" "$DK/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1 && [ -f "$DK/apps/zizvideo/docker.json" ]; then
-  ok "有镜像 tar 时生成器写出 docker.json"
-  python3 - "$DK/apps/zizvideo/docker.json" <<'PYDK' && ok "docker.json 的 file/sha256/size 与磁盘一致" || bad "docker.json 内容不对"
-import hashlib, json, os, sys
-d = json.load(open(sys.argv[1]))
-row = d["assets"][0]
-path = os.path.join(os.path.dirname(sys.argv[1]), row["file"])
-assert row["file"].startswith("docker/"), row["file"]
-assert row["sha256"] == hashlib.sha256(open(path, "rb").read()).hexdigest()
-assert int(row["size"]) == os.path.getsize(path)
-assert row["arch"] == "amd64"
-PYDK
-else
-  bad "有镜像 tar 时没写出 docker.json"
-fi
-mv "$DK/apps/zizvideo/docker/zizvideo-9.9.9-amd64.tar.gz" "$DK/apps/zizvideo/docker/zizvideo-1.1.1-amd64.tar.gz"
-if python3 "$ROOT/tools/make-app-index.py" "$DK/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1; then
-  bad "镜像 tar 版本与本次不一致时生成器没报错"
-else
-  ok "镜像 tar 版本与本次不一致时拒绝写 docker.json"
-fi
-rm -rf "$DK"
-# 没有 docker daemon 时必须**如实跳过**（exit 2），不许假装导出过
-SHIMD="$(mktemp -d)"; printf '#!/bin/sh\nexit 1\n' >"$SHIMD/docker"; chmod 0755 "$SHIMD/docker"
-if out=$(PATH="$SHIMD:$PATH" bash "$ROOT/tools/make-docker-tar.sh" --arch arm64 2>&1); then
-  bad "没有 docker daemon 时 make-docker-tar 竟然返回成功（假装导出过）"
-else
-  rc=$?
-  case "$out" in
-    *"如实跳过"*) ok "没有 docker daemon 时如实跳过（退出码 ${rc}）" ;;
-    *) bad "没有 daemon 时的说明不清：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')" ;;
-  esac
-fi
-rm -rf "$SHIMD"
-
-# 飞牛包清单（fnos.json）：有 .fpk 才写；版本对不上必须**拒绝写**（否则用户按索引下载到不匹配的包）
-FN="$(mktemp -d)"; mkdir -p "$FN/apps/zizvideo/9.9.9" "$FN/apps/zizvideo/fnos"
-printf 'stub darwin\n' >"$FN/apps/zizvideo/9.9.9/zizvideo_9.9.9_darwin_arm64"
-printf 'stub linux\n' >"$FN/apps/zizvideo/9.9.9/zizvideo_9.9.9_linux_amd64"
-printf 'stub fpk 9.9.9\n' >"$FN/apps/zizvideo/fnos/zizvideo-9.9.9-x86.fpk"
-if python3 "$ROOT/tools/make-app-index.py" "$FN/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1 && [ -f "$FN/apps/zizvideo/fnos.json" ]; then
-  ok "有 .fpk 时生成器写出 fnos.json"
-  python3 - "$FN/apps/zizvideo/fnos.json" <<'PYF2' && ok "fnos.json 里 file 指向 fnos/ 下的包且 sha256/size 与磁盘一致" || bad "fnos.json 内容不对"
-import hashlib, json, os, sys
-d = json.load(open(sys.argv[1]))
-row = d["assets"][0]
-path = os.path.join(os.path.dirname(sys.argv[1]), row["file"])   # fnos.json 与 fnos/ 同层
-assert row["file"] == "fnos/zizvideo-9.9.9-x86.fpk", row["file"]
-assert row["sha256"] == hashlib.sha256(open(path, "rb").read()).hexdigest()
-assert int(row["size"]) == os.path.getsize(path)
-assert d["version"] == "9.9.9"
-PYF2
-else
-  bad "有 .fpk 时没写出 fnos.json"
-fi
-# 版本对不上：必须拒绝写（把包名改成别的版本）
-mv "$FN/apps/zizvideo/fnos/zizvideo-9.9.9-x86.fpk" "$FN/apps/zizvideo/fnos/zizvideo-1.1.1-x86.fpk"
-if python3 "$ROOT/tools/make-app-index.py" "$FN/apps/zizvideo/9.9.9" 9.9.9 >/dev/null 2>&1; then
-  bad "fpk 版本与本次版本不一致时生成器没报错"
-else
-  ok "fpk 版本与本次不一致时拒绝写 fnos.json（不把不匹配的包发出去）"
-fi
-rm -rf "$FN"
-
-# stamp 对账：把"这一份字节在真 Linux 上验过"变成可核对的证据（发版前必须能答"验过没"）
-python3 - "$FAKE/rel/v9.9.9" "$FAKE/rel/.linux-verified.json" <<'PYS'
-import hashlib, json, os, sys
-vdir, stamp = sys.argv[1], sys.argv[2]
-data = {"version": "9.9.9", "verified": {}}
-for arch in ("amd64", "arm64"):
-    p = os.path.join(vdir, "zizvideo_9.9.9_linux_" + arch)
-    with open(p, "rb") as f:
-        data["verified"][arch] = {"sha256": hashlib.sha256(f.read()).hexdigest(), "at": "2026-01-01T00:00:00Z"}
-json.dump(data, open(stamp, "w"))
-PYS
-crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
-case "$crstamp" in
-  *"这一份字节**在真 Linux 上验过"*|*"在真 Linux 上验过"*) ok "stamp 相符时自检报「这一份字节在真 Linux 上验过」" ;;
-  *) bad "stamp 相符时没报验过：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
-esac
-python3 - "$FAKE/rel/.linux-verified.json" <<'PYS2'
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["verified"]["arm64"]["sha256"] = "0" * 64
-json.dump(d, open(p, "w"))
-PYS2
-crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
-case "$crstamp" in
-  *"与当前产物不符"*) ok "stamp 与产物不同源时提示「产物换过」（最危险的漂移）" ;;
-  *) bad "stamp 不符时没提示：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
-esac
-rm -f "$FAKE/rel/.linux-verified.json"
-crstamp="$(bash "$CRD" --no-signature --version 9.9.9 "$FAKE/rel/v9.9.9" 2>&1 || true)"
-case "$crstamp" in
-  *"从没在真 Linux 上跑过"*) ok "没有 stamp 时明确说「从没在真 Linux 上跑过」" ;;
-  *) bad "没有 stamp 时的提示不清：$(printf '%s' "$crstamp" | grep -E 'linux/|⚠️' | head -2 | tr '\n' ' ')" ;;
-esac
-rm -rf "$FAKE"
+# 真实 dist（存在就顺手验一遍；不存在不阻塞）
 # 真实 dist（存在就顺手验一遍；不存在不阻塞）
 if [ -d "$ROOT/dist/apps/zizvideo/$RELVER" ]; then
   bash "$CRD" >/dev/null 2>&1 && ok "当前 dist 的发布目录自检通过" || bad "当前 dist 的发布目录自检没过（跑 make release-check 看细节）"
