@@ -250,7 +250,11 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 if "assets" in d:
     for a in d.get("assets") or []:
-        print("%s\t%s\t%s" % (a.get("name") or "", a.get("sha256") or "", a.get("size") or 0))
+        # ⚠️ 资产行里可能同时有 `name`（basename）与 `file`（**带子目录**，如 fnos/、docker/、android/）——
+        # 必须优先用 `file`，否则拼出的 URL 少了子目录，线上明明有却被报成"取不到"（我这次就踩了：
+        # docker.json 的 name 是 basename，post 检查报两个 tar"线上取不到"，其实它们在 docker/ 下）
+        print("%s\t%s\t%s" % (a.get("file") or a.get("name") or "",
+                               a.get("sha256") or "", a.get("size") or 0))
 elif d.get("file"):
     print("%s\t%s\t%s" % (d["file"], d.get("sha256") or "", d.get("size") or 0))
 PYI
