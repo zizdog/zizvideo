@@ -221,6 +221,47 @@ if command -v openssl >/dev/null 2>&1; then
   else
     bad "openssl 造不出测试证书"
   fi
+  # 证书**导入**的"改钥匙串"次数（用户 2026-10-11 报"每次安装弹两次证书信任"）。
+  # 现有门禁只覆盖 ZV_TEST_KEYCHAIN 分支 ⇒ 真实路径的弹窗次数此前没人管。这两个断言就抓它。
+  SEC_LOG="$SB/security-calls.log"
+  FAKEBIN_CERT="$SB/fakebin-cert"; mkdir -p "$FAKEBIN_CERT"
+  cat >"$FAKEBIN_CERT/security" <<'SECEOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SEC_LOG_PATH"
+case "$1" in
+  find-certificate) [ -n "$SEC_SHA1" ] && printf 'SHA-1 hash: %s\n' "$SEC_SHA1"; exit 0 ;;
+  verify-cert) exit "${SEC_TRUSTED:-0}" ;;
+  *) exit 0 ;;
+esac
+SECEOF
+  chmod 0755 "$FAKEBIN_CERT/security"
+  WANT_SHA1="$(openssl x509 -in "$BOGUS" -noout -fingerprint -sha1 2>/dev/null | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')"
+  cert_import_case() {   # $1 = 钥匙串里已有的 SHA-1（空=没有）；$2 = verify-cert 是否成功
+    (
+      export ZV_LIB_ONLY=1 ZV_FAKE_SUDO=1
+      export PATH="$FAKEBIN_CERT:$PATH" SEC_LOG_PATH="$SEC_LOG" SEC_SHA1="$1" SEC_TRUSTED="$2"
+      unset ZV_TEST_KEYCHAIN
+      # shellcheck disable=SC1090
+      . "$SCRIPT"
+      import_trust_cert "$BOGUS"
+    ) </dev/null >/dev/null 2>&1
+  }
+  : >"$SEC_LOG"
+  cert_import_case "$WANT_SHA1" 0 || true
+  if grep -qE 'add-trusted-cert|delete-certificate' "$SEC_LOG"; then
+    bad "证书已被信任却还在改钥匙串（会重复弹授权窗）：$(tr '\n' ' ' <"$SEC_LOG" | head -c 150)"
+  else
+    ok "证书已被信任 ⇒ 一次都不改钥匙串（不弹任何授权窗）"
+  fi
+  : >"$SEC_LOG"
+  cert_import_case "" 1 || true
+  n_add="$(grep -c 'add-trusted-cert' "$SEC_LOG" || true)"
+  n_del="$(grep -c 'delete-certificate' "$SEC_LOG" || true)"
+  if [ "$n_add" = "1" ] && [ "$n_del" = "0" ]; then
+    ok "需要导入时只 add 一次、不 delete（一次授权，而不是两次）"
+  else
+    bad "证书导入调用了 add=${n_add} 次 / delete=${n_del} 次（期望 1 / 0）"
+  fi
   REAL_CRT="$ROOT/.release-key/codesign/zp-codesign.crt"
   if [ -f "$REAL_CRT" ]; then
     if pin_case "$REAL_CRT" >"$OUT" 2>&1; then
@@ -1555,7 +1596,7 @@ CFG_ROOT='{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s"]\n}\n'
 # ① 读得到：如实报告、不打扰用户
 : >"$OPEN_LOG"
 out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
-  '{"path":"PROBE","readable":true}' 0 2>&1)
+  '{"path":"PROBE","readable":true}' 0 </dev/null 2>&1)
 # 断言**行为**而不是文案（铁律 8）：可读时必须把那个路径报成"读得到"，
 # 并且**不去打开系统设置**（只有确实缺授权才打开 —— 用假 open 的调用日志判定）
 if printf '%s' "$out" | grep -qF "$SB/media" && printf '%s' "$out" | grep -q '✓'; then
@@ -1572,7 +1613,7 @@ fi
 # ② 读不到：必须引导（系统设置 + 二进制路径 + 影响），ZV_ACCESS_PROBE_WAIT=0 时不等待、不失败
 : >"$OPEN_LOG"
 if out=$(fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
-     '{"path":"PROBE","readable":false,"reason":"未授予"}' 0 2>&1); then
+     '{"path":"PROBE","readable":false,"reason":"未授予"}' 0 </dev/null 2>&1); then
   ok "缺授权时**不阻断安装**（返回 0，如实报告）"
 else
   bad "缺授权不该让安装失败"
@@ -1596,12 +1637,22 @@ else
   bad "没有调用 open 打开设置面板/选中二进制：$(cat "$OPEN_LOG")"
 fi
 
+# ②a-2 非交互且**没给 --yes** ⇒ 绝不许弹窗（无人值守/CI 不该往屏幕上弹设置页）
+: >"$OPEN_LOG"
+out=$(ZV_ASSUME_YES=0 fda_case "$(printf "$CFG_ROOT" "$SB/home-fda/zizvideo" "$SB/media")" \
+  '{"path":"PROBE","readable":false,"reason":"未授予"}' 0 </dev/null 2>&1 || true)
+if [ -s "$OPEN_LOG" ]; then
+  bad "非交互且没 --yes 时还是弹了窗口：$(cat "$OPEN_LOG")"
+else
+  ok "非交互且没 --yes ⇒ 不弹窗（只打印怎么手动授权）"
+fi
+
 # ②b 带**空格**的媒体根：权限阶段必须把它当成一个目标（切碎了就会报"探了几个不存在的位置"）
 SP2="$(mktemp -d)"; mkdir -p "$SP2/home-fda/zizvideo" "$SP2/My Drive/视频"
 printf '{\n  "data_dir": "%s",\n  "media_allow_roots": ["%s/My Drive/视频"]\n}\n' "$SP2/data" "$SP2" \
   >"$SP2/home-fda/zizvideo/config.json"
 out=$(fda_case "$(cat "$SP2/home-fda/zizvideo/config.json")" \
-  '{"path":"x","readable":true}' 0 2>&1)
+  '{"path":"x","readable":true}' 0 </dev/null 2>&1)
 if printf '%s' "$out" | grep -qF "$SP2/My Drive/视频"; then
   ok "权限阶段把带空格的媒体根当成一个目标（整条路径原样出现，没被空格切碎）"
 else

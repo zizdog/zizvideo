@@ -72,6 +72,7 @@ CONFIG_PATH=""
 DATA_DIR=""
 DATA_DIR_OVERRIDE=""
 SKIP_FDA=0
+ASSUME_YES=0
 LOG_DIR=""
 CONFIG_NEW=0
 DATA_DIR_NEW=0
@@ -99,6 +100,47 @@ else
 fi
 RULE="────────────────────────────────────────────────────────────────────────"
 STEPS_TOTAL=6
+# 「先说清楚要弹什么、再弹」的闸门（用户 2026-10-11 要求：弹窗前必须高亮说明并请用户授权）。
+#   ask_dialog <enter|y> <非交互时默认:yes|no> <第一行> [更多行...]
+#   返回 0 = 继续（该弹就弹）；1 = 跳过（不弹）。--yes / ZV_ASSUME_YES=1 ⇒ 直接继续（无人值守）。
+ask_dialog() {
+  mode="$1"; shift
+  nidef="$1"; shift
+  printf '\n  %s┌── 即将弹出授权窗口 · 请先看一眼 ────────────────────────%s\n' "$C_Y$C_B" "$C_0"
+  for aline in "$@"; do
+    printf '  %s│%s %s\n' "$C_Y$C_B" "$C_0" "$aline"
+  done
+  printf '  %s└────────────────────────────────────────────────────────%s\n' "$C_Y$C_B" "$C_0"
+  if [ "${ZV_ASSUME_YES:-0}" = "1" ] || [ "$ASSUME_YES" = "1" ]; then
+    printf '  · 已确认（--yes / ZV_ASSUME_YES=1）：继续\n'
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    if [ "$nidef" = "yes" ]; then
+      printf '  · 非交互环境：按默认继续（想静默请加 --yes）\n'; return 0
+    fi
+    printf '  · 非交互环境：跳过这一步（想静默执行请加 --yes）\n'; return 1
+  fi
+  if [ "$mode" = "y" ]; then
+    printf '  %s★ 输入 y 再回车才会弹出；直接回车＝跳过：%s' "$C_Y$C_B" "$C_0"
+  else
+    printf '  %s★ 看清楚后按回车继续（Ctrl-C 取消）：%s' "$C_Y$C_B" "$C_0"
+  fi
+  ans=""
+  if ! read -r ans; then
+    printf '\n'
+    if [ "$nidef" = "yes" ]; then return 0; fi
+    return 1
+  fi
+  if [ "$mode" = "y" ]; then
+    case "$ans" in
+      y|Y|yes|YES) return 0 ;;
+      *) printf '  · 已跳过（没有弹出任何窗口）\n'; return 1 ;;
+    esac
+  fi
+  return 0
+}
+
 step() {                       # step <序号> <标题>
   printf '\n%s%s%s\n' "$C_D" "$RULE" "$C_0"
   printf '%s  ▶ 第 %s/%s 步  %s%s\n' "$C_B" "$1" "$STEPS_TOTAL" "$2" "$C_0"
@@ -130,6 +172,7 @@ zizvideo 独立部署安装器
 
 其它：
   --skip-fda         跳过"完全磁盘访问"授权引导（无人值守/CI 用；之后可 --verify 复查）
+  --yes, -y          所有"即将弹窗"的确认都不再问你（静默；--purge 的二次确认也一并视为已确认）
   --data-dir <路径>  自定义数据目录（默认 ~/zizvideo；给了它就不再自动迁移旧目录）。
   默认镜像 https://mirror.zizdog.com:8888，读 apps/zizvideo/manifest.json 的应用级索引。
   装到 ~/.local/bin/zizvideo；日志在 ~/Library/Logs/。
@@ -158,6 +201,7 @@ parse_args() {
       --version) say "platform/macos/install-zizvideo.sh $INSTALLER_VERSION"; exit 0 ;;
       --dry-run) DRY_RUN=1 ;;
       --skip-fda) SKIP_FDA=1 ;;
+      --yes|-y) ASSUME_YES=1 ;;
       --system) MODE="system" ;;
       --user) MODE="user" ;;
       --upgrade) ACTION="upgrade" ;;
@@ -440,6 +484,25 @@ cert_keychain() {
 
 # 同名旧证书先删掉再加，保证升级时幂等（重复导入会 errSecDuplicate).
 # ZV_TEST_KEYCHAIN 走 import 而不写系统信任设置：add-trusted-cert 在沙箱里会弹授权框。
+# 证书指纹（SHA-1，小写无冒号）——用来在钥匙串里精确认出"这是我们那张证书"。
+sha1_of_cert_file() {
+  openssl x509 -in "$1" -noout -fingerprint -sha1 2>/dev/null | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f'
+}
+
+# 这张证书是否**已经在钥匙串里并且被信任**？只读判断（verify-cert 不弹窗），用来避免重复导入。
+cert_already_trusted() {
+  crt="$1"
+  command -v security >/dev/null 2>&1 || return 1
+  command -v openssl  >/dev/null 2>&1 || return 1
+  kc=$(cert_keychain)
+  want="$(sha1_of_cert_file "$crt")"
+  [ -n "$want" ] || return 1
+  have="$(security find-certificate -a -Z "$kc" 2>/dev/null | awk '/SHA-1 hash:/{print $3}' | tr 'A-F' 'a-f')"
+  printf '%s\n' "$have" | grep -qx "$want" || return 1
+  # 在钥匙串里 ≠ 被信任：按 codeSign 策略验一次（只读、不弹窗）
+  security verify-cert -c "$crt" -p codeSign >/dev/null 2>&1
+}
+
 import_trust_cert() {
   crt="$1"
   kc=$(cert_keychain)
@@ -453,7 +516,25 @@ import_trust_cert() {
     security import "$crt" -k "$kc" -T /usr/bin/codesign -A >/dev/null 2>&1
     return $?
   fi
+  # ① 已经信任过 ⇒ 直接跳过（重装/升级不再弹任何授权窗口）。判据是只读的 verify-cert，不弹窗。
+  if cert_already_trusted "$crt"; then
+    say "证书已经在系统钥匙串里并被信任 ⇒ 跳过导入（本次不会弹授权窗口）"
+    return 0
+  fi
+  # ② 弹窗前**先说清楚要弹什么、为什么**，请用户确认（用户 2026-10-11 要求）
+  ask_dialog enter yes \
+    "接下来 macOS 会弹出「…想要修改系统钥匙串」的授权窗（可能要输登录密码、或用 Touch ID）" \
+    "为什么：把 zizvideo 的签名证书加入系统信任，让「完全磁盘访问」授权一次就跨升级保留" \
+    "只有第一次装需要；证书没变时以后再装/升级都不会再弹"
+  # ③ 只在钥匙串里有一张**同名但指纹不同**的旧证书时才删 —— 同一张证书不删，
+  #    否则「删一次 + 加一次」会白白弹两次授权（用户报的"每次装弹两次"就是这个）。
+  want="$(sha1_of_cert_file "$crt")"
+  existing=""
   if [ -n "$cn" ]; then
+    existing="$(security find-certificate -c "$cn" -Z "$kc" 2>/dev/null | awk '/SHA-1 hash:/{print $3; exit}' | tr 'A-F' 'a-f')"
+  fi
+  if [ -n "$existing" ] && [ -n "$want" ] && [ "$existing" != "$want" ]; then
+    say "钥匙串里有一张同名旧证书（指纹不同）⇒ 先移除它（这一步也会弹一次授权）"
     if [ "$FAKE_SUDO" = "1" ]; then
       security delete-certificate -c "$cn" -t "$kc" >/dev/null 2>&1 || true
     else
@@ -1015,7 +1096,10 @@ do_install_or_upgrade() {
     fail_with_rollback "签名复核未通过：这可能是镜像被换过，请联系维护者。已回滚本次改动（服务与二进制恢复为改动前）。"
   fi
 
-  # 权限阶段：不阻断安装，只如实报告 + 引导（用户 2026-10-11："独立申请全盘权限"）
+  # 到这里服务与签名都验收通过 ⇒ 安装本身已完成；第 6 步只是"授权"，不阻断（用户要求：授权提示放在完成后）
+  okl "服务已装好并在跑（验收全部通过）"
+
+  # 权限阶段：不阻断安装，只如实报告 + 引导（用户 2026-10-11："独立申请全盘权限"，且弹窗前先说明并等确认）
   check_full_disk_access
 
   INSTALL_DONE=1
@@ -1023,24 +1107,34 @@ do_install_or_upgrade() {
   rm -f "$bin_tmp" "$crt_tmp"
   if [ -n "$BIN_BACKUP" ] && [ -f "$BIN_BACKUP" ]; then rm -f "$BIN_BACKUP"; fi
   if [ -n "$PLIST_BACKUP" ] && [ -f "$PLIST_BACKUP" ]; then remove_file "$PLIST_BACKUP"; fi
+  # —— 成功信息：只留"必要内容"（从哪里打开 + 首次要设管理员 + 数据目录在哪）——
   printf '\n%s%s%s\n' "$C_G" "$RULE" "$C_0"
-  printf '%s  ✅ 安装完成%s（%s 模式）\n' "$C_G$C_B" "$C_0" "$MODE"
+  printf '%s  ✅ 安装完成%s\n' "$C_G$C_B" "$C_0"
   printf '%s%s%s\n' "$C_G" "$RULE" "$C_0"
-  if [ "$HAVE_CRT" = "1" ]; then
-    okl "已签名并复核（identifier=${SIGN_IDENTIFIER}）：完全磁盘访问授权跨升级保留"
-  else
-    warnl "本次是**未签名部署**（镜像上没有 ${CRT_NAME}）：每次升级都要重新授权完全磁盘访问"
-  fi
-  hl "程序：${BIN}（版本 ${LATEST}）"
-  hl "数据：${DATA_DIR}（数据库/封面/收件箱；卸载默认保留，--purge 才删）"
-  hl "日志：${LOG_DIR}/zizvideo.out.log、zizvideo.err.log"
-  tip "打开 http://$(host_of "$EFFECTIVE_LISTEN"):$(port_of "$EFFECTIVE_LISTEN")/ 初始化管理员（首次访问）"
-  tip "随时体检：sudo bash $0 --verify   （二进制/配置/服务/健康端点/媒体根可读性，只读不改）"
-  hl "卸载：bash $0 --uninstall（保留数据）｜ bash $0 --purge（连数据一起删，需二次确认）"
-  hl "加/换媒体根：网页里「媒体库 → 添加目录」；外置盘记得先挂载"
   if [ "$MODE" = "system" ]; then
-    hl "服务：launchd 系统域 ${LABEL}（开机自启、不需要登录）；mDNS/局域网无需额外配置"
+    tip "打开 http://$(host_of "$EFFECTIVE_LISTEN"):$(port_of "$EFFECTIVE_LISTEN")/ —— 首次访问会让你**设置管理员账号和密码**"
+  else
+    tip "打开 http://$(host_of "$EFFECTIVE_LISTEN"):$(port_of "$EFFECTIVE_LISTEN")/ —— 首次访问会让你**设置管理员账号和密码**（登录后才跑，重启后要重新登录）"
   fi
+  hl "数据目录：${DATA_DIR}（数据库 / 封面 / 配置都在这里；升级和卸载都默认不动它，备份就拷这个目录）"
+
+  # —— 其余都收进「程序信息」，不打扰首次使用 ——
+  printf '\n  %s── 程序信息 ─────────────────────────────────────────────%s\n' "$C_D" "$C_0"
+  hl "程序：${BIN}（版本 ${LATEST}，${MODE} 模式）"
+  if [ "$HAVE_CRT" = "1" ]; then
+    okl "签名：已签名并复核（identifier=${SIGN_IDENTIFIER}）⇒ 完全磁盘访问授权跨升级保留"
+  else
+    warnl "签名：未签名部署（镜像上没有 ${CRT_NAME}）⇒ 每次升级都要重新授权完全磁盘访问"
+  fi
+  if [ "$MODE" = "system" ]; then
+    hl "服务：launchd 系统域 ${LABEL}（开机自启、不需要登录）"
+  else
+    hl "服务：launchd 用户域 ${LABEL}（只在有人登录后运行）"
+  fi
+  hl "日志：${LOG_DIR}/zizvideo.out.log、zizvideo.err.log"
+  hl "体检（只读不改）：bash $0 --verify"
+  hl "卸载：bash $0 --uninstall（保留数据）｜ bash $0 --purge（连数据一起删，需二次确认）"
+  hl "加/换媒体根：后台「媒体库 → 添加目录」；外置盘记得先挂载"
   case ":$PATH:" in
     *":$INSTALL_ROOT/bin:"*) ;;
     *) hl "把 ${INSTALL_ROOT}/bin 加进 PATH（可选）：echo 'export PATH=\"${INSTALL_ROOT}/bin:\$PATH\"' >> ~/.zshrc" ;;
@@ -1185,11 +1279,22 @@ check_full_disk_access() {
       hl "  ② 点左下角 + ，按 ⌘⇧G 粘这个路径：${BIN}"
       hl "  ③ 打开右边的开关"
       hl "  ④ 回到这里按回车，我立刻复验（最多等 ${ZV_ACCESS_PROBE_WAIT:-60}s，Ctrl-C 可跳过）"
-      # 把人带到该去的地方：Finder 里选中二进制 + 打开设置面板（沙箱里被 ZV_FAKE_OPEN 拦掉）
-      open_ui -R "$BIN"
-      open_ui "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+      # 弹窗前先说清楚"会弹出什么、你要点哪里"，并**等用户输入 y**（用户 2026-10-11 要求）
+      fda_opened=0
+      if ask_dialog y no \
+        "接下来会打开「系统设置 → 隐私与安全性 → 完全磁盘访问」" \
+        "同时在 Finder 里选中要授权的二进制：${BIN}" \
+        "请在设置里点 +（或按 ⌘⇧G 直接粘路径）→ 打开右边的开关 → 回到终端按回车，我立刻复验"; then
+        fda_opened=1
+        open_ui -R "$BIN"
+        open_ui "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+      else
+        hl "没有打开设置页。你可以自己打开：系统设置 → 隐私与安全性 → 完全磁盘访问 → 把 ${BIN} 加进去"
+      fi
       wait_secs="${ZV_ACCESS_PROBE_WAIT:-60}"
-      if [ "$wait_secs" = "0" ]; then
+      if [ "$fda_opened" != "1" ]; then
+        hl "（这次没有弹窗，就不在这里干等；授权后随时重跑本脚本或 --verify 复验）"
+      elif [ "$wait_secs" = "0" ]; then
         warnl "（ZV_ACCESS_PROBE_WAIT=0：不等待；授权后重跑本脚本即可复验）"
       else
         tip "已为你打开「系统设置」并在 Finder 里选中二进制 —— 授权完按回车，我马上复验"
