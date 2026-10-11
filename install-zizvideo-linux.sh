@@ -14,7 +14,10 @@
 #    sudo bash install-zizvideo-linux.sh [--listen host:port] [--dry-run]
 #    sudo bash install-zizvideo-linux.sh --upgrade
 #    sudo bash install-zizvideo-linux.sh --uninstall | --purge --yes
-#    sudo bash install-zizvideo-linux.sh [--mirror <base>] [--version <版本>]   # 换镜像 / 钉住版本
+#    sudo bash install-zizvideo-linux.sh [--mirror <base>]        # 换镜像基址
+#    sudo bash install-zizvideo-linux.sh --version <版本>          # **断言**镜像 latest 就是这个版本
+#        （对不上就拒绝：这是防"版本已翻页还去装旧包"的守卫，**不是**"装某个旧版本"）
+#        ⚠️ 与 macOS 安装器不同：那边的 `--version` 是**打印脚本版本**（本脚本用 `--script-version`）
 #    bash install-zizvideo-linux.sh --help | --script-version
 #
 #  布局：
@@ -129,7 +132,8 @@ latest = data.get("latest") or ""
 if not latest:
     raise SystemExit("!! linux.json 里 latest 是空的（拒绝装一个无法确认版本的包）")
 if pin and pin != latest:
-    raise SystemExit("!! 镜像上 latest=%s，而你要求 %s（版本已翻页，别装旧包）" % (latest, pin))
+    raise SystemExit("!! 镜像上 latest=%s，而你要求 %s（版本已翻页，别装旧包；"
+                     "--version 只用于**确认**版本，不能用来降级）" % (latest, pin))
 for row in data.get("assets") or []:
     if row.get("arch") != arch:
         continue
