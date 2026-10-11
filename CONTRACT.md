@@ -99,6 +99,15 @@ zizvideo 以两种方式运行，**共用**同一份二进制、config.json、�
   那是面板侧要收拾的，本仓库不用跟。
 - 版本真源在镜像：`apps/zizvideo/manifest.json`
   （`app` / `latest` / `generated_at` / `assets[{name,version,arch,sha256,size}]`）
-  + 产物 `zizvideo_<版本>_darwin_arm64`（裸二进制，只发 arm64）。
+  + 产物 `zizvideo_<版本>_darwin_arm64`（裸二进制；`make release ARCHS="arm64 amd64"` 时也会出 amd64）。
+- **平台专属清单（2026-10-11 新增，面板侧无需改动，但请别当成 manifest 的变体、也别清理）**：
+  `manifest.json` 仍是**面板唯一认的版本真源**，且**只含 darwin 产物**（面板按 `arch` 选包 ——
+  同 arch 混入别的平台会让 macOS 装到 Linux 二进制，所以平台专属清单是分开的文件）：
+  · `apps/zizvideo/linux.json` —— Linux 独立部署（`platform:"linux"`，含 amd64/arm64 静态二进制）；
+  · `apps/zizvideo/fnos.json` —— 飞牛 fnOS 应用包（`platform:"fnos"`，`file` 指向 `fnos/*.fpk`）；
+  · `apps/zizvideo/docker.json` —— 离线容器镜像（`platform:"docker"`，`file` 指向 `docker/*.tar.gz`）；
+  · `apps/zizvideo/android.json` —— 安卓客户端自动更新（App 自己读，面板不读）。
+  它们都在**应用级路径**（不在版本目录里），所以面板"清理旧版本目录"的逻辑天然不会碰到它们；
+  每个都有 `assets[{name,arch,file,sha256,size}]`，`sha256` 是 64 位小写 hex（同 manifest 的形状约定）。
 - 发布件落 `dist/apps/zizvideo/`，`make publish` 走 mini 面板文件接口上传，**顶层索引最后传**，
   传完复验（索引 sha256/大小 + 线上可达 + `--version`）并清理镜像上的旧版本目录。
