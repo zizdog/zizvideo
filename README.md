@@ -3,7 +3,18 @@
 自托管的短视频 / 短剧应用：把你自己电脑上的视频目录扫进来，用浏览器上下滑着看。
 **装一次、选个目录、打开网页就能看。**
 
-## 一、安装（macOS）
+## 推荐：macOS 用户请用 ZizPanel 安装管理
+
+**如果你用 macOS，强烈建议让 [ZizPanel](https://github.com/zizdog/zizpanel) 来安装和管理 zizvideo。**
+
+- 面板会把一切都代劳：**完全磁盘访问授权**、媒体库、**更新**、卸载，都不用碰命令行。
+- 面板入口 👉 **<https://panel.zizdog.com:8888/>**（也可以在自己机器上装一份面板，用本机地址打开）
+- 面板本身怎么装、怎么用：[ZizPanel 仓库](https://github.com/zizdog/zizpanel)
+
+> 想让 zizvideo 由面板托管，就**不用往下看**了 —— 在面板「应用市场 → zizvideo」里装即可。
+> 下面的命令是**独立部署**（不装面板也能用），两种方式**二选一**。
+
+## 一、安装（独立部署，macOS）
 
 ```bash
 curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | bash
@@ -65,7 +76,7 @@ curl -fsSL https://mirror.zizdog.com:8888/apps/zizvideo/install-zizvideo.sh | ba
 - **打不开 / 提示端口被占用**：`7766` 被别的程序占用了（例如面板托管的 zizvideo）。
   **面板托管和独立部署只能选一个**；想两个一起用就换端口：安装时加 `--listen 127.0.0.1:7767`。
 - **面板托管还是独立部署**：二选一。面板里装的就让面板管（更新、卸载都在面板里）；
-  不想装面板就用本文第一条命令。
+  不想装面板就用下面「安装」那节的命令。
 - **某些视频只出声不出画**：这台浏览器解不了 HEVC，等后续版本的内置转码。
 - **走反向代理上传大文件失败**：把请求体上限放开（nginx：`client_max_body_size 0;`）。
 
