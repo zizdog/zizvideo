@@ -23,6 +23,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 
 # 官方文档（developer.fnnas.com 的 manifest 一节）列出的字段
@@ -55,6 +56,48 @@ def parse_manifest(path):
         seen[k] = no
         rows[k] = v.strip()
     return rows, problems
+
+
+def run_verify_scenario(verify_path, name, want_code, mutate):
+    """在临时目录里造一个"设备"跑 cmd/verify，校验退出码（0/3/1 的语义不能错）。"""
+    import shutil
+    import tempfile
+    problems = []
+    with tempfile.TemporaryDirectory() as td:
+        app, var = os.path.join(td, "app"), os.path.join(td, "var")
+        os.makedirs(os.path.join(app, "app", "bin"))
+        os.makedirs(os.path.join(app, "cmd"))
+        os.makedirs(os.path.join(var, "etc"))
+        os.makedirs(os.path.join(td, "media"))
+        shutil.copy(verify_path, os.path.join(app, "cmd", "verify"))
+        binpath = os.path.join(app, "app", "bin", "zizvideo")
+        with open(binpath, "w") as f:
+            f.write('#!/bin/sh\n[ "$1" = "--version" ] && { echo "zizvideo 9.9.9"; exit 0; }\n'
+                    '[ "$1" = "check-access" ] && { echo \'{"readable":true}\'; exit 0; }\nexit 0\n')
+        os.chmod(binpath, 0o755)
+        with open(os.path.join(app, "cmd", "main"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(app, "cmd", "main"), 0o755)
+        with open(os.path.join(var, "etc", "config.json"), "w") as f:
+            f.write('{"listen":"0.0.0.0:7799","data_dir":"%s","media_allow_roots":["%s"]}'
+                    % (var, os.path.join(td, "media")))
+        fakebin = os.path.join(td, "bin")
+        os.makedirs(fakebin)
+        code = {"503": "503", None: "200", "broken-bin": "200"}[mutate]
+        with open(os.path.join(fakebin, "curl"), "w") as f:
+            f.write("#!/bin/sh\nprintf %s\n" % code)
+        os.chmod(os.path.join(fakebin, "curl"), 0o755)
+        if mutate == "broken-bin":
+            os.chmod(binpath, 0o644)
+        env = dict(os.environ)
+        env.update({"TRIM_APPDEST": app, "TRIM_PKGVAR": var,
+                    "PATH": fakebin + os.pathsep + env.get("PATH", "")})
+        out = subprocess.run(["sh", os.path.join(app, "cmd", "verify")],
+                            capture_output=True, text=True, timeout=60, env=env)
+        if out.returncode != want_code:
+            problems.append("cmd/verify 在「%s」场景退出码 %d（应为 %d）：%s"
+                            % (name, out.returncode, want_code, (out.stdout or "").strip().splitlines()[-1:]))
+    return problems
 
 
 def main() -> int:
@@ -209,6 +252,22 @@ def main() -> int:
         got = struct.unpack(">II", data[16:24])[0]
         if got != want:
             problems.append("%s 是 %d×%d，应为 %d×%d（飞牛硬要求）" % (name, got, got, want, want))
+
+    # ⑨ 设备侧自检脚本 cmd/verify：必须在包里、能解析、且**三种退出码行为正确**
+    #    （0=全过 / 3=服务在跑但没就绪 / 1=有实打实的错 —— 判错会误导用户"该修还是该重启"）
+    vpath = os.path.join(pkg, "cmd", "verify")
+    if not os.path.isfile(vpath):
+        problems.append("缺 cmd/verify（设备侧只读自检脚本，随包上设备）")
+    else:
+        checks = locals().get("checks", 0)
+        rc = subprocess.run(["sh", "-n", vpath], capture_output=True, text=True).returncode
+        if rc != 0:
+            problems.append("cmd/verify 语法错（sh -n）")
+        for name, code_want, mutate in (
+                ("全过", 0, None),
+                ("只有 503", 3, "503"),
+                ("结构项也错", 1, "broken-bin")):
+            problems += run_verify_scenario(vpath, name, code_want, mutate)
 
     if problems:
         print("飞牛包目录有问题（%d 处）：" % len(problems))

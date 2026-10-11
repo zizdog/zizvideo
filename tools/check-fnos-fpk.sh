@@ -55,6 +55,8 @@ hooks="install_init install_callback upgrade_init upgrade_callback uninstall_ini
 missing_hooks=""
 for h in $hooks; do [ -e "$WORK/cmd/$h" ] || missing_hooks="$missing_hooks $h"; done
 [ -z "$missing_hooks" ] && ok "8 个生命周期钩子都在（fnOS 按**文件**调用）" || bad "缺钩子：$missing_hooks"
+# 设备侧只读自检脚本也要随包上去（用户在设备上不必另下脚本；少了它那条验收就只能靠手点）
+[ -e "$WORK/cmd/verify" ] && ok "cmd/verify（设备侧只读自检）也在包里" || bad "包里缺 cmd/verify（设备上没法一键自检）"
 
 hdr "manifest 与桌面入口（两份真源不能漂移）"
 MF="$WORK/manifest"

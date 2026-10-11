@@ -1,0 +1,126 @@
+#!/bin/sh
+# ============================================================================
+#  verify —— 飞牛设备上的**只读自检**（随 .fpk 一起装到设备上，不必另下脚本）
+#
+#  为什么要有它：装完 .fpk 之后，"到底能不能用"要逐条看（服务在跑吗、/readyz 每项过了吗、
+#  媒体根应用读得到吗、数据目录可写吗）—— 靠人手点容易漏。这个脚本把该验的**只读**跑一遍，
+#  并给出与 macOS `--verify` / `tools/verify-deploy.sh` **一致的退出码语义**：
+#    0 = 关键项全过；3 = **服务在跑但没就绪**；1 = 服务不可用/有 ✗；2 = 环境不对
+#
+#  它**不改任何东西**（不建文件、不重启服务、不停服务）。
+#  用法（设备上，root 或能读应用目录的用户）：
+#    sh /var/apps/zizvideo/cmd/verify            # 自动找应用目录
+#    sh /var/apps/zizvideo/cmd/verify /vol1/1000/videos   # 顺便验一个你想加的媒体根
+# ============================================================================
+set -u
+
+APP_DIR=""
+for d in "${TRIM_APPDEST:-}" /var/apps/zizvideo; do
+  [ -n "$d" ] && [ -d "$d" ] && APP_DIR="$d" && break
+done
+BIN="$APP_DIR/app/bin/zizvideo"
+PKGVAR="${TRIM_PKGVAR:-/var/apps/zizvideo/var}"
+CONF="$PKGVAR/etc/config.json"
+[ -f "$CONF" ] || CONF="$APP_DIR/etc/config.json"
+
+PORT="7799"
+if [ -f "$CONF" ]; then
+  p="$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"[^":]*:\([0-9][0-9]*\)".*/\1/p' "$CONF" | head -1)"
+  [ -n "$p" ] && PORT="$p"
+fi
+
+ok=0; bad=0; running_but_unready=0
+say() { printf '%s\n' "$*"; }
+pass() { ok=$((ok + 1)); say "  ✓ $*"; }
+fail() { bad=$((bad + 1)); say "  ✗ $*"; }
+
+say "== 应用目录"
+if [ -n "$APP_DIR" ]; then pass "应用目录：${APP_DIR}"; else fail "找不到应用目录（试 ${TRIM_APPDEST:-未设}/var/apps/zizvideo）"; fi
+
+say "== 二进制"
+if [ -x "$BIN" ]; then
+  v="$("$BIN" --version 2>&1 | head -1)"
+  case "$v" in *zizvideo*) pass "--version：${v}" ;; *) fail "--version 输出异常：${v}" ;; esac
+else
+  fail "二进制不可执行：${BIN}"
+fi
+
+say "== 配置"
+if [ -f "$CONF" ]; then
+  pass "配置存在：${CONF}（监听端口 ${PORT}）"
+  if [ -d "$PKGVAR" ] && [ -w "$PKGVAR" ]; then pass "数据目录可写：${PKGVAR}"; else fail "数据目录不可写：${PKGVAR}（应用无法建库）"; fi
+else
+  fail "没有配置文件（安装回调没跑成功？）：${CONF}"
+fi
+
+say "== 服务"
+st=0
+"$APP_DIR/cmd/main" status >/dev/null 2>&1 || st=$?
+case "$st" in
+  0) pass "服务在跑（cmd/main status = 0）" ;;
+  3) fail "服务没在跑（cmd/main status = 3）" ;;
+  *) fail "status 返回 ${st}（未知参数或环境问题）" ;;
+esac
+
+# 结构项（应用目录/二进制/配置/数据目录/服务）的失败数 —— 退出码判据要用它（见文件末尾）：
+# 必须在这里取，**不能**在媒体根之前取，否则会把 /readyz 那条失败也算成"结构问题"（我第一版就写错了，
+# 于是"只有 503"的场景被判成 1 而不是 3）。
+structural_bad="$bad"
+
+say "== 健康端点"
+get() { # 优先 curl，其次 busybox wget；都没有就如实说"测不了"
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -o "$1" -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/readyz" 2>/dev/null
+  elif command -v wget >/dev/null 2>&1; then
+    if wget -q -O "$1" --timeout=5 "http://127.0.0.1:${PORT}/readyz" 2>/dev/null; then printf '200'; else printf '000'; fi
+  else
+    printf 'noclient'
+  fi
+}
+code="$(get /tmp/zv-verify-readyz.json)"
+case "$code" in
+  200) pass "/readyz 200（就绪）" ;;
+  503) running_but_unready=1; fail "/readyz 503：**服务在跑但没就绪** —— 看下面每一行（媒体根/ffmpeg/磁盘），别急着重启" ;;
+  noclient) say "  · 设备上没有 curl/wget，跳过健康端点检查（这不等于没就绪）" ;;
+  000|*) fail "/readyz 无响应（服务没起来？端口不是 ${PORT}？）" ;;
+esac
+if [ -s /tmp/zv-verify-readyz.json ]; then
+  grep -o '"[a-z_]*":[^,}]*' /tmp/zv-verify-readyz.json 2>/dev/null | sed 's/^/  · /' | head -12
+fi
+rm -f /tmp/zv-verify-readyz.json
+
+say "== 媒体根（应用用户读不读得到）"
+roots=""
+if [ -f "$CONF" ]; then
+  roots="$(sed -n 's/.*"media_allow_roots"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' "$CONF" | tr ',' '\n' | tr -d '" ' | sed '/^$/d')"
+fi
+[ -n "${1:-}" ] && roots="$(printf '%s\n%s\n' "$roots" "$1" | sed '/^$/d')"
+if [ -z "$roots" ]; then
+  fail "配置里没有媒体根（去「应用设置」里授权目录，或放进共享目录 zizvideo/media）"
+else
+  for r in $roots; do
+    if [ ! -e "$r" ]; then
+      fail "目录不存在：${r}（挂盘了吗/路径写错了？）"
+    elif [ -x "$BIN" ] && "$BIN" check-access "$r" 2>/dev/null | grep -q '"readable":true'; then
+      pass "读得到：${r}"
+    else
+      fail "读不到：${r}（在「应用设置 → 授权目录」里给本应用授权，或放进共享目录 zizvideo/media）"
+    fi
+  done
+fi
+
+say ""
+say "== 结论：${ok} 项通过，${bad} 项失败"
+if [ "$bad" = "0" ]; then
+  say "设备侧自检通过。"
+  exit 0
+fi
+# 退出码 3 的判据（与 macOS `--verify` / tools/verify-deploy.sh 一致，且**有依据**）：
+#   服务确实在跑（status=0）**且** /readyz 回了 503 **且** 结构项（二进制/配置/数据目录/服务）一个都没错
+#   ⇒ 只有"没就绪"这一件事要修 ⇒ 3。其它任何情况都是 1（有实打实的 ✗ 要先修）。
+if [ "$running_but_unready" = "1" ] && [ "$structural_bad" = "0" ] && [ "$st" = "0" ]; then
+  say "**服务在跑但没就绪**（503 是「能修」，不是「坏了」）：按上面提示修，别重启服务。"
+  exit 3
+fi
+say "有失败项：先修上面每条 ✗（退出码 1）。"
+exit 1
