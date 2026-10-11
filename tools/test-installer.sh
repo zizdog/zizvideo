@@ -388,16 +388,23 @@ for f in manifest ICON.PNG ICON_256.PNG cmd/main config/privilege config/resourc
   [ -e "$FNOS/${f}" ] && ok "存在 ${f}" || bad "缺 ${f}（fnOS 判定包不完整）"
 done
 # manifest：键值格式（不是 JSON）+ 必需键 + 第三方来源 + 架构不是 all（我们带原生二进制）
-if awk -F= 'NF<2 || $1=="" {exit 1}' "$FNOS/manifest"; then
-  ok "manifest 是 key=value 格式（不是 JSON）"
+# manifest 与入口配置的静态校验合并到 tools/check-fnos-manifest.py（**取值**、**拼错的键**、
+# **重复键静默覆盖**、入口 port↔service_port、desktop_applaunchname 是否指向真入口 —— 这些
+# fnpack 都不查，本机又没有飞牛设备，只能静态查）
+if mout="$(python3 "$ROOT/tools/check-fnos-manifest.py" "$FNOS" 2>&1)"; then
+  ok "飞牛 manifest/入口通过静态校验：$(printf '%s' "$mout" | tail -1)"
 else
-  bad "manifest 有坏行（fnOS 的 manifest 不是 JSON，每行必须 key=value）"
+  bad "飞牛 manifest/入口有问题：$(printf '%s' "$mout" | grep '✗' | head -3 | tr '\n' ' ')"
 fi
-for k in appname version display_name desc source platform service_port desktop_applaunchname; do
-  grep -q "^${k}=" "$FNOS/manifest" && ok "manifest 有 ${k}" || bad "manifest 缺 ${k}"
-done
-grep -q '^source=thirdparty$' "$FNOS/manifest" && ok "source=thirdparty" || bad "source 必须是 thirdparty"
-grep -q '^platform=all$' "$FNOS/manifest" && bad "platform=all 但包里带原生二进制（应该 x86/arm）" || ok "platform 不是 all（带原生二进制时必须分架构）"
+# 反例：拼错的键（fnOS 会静默忽略）必须被报出来 —— 否则这个校验是摆设
+MBAD="$(mktemp -d)"; cp -R "$FNOS" "$MBAD/pkg"
+printf '\ndescripton=拼错的键\n' >>"$MBAD/pkg/manifest"
+if python3 "$ROOT/tools/check-fnos-manifest.py" "$MBAD/pkg" >/dev/null 2>&1; then
+  bad "manifest 里拼错的键（descripton）没被校验出来"
+else
+  ok "manifest 里拼错的键会被报出来（fnOS 自己会静默忽略）"
+fi
+rm -rf "$MBAD"
 # 权限：不许 root、必须 run-as=package
 if grep -q '"run-as"[[:space:]]*:[[:space:]]*"package"' "$FNOS/config/privilege"; then
   ok "config/privilege 用 run-as=package（最小权限）"
