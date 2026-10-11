@@ -740,14 +740,12 @@ fi
 # ---------------------------------------------------------------------------
 # Makefile 目标名不许与仓库里的**目录**同名（否则 make 判定"目标已存在"直接跳过配方 ——
 # 这坑我踩了两次：`fnos` 与 `docker`。与其记着，不如让门禁盯住。）
-printf '==> Makefile 目标名 vs 同名目录\n'
-clash="$(cd "$ROOT" && awk -F: '/^[a-zA-Z][a-zA-Z0-9_-]*:/{print $1}' Makefile | sort -u | while read -r t; do
-  [ -d "$ROOT/$t" ] && printf '%s ' "$t"
-done)"
-if [ -z "$clash" ]; then
-  ok "没有目标名与同名目录冲突"
+printf '==> 脚本卫生（bash 3.2 兼容 / $var 紧邻非 ASCII / 头部纯净 / 语法 / Makefile 目标名）\n'
+# 原来这是四个小节、六七条断言，合并成 tools/check-script-hygiene.py（可独立运行、带 --root 便于反例自测）
+if hyout="$(python3 "$ROOT/tools/check-script-hygiene.py" 2>&1)"; then
+  ok "脚本卫生通过：$(printf '%s' "$hyout" | tail -1)"
 else
-  bad "这些目标名与仓库里的目录同名（make 会跳过配方）：$clash"
+  bad "脚本卫生有问题：$(printf '%s' "$hyout" | grep '✗' | head -3 | tr '\n' ' ')"
 fi
 
 # ---------------------------------------------------------------------------
@@ -941,21 +939,7 @@ rm -rf "$VA"
 # 脚本开头的注释块里混进一行"代码"会**自我递归**（我这一轮真踩了：用法块里漏写一个 `#`，
 # 于是 `bash tools/verify-deploy.sh --no-service` 被当命令执行，脚本无限重启自己直到 fork 耗尽）。
 # 判据：从文件头到第一个 `set ` 之前，每一行都必须是注释或空行。
-printf '==> 脚本不许用 bash 4 专有语法（本机 /bin/bash 是 3.2，安装器就要在它上面跑）\n'
-b4=""
-for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
-  # 跳过本门禁自己：它必须把 mapfile/declare -A 这些**模式**当数据写在自己里面，否则没法检查别人
-  case "$sh" in *test-installer.sh) continue ;; esac
-  # mapfile/readarray/关联数组/大小写转换都是 bash 4+；安装器与自查脚本要能在 macOS 自带 3.2 上跑
-  # 跳过注释行：注释里提到 mapfile 是在说明"别用它"，不是违规
-  hit="$(grep -vE '^[[:space:]]*#' "$sh" 2>/dev/null | grep -nE 'mapfile|readarray|declare -A|declare -n|\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}' | head -1)"
-  [ -n "$hit" ] && b4="$b4 $(basename "$sh"):$hit"
-done
-if [ -z "$b4" ]; then
-  ok "没有 bash 4 专有语法（mapfile/readarray/关联数组/大小写转换）"
-else
-  bad "用了 bash 4 专有语法（3.2 下会报 command not found）：$b4"
-fi
+
 # preflight 的"发布件完整性"必须**真会抓缺失**（不是只列清单）：临时把 linux 产物挪走试一次
 RELVER_PF="$(sed -n 's/^VERSION[[:space:]]*?*=[[:space:]]*//p' "$ROOT/Makefile" | head -1)"
 PFBIN="$ROOT/dist/apps/zizvideo/$RELVER_PF/zizvideo_${RELVER_PF}_linux_amd64"
@@ -983,19 +967,6 @@ else
   bad "preflight.sh 传未知 --only 时崩了（很可能是 bash 3.2 下空数组展开的 unbound）"
 fi
 
-printf '==> 脚本头部注释块不许混进可执行行（防自我递归）\n'
-hdr_bad=""
-for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
-  st="$(grep -n '^set ' "$sh" 2>/dev/null | head -1 | cut -d: -f1)"
-  [ -n "$st" ] || continue
-  badline="$(head -n "$((st - 1))" "$sh" | sed -n '2,$p' | grep -nvE '^\s*(#|$)' | head -1)"
-  [ -n "$badline" ] && hdr_bad="$hdr_bad $(basename "$sh"):$badline"
-done
-if [ -z "$hdr_bad" ]; then
-  ok "所有脚本的头部注释块都只含注释/空行"
-else
-  bad "这些脚本头部混进了可执行行（可能自我递归）：$hdr_bad"
-fi
 
 printf '==> 部署自查脚本 + Linux 发行件静态性\n'
 VD="$ROOT/tools/verify-deploy.sh"
@@ -1515,24 +1486,7 @@ fi
 # bash 3.2 下报 `targetï…: unbound variable` —— bash 把全角括号的字节也吃进变量名了。
 # `set -u` 下直接炸，`set +u` 下会静默变成空串拼进消息。这类错一旦混进安装器就是"用户看到
 # 一句缺字的提示"或者"安装到一半退出"。**判据：变量后面紧跟非 ASCII 时一律写 `${var}`。**
-printf '==> shell 语法（含 tools/*.sh）+ `$var` 紧挨中文的坑\n'
-for sh in "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/*; do
-  [ -f "$sh" ] || continue
-  if bash -n "$sh" 2>"$SB/sh-err.log"; then
-    :
-  else
-    bad "bash -n 失败：${sh} —— $(tr '\n' ' ' < "$SB/sh-err.log")"
-  fi
-done
-# ⚠️ 用 LC_ALL=C + POSIX 字符类，**不能用 `grep -P`**：BSD grep 不支持 -P，只会报错、
-# 输出为空 ⇒ 门禁变成永远绿的摆设（我第一版就是这么写的，灵敏度一测就露了）。
-BAD_VAR="$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^[:print:][:space:]]' \
-  "$ROOT/install-zizvideo.sh" "$ROOT/install-zizvideo-linux.sh" "$ROOT"/tools/*.sh "$ROOT"/fnos/*/cmd/* 2>/dev/null | head -5)"
-if [ -z "$BAD_VAR" ]; then
-  ok "语法全过；没有 \`\$var\` 紧挨中文的写法（要写就写 \${var}）"
-else
-  bad "有变量紧挨非 ASCII 字符（macOS bash 会把它当变量名的一部分）：$BAD_VAR"
-fi
+
 
 # ---------------------------------------------------------------------------
 # 独立部署的目标平台必须能构建出来（这属于"安装器这条路走不走得通"的一部分）：
