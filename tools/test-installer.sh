@@ -348,6 +348,20 @@ fi
 grep -q "daemon-reload" "$LC_SYS" && ok "真装时调用了（假的）systemctl daemon-reload" || bad "没有 daemon-reload：$(cat "$LC_SYS")"
 if [ -f "$LROOT/systemd/zizvideo.service" ]; then
   ok "写了 systemd 单元"
+  # 静态校验单元文件：段名/指令白名单/**枚举值**/必填项/重复键（本机没有 systemd，跑不起来只能静查；
+  # 拼错一个值（ProtectSystem=fll）在真 NAS 上就是"服务起不来"，而"断言某几个键存在"发现不了）
+  if uout="$(python3 "$ROOT/tools/check-systemd-unit.py" "$LROOT/systemd/zizvideo.service" 2>&1)"; then
+    ok "systemd 单元通过静态校验：$(printf '%s' "$uout" | tail -1)"
+  else
+    bad "systemd 单元没通过静态校验：$(printf '%s' "$uout" | grep '✗' | head -3 | tr '\n' ' ')"
+  fi
+  # 反例：把枚举值改坏必须被报出来（否则这个校验就是摆设）
+  sed 's/^ProtectSystem=.*/ProtectSystem=fll/' "$LROOT/systemd/zizvideo.service" >"$LROOT/systemd/bad.service"
+  if python3 "$ROOT/tools/check-systemd-unit.py" "$LROOT/systemd/bad.service" >/dev/null 2>&1; then
+    bad "单元里 ProtectSystem=fll 这种拼错没被校验出来"
+  else
+    ok "枚举值拼错（ProtectSystem=fll）被校验出来"
+  fi
   grep -q "User=zizvideo" "$LROOT/systemd/zizvideo.service" && ok "单元指定了专用用户" || bad "单元没有 User="
   grep -q "Restart=always" "$LROOT/systemd/zizvideo.service" && ok "单元 Restart=always" || bad "单元没有 Restart=always"
   grep -q "ProtectSystem=full" "$LROOT/systemd/zizvideo.service" && ok "单元带 systemd 沙箱项" || bad "单元没有沙箱项"
