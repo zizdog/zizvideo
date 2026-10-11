@@ -752,26 +752,13 @@ fi
 
 # ---------------------------------------------------------------------------
 # 容器部署路径（docker/）：结构 + 入口脚本 + 没有 daemon 时必须如实失败
-printf '==> 容器部署（Dockerfile / compose / 入口脚本）\n'
-if [ -f "$ROOT/docker/Dockerfile" ]; then
-  ok "有 docker/Dockerfile"
-  grep -q '^FROM ' "$ROOT/docker/Dockerfile" && ok "Dockerfile 有 FROM" || bad "Dockerfile 没有 FROM"
-  grep -qE '^USER [^r]' "$ROOT/docker/Dockerfile" && ok "容器以非 root 用户运行" || bad "Dockerfile 没有非 root 的 USER"
-  grep -q '^VOLUME' "$ROOT/docker/Dockerfile" && ok "声明了 VOLUME（数据要挂出来）" || bad "Dockerfile 没有 VOLUME"
-  grep -q '^EXPOSE' "$ROOT/docker/Dockerfile" && ok "声明了 EXPOSE" || bad "Dockerfile 没有 EXPOSE"
-  grep -q 'COPY zizvideo' "$ROOT/docker/Dockerfile" && ok "用的是发行版里的静态二进制（不在镜像里编译）" || bad "Dockerfile 没拷贝 zizvideo"
+printf '==> 容器部署（Dockerfile / compose / 入口脚本：静态结构 + 入口脚本行为）\n'
+# 静态结构 + **入口脚本行为**（首次生成配置/不覆盖已有配置/过滤不存在的媒体根/忽略相对路径）
+# 合并到 tools/check-container-assets.py（自带反例：删掉 USER、或让它覆盖已有配置，都必须被报出来）
+if cout="$(python3 "$ROOT/tools/check-container-assets.py" 2>&1)"; then
+  ok "容器部署静态+行为校验通过：$(printf '%s' "$cout" | tail -1)"
 else
-  bad "缺 docker/Dockerfile"
-fi
-sh -n "$ROOT/docker/entrypoint.sh" && ok "entrypoint.sh 通过 sh -n" || bad "entrypoint.sh 语法错"
-if [ -f "$ROOT/docker/docker-compose.yml" ]; then
-  ok "有 docker-compose.yml"
-  for k in ZV_LISTEN ZV_DATA_DIR ZV_MEDIA_ROOTS; do
-    grep -q "$k" "$ROOT/docker/docker-compose.yml" && ok "compose 里给了 $k 环境变量" || bad "compose 缺 $k"
-  done
-  grep -q '/data' "$ROOT/docker/docker-compose.yml" && ok "compose 挂了数据卷" || bad "compose 没挂数据卷"
-else
-  bad "缺 docker/docker-compose.yml"
+  bad "容器部署有问题：$(printf '%s' "$cout" | grep '✗' | head -3 | tr '\n' ' ')"
 fi
 # 生成镜像的脚本：没有可用 daemon 时必须**如实失败**，不许假装构建好了
 if bash "$ROOT/tools/make-docker-image.sh" >/dev/null 2>&1; then
@@ -783,8 +770,6 @@ if bash "$ROOT/tools/make-docker-image.sh" >/dev/null 2>&1; then
 else
   ok "没有可用 docker daemon 时如实失败（不假装构建成功）"
 fi
-
-# ---------------------------------------------------------------------------
 # 文档 ↔ 实现一致性（文档腐烂是长期风险：命令改名/文件搬家/门禁条数写死后，文档开始骗人）
 # 具体检查放在 tools/check-docs.py 里 —— 用 python 写比在 bash 里塞 heredoc 靠谱
 # （我第一版就是在门禁里套 heredoc 做命令替换，直接把门禁语法搞坏了）
