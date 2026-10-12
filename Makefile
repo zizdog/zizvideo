@@ -3,7 +3,7 @@
 # 版本真源 = 下面这一行 + internal/api/api.go 的 Version 常量（两处必须一致，make check 会核对）。
 # 面板侧不要求跟着发版：它读镜像索引里的 latest，所以**只需**在本仓库发版。
 GO        ?= go
-VERSION   ?= 0.7.1-mvp
+VERSION   ?= 0.7.2-mvp
 ARCHS     ?= arm64              # 默认只发 arm64；要双架构：make release ARCHS="arm64 amd64"
 FPK_ARCH  ?= amd64              # 飞牛 .fpk 的架构（x86 设备居多）
 DOCKER_ARCH ?= amd64            # 容器镜像用的 linux 架构（在 arm 机器上跑就改 arm64）
