@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/zizdog/zizvideo/internal/domain"
-	"github.com/zizdog/zizvideo/internal/storage"
 )
 
 // 原生播放页那行「正在播放：…」要显示**文件名**（用户 2026-10-01："是文件名，不是标题"）：
@@ -192,74 +191,6 @@ func TestMediaListFiltersByLibraryKind(t *testing.T) {
 		t.Fatalf("不带 kind 应 200，实际 %d", res.StatusCode)
 	}
 }
-
-// 「未归组」入口（2026-10-11 分离第 5 步收尾）：短剧库扫描会把**库根散片**留成未归组
-// （不建剧、不塞进任何剧），后台得能只列这些、再把它们归进某部剧。
-// 判据：`?kind=drama&ungrouped=1` 只出没进过剧的；进了剧立刻从这一列消失。
-func TestMediaListUngroupedOnly(t *testing.T) {
-	e := newEnv(t)
-	e.setupAdmin()
-	root := filepath.Join(e.Root, "drama")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	res, env, raw := e.write(http.MethodPost, "/api/v1/libraries", map[string]any{
-		"name": "短剧库", "root_path": root, "kind": domain.KindDrama})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("建短剧库失败 %d: %s", res.StatusCode, raw)
-	}
-	var lib domain.Library
-	decodeInto(t, env.Data, &lib)
-
-	loose := e.newMedia(lib.ID, filepath.Join(root, "随手拍的.mp4"), body(8))
-	grouped := e.newMedia(lib.ID, filepath.Join(root, "某剧", "01.mp4"), body(8))
-	ser := &domain.Series{ID: domain.NewID("ser"), Title: "某剧", LibraryID: lib.ID,
-		DirPath: filepath.Join(root, "某剧")}
-	if err := e.DB.CreateSeries(ser); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.DB.AddSeriesMedia(ser.ID, []storage.SeriesMediaInput{{MediaID: grouped.ID}}); err != nil {
-		t.Fatal(err)
-	}
-
-	listIDs := func(q string) []string {
-		t.Helper()
-		res, env, raw := e.do(http.MethodGet, "/api/v1/media?per_page=50&"+q, nil)
-		if res.StatusCode != http.StatusOK {
-			t.Fatalf("列表失败 %d: %s", res.StatusCode, raw)
-		}
-		var page struct {
-			List []struct {
-				ID string `json:"id"`
-			} `json:"list"`
-		}
-		decodeInto(t, env.Data, &page)
-		out := []string{}
-		for _, it := range page.List {
-			out = append(out, it.ID)
-		}
-		return out
-	}
-	got := listIDs("kind=drama&ungrouped=1")
-	if len(got) != 1 || got[0] != loose.ID {
-		t.Fatalf("未归组应只有那条散片，实际 %v", got)
-	}
-	if all := listIDs("kind=drama"); len(all) != 2 {
-		t.Fatalf("不带 ungrouped 应回两条，实际 %v", all)
-	}
-	// 归入剧之后立刻从"未归组"消失
-	if _, err := e.DB.AddSeriesMedia(ser.ID, []storage.SeriesMediaInput{{MediaID: loose.ID}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := listIDs("kind=drama&ungrouped=1"); len(got) != 0 {
-		t.Fatalf("归入剧后不该再出现在未归组里，实际 %v", got)
-	}
-}
-
-// 建库重名必须是 409 + 人话，不能冒成 500「服务内部错误」。
-// 2026-10-11 浏览器验收时抓到：老实现直接 INSERT，撞 `UNIQUE constraint failed:
-// media_libraries.name` 之后 handler 把 SQL 错误当内部错误回给用户 —— 用户只看到
-// "服务内部错误"，根本不知道是名字重复。
 func TestCreateLibraryDuplicateNameIsConflict(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()

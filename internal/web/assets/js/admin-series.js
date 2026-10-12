@@ -31,6 +31,32 @@ export function mountSeriesTab(root) {
   const detectNote = el("div", { class: "banner", hidden: true, dataset: { role: "series-detect-note" } });
   const { table, body } = gridOf(["标题", "集数", "简介", "操作"]);
 
+  // ── 剧场集合（用户 2026-10-11 定稿）：剧场自己的容器，一个集合 = 一个目录；
+  //    集合里每个一级子目录 = 一部剧。它**不出现在「媒体库」**，只在这个版块里管理。
+  const collectionSelect = el("select", { class: "input", dataset: { role: "theater-collection" } });
+  const collectionNote = el("div", { class: "muted small-note",
+    text: "剧场集合是剧场自己的容器（一个目录）：集合里每个一级子目录 = 一部剧。它不会出现在「媒体库」里，短视频扫描也不会碰它。" });
+  const collName = input({ placeholder: "剧场集合名称", required: true });
+  const collPath = input({ placeholder: "目录（绝对路径，例如 /Volumes/Data/dramas）", required: true });
+  const collSubmit = el("button", { class: "btn primary", type: "submit", text: "建立" });
+  const collForm = el("form", { class: "panel", hidden: true, dataset: { role: "theater-create" } },
+    field("名称", collName), field("目录", collPath), el("div", { class: "actions" }, collSubmit));
+  const collToggle = btn("＋ 新建剧场集合", () => {
+    collForm.hidden = !collForm.hidden;
+    if (!collForm.hidden) collName.focus();
+  }, "primary");
+  const collScan = btn("扫描此集合", async () => {
+    const cur = currentCollection();
+    if (!cur) { setBanner(note, "先在上面选一个剧场集合"); return; }
+    setBanner(note, "");
+    try {
+      await api.request("POST", "/api/v1/libraries/" + encodeURIComponent(cur.id) + "/scan", {});
+      setBanner(note, "已开始扫描「" + (cur.name || "") + "」——在「任务中心」看进度");
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "扫描失败");
+    }
+  });
+
   const titleInput = input({ placeholder: "剧场标题", required: true });
   const descInput = input({ placeholder: "简介（可选）" });
   const submit = el("button", { class: "btn primary", type: "submit", text: "新建" });
@@ -41,7 +67,10 @@ export function mountSeriesTab(root) {
     if (!form.hidden) titleInput.focus();
   }, "primary");
 
-  root.append(note, detectNote, form,
+  root.append(note, detectNote, collForm,
+    el("div", { class: "row" }, collectionSelect, collToggle, collScan),
+    collectionNote,
+    form,
     el("div", { class: "row" },
       createToggle,
       btn("新建剧场并上传", () => uploadNewSeries(load)),
@@ -54,9 +83,10 @@ export function mountSeriesTab(root) {
     setBanner(note, "");
     submit.disabled = true;
     try {
-      await api.request("POST", "/api/v1/admin/series", {
-        title: titleInput.value.trim(), description: descInput.value.trim(),
-      });
+      const cur = currentCollection();
+      const body = { title: titleInput.value.trim(), description: descInput.value.trim() };
+      if (cur) body.library_id = cur.id;
+      await api.request("POST", "/api/v1/admin/series", body);
       titleInput.value = "";
       descInput.value = "";
       form.hidden = true;
@@ -67,6 +97,34 @@ export function mountSeriesTab(root) {
       submit.disabled = false;
     }
   });
+
+  collForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setBanner(note, "");
+    collSubmit.disabled = true;
+    try {
+      const created = await api.request("POST", "/api/v1/admin/theater-collections", {
+        name: collName.value.trim(), root_path: collPath.value.trim(),
+      });
+      collName.value = "";
+      collPath.value = "";
+      collForm.hidden = true;
+      collectionSelect.value = String((created && created.id) || "");
+      await load();
+    } catch (err) {
+      setBanner(note, err && err.message ? err.message : "建立剧场集合失败");
+    } finally {
+      collSubmit.disabled = false;
+    }
+  });
+
+  function currentCollection() {
+    if (!collectionSelect.value) return null;
+    for (const c of collections) {
+      if (String(c.id) === String(collectionSelect.value)) return c;
+    }
+    return null;
+  }
 
   function seriesRow(item) {
     const actions = el("div", { class: "actions" },
@@ -102,24 +160,40 @@ export function mountSeriesTab(root) {
     clear(body);
     body.append(el("tr", null, el("td", { class: "empty", colspan: "4", text: "加载中…" })));
     let list = [];
+    const keep = collectionSelect.value;
     try {
-      const data = await api.request("GET", "/api/v1/series");
-      list = asArray(data && data.list);
+      const results = await Promise.all([
+        api.request("GET", "/api/v1/series"),
+        api.theaterCollections(),
+      ]);
+      list = asArray(results[0] && results[0].list);
+      collections = asArray(results[1] && results[1].list);
+      libraries = collections; // 兼容旧引用（来源库名等）
     } catch (err) {
       clear(body);
       setBanner(note, err && err.message ? err.message : "加载失败");
       return;
     }
+    // 集合下拉：全部 + 每个集合
+    clear(collectionSelect);
+    collectionSelect.append(el("option", { value: "", text: "全部剧场集合" }));
+    for (const c of collections) {
+      collectionSelect.append(el("option", { value: String(c.id), text: (c.name || String(c.id)) }));
+    }
+    collectionSelect.value = keep && collections.some((c) => String(c.id) === String(keep)) ? keep : "";
+    const cur = currentCollection();
+    const shown = cur ? list.filter((it) => String(it.library_id || "") === String(cur.id)) : list;
     clear(body);
-    if (!list.length) {
-      body.append(el("tr", null, el("td", { class: "empty", colspan: "4", text: "还没有剧场" })));
+    if (!shown.length) {
+      body.append(el("tr", null, el("td", { class: "empty", colspan: "4",
+        text: cur ? "这个集合里还没有剧：用上面的「＋ 新建剧场」或「按子目录批量建剧场」" : "还没有剧场" })));
       return;
     }
-    for (const item of list) body.append(seriesRow(item));
+    for (const item of shown) body.append(seriesRow(item));
   }
 
-  // ── 未归组区块：列出来源库名要库表、内联下拉要剧表，一次并发拿齐。
-  let libraries = [];
+  let libraries = [];   // 兼容旧引用；实际保存的是剧场集合
+  let collections = [];
   let allSeries = [];
 
   function findLibrary(id) {

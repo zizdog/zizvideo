@@ -42,8 +42,7 @@ export function mountLibraries(root) {
   // 库类型（用户 2026-10-10 的 Jellyfin 式模型）：创建时选定，决定扫描规则、归组方式与
   // 后台归属 —— 短视频库（散片，一条视频一个条目）/ 短剧库（库根一级目录=一部剧）。
   const kindSelect = el("select", { class: "input", dataset: { role: "library-kind" } },
-    el("option", { value: "short", text: "短视频库（散片）" }),
-    el("option", { value: "drama", text: "短剧库（目录=一部剧）" }));
+    el("option", { value: "short", text: "短视频库" }));
   const kindNote = el("div", { class: "muted small-note",
     text: "短视频库：一条视频就是一个条目，首页刷它；短剧库：库根下每个目录算一部剧，只进「剧场」，首页永不出现。" });
   const recursive = el("input", { type: "checkbox", checked: true });
@@ -120,7 +119,7 @@ export function mountLibraries(root) {
       recursive.checked = !!library.recursive;
       enabled.checked = !!library.enabled;
       ignoreInput.value = Array.isArray(library.ignore_rules) ? library.ignore_rules.join(",") : "";
-      kindSelect.value = library.kind === "drama" ? "drama" : "short";
+      kindSelect.value = "short";
       submit.textContent = "保存";
       cancel.hidden = false;
     } else {

@@ -279,6 +279,17 @@ func (s *Scheduler) beginRound(ctx context.Context, trigger string) (*roundState
 		st.reasons = append(st.reasons, "没有启用的媒体库，跳过")
 		return st, nil
 	}
+	// 定时扫描**只覆盖短视频库**：剧场集合（kind=drama）在自己的版块里按需扫描，
+	// 两个域的扫描入口完全分开（用户 2026-10-11："扫描完全分开"）。
+	short := make([]domain.Library, 0, len(libs))
+	for _, lib := range libs {
+		if lib.Kind == domain.KindDrama {
+			continue
+		}
+		short = append(short, lib)
+	}
+	libs = short
+	st.run.Libraries = len(libs)
 	for _, lib := range libs {
 		if !RootReadable(lib.RootPath) {
 			st.run.Skipped++
