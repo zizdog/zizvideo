@@ -88,6 +88,7 @@ echo fake-jpeg > "$out"
 `)
 
 	cfg := config.Default()
+	cfg.UploadDiskFloorBytes = 0 // 测试不设磁盘线：否则宿主机磁盘一紧张就红（与本功能无关）
 	cfg.DataDir = dataDir
 	cfg.DatabasePath = filepath.Join(dataDir, "zizvideo.db")
 	cfg.MediaAllowRoots = []string{root}
@@ -361,9 +362,20 @@ func filterAll() storage.MediaFilter {
 }
 
 // newLibrary inserts a library row directly; root must be inside an allow root.
+// newLibrary 建一个**短视频**库（产品的默认类型，与 DB 默认值一致）。
 func (e *env) newLibrary(name, root string) *domain.Library {
+	return e.newLibraryOfKind(name, root, domain.KindShort)
+}
+
+// newDramaLibrary 建一个**剧场库**（短剧）。剧场自带库：测剧场相关的流程要用它，
+// 否则自动建库逻辑会再建一个，断言就会对不上（用户 2026-10-11：两类库完全独立）。
+func (e *env) newDramaLibrary(name, root string) *domain.Library {
+	return e.newLibraryOfKind(name, root, domain.KindDrama)
+}
+
+func (e *env) newLibraryOfKind(name, root, kind string) *domain.Library {
 	e.t.Helper()
-	lib := &domain.Library{ID: domain.NewID("lib"), Name: name, RootPath: root,
+	lib := &domain.Library{ID: domain.NewID("lib"), Name: name, Kind: kind, RootPath: root,
 		Recursive: true, Enabled: true, IgnoreRules: []string{}}
 	if err := e.DB.CreateLibrary(lib); err != nil {
 		e.t.Fatal(err)

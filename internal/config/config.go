@@ -15,20 +15,24 @@ import (
 
 // Config is the whole runtime configuration.
 type Config struct {
-	Listen             string   `json:"listen"`
-	DataDir            string   `json:"data_dir"`
-	DatabasePath       string   `json:"database_path"`
-	MediaAllowRoots    []string `json:"media_allow_roots"`
-	MediaExtensions    []string `json:"media_extensions"`
-	ScanWorkers        int      `json:"scan_workers"`
-	ScanDeleteRatio    float64  `json:"scan_delete_threshold_ratio"`
-	ScanDeleteCount    int      `json:"scan_delete_threshold_count"`
-	ScanRetryBackoffMS []int    `json:"scan_retry_backoff_ms"`
-	ProbeTimeoutSec    int      `json:"probe_timeout_seconds"`
-	CoverQuality       int      `json:"cover_jpeg_quality"`
-	FFmpegBin          string   `json:"ffmpeg_bin"`
-	FFprobeBin         string   `json:"ffprobe_bin"`
-	LogLevel           string   `json:"log_level"`
+	Listen          string   `json:"listen"`
+	DataDir         string   `json:"data_dir"`
+	DatabasePath    string   `json:"database_path"`
+	MediaAllowRoots []string `json:"media_allow_roots"`
+	MediaExtensions []string `json:"media_extensions"`
+	ScanWorkers     int      `json:"scan_workers"`
+	// UploadDiskFloorBytes 是"写入前必须留出的磁盘余量"（字节）。0 = 不设线。
+	// 为什么可配：写死 20 GiB 会让"测试依赖宿主机剩余空间"（本机磁盘一紧张，单测就红），
+	// 也不会照顾小盘用户（用户 2026-10-11：不留历史包袱、可以重新设计）。
+	UploadDiskFloorBytes int64   `json:"upload_disk_floor_bytes"`
+	ScanDeleteRatio      float64 `json:"scan_delete_threshold_ratio"`
+	ScanDeleteCount      int     `json:"scan_delete_threshold_count"`
+	ScanRetryBackoffMS   []int   `json:"scan_retry_backoff_ms"`
+	ProbeTimeoutSec      int     `json:"probe_timeout_seconds"`
+	CoverQuality         int     `json:"cover_jpeg_quality"`
+	FFmpegBin            string  `json:"ffmpeg_bin"`
+	FFprobeBin           string  `json:"ffprobe_bin"`
+	LogLevel             string  `json:"log_level"`
 	// AssetsDir 只在调试时用（ZV_ASSETS_DIR）：设了就从磁盘读前端，改 CSS 刷新即可，
 	// 不用重新 go build（前端是 go:embed 的，正常路径必须重建才生效）。空 = 走内嵌。
 	AssetsDir string `json:"assets_dir"`
@@ -61,26 +65,27 @@ func Default() *Config {
 	// 旧默认（~/Library/Application Support/zizvideo）由安装器/迁移工具负责搬过来，见 tools/migrate-data-dir.sh。
 	dataDir := filepath.Join(home, "zizvideo")
 	return &Config{
-		Listen:             "127.0.0.1:7766",
-		DataDir:            dataDir,
-		DatabasePath:       filepath.Join(dataDir, "zizvideo.db"),
-		MediaAllowRoots:    []string{filepath.Join(home, "Movies")},
-		MediaExtensions:    []string{"mp4", "mov", "m4v", "mkv", "webm", "ts", "mts", "avi", "flv", "hevc"},
-		ScanWorkers:        4,
-		ScanDeleteRatio:    0.10,
-		ScanDeleteCount:    50,
-		ScanRetryBackoffMS: []int{1000, 4000, 16000},
-		ProbeTimeoutSec:    30,
-		CoverQuality:       3,
-		FFmpegBin:          "ffmpeg",
-		FFprobeBin:         "ffprobe",
-		LogLevel:           "info",
-		SessionTTLHours:    336,
-		LockoutThreshold:   5,
-		LockoutWindowMin:   15,
-		UploadMaxFileMB:    8192,
-		AllowRegister:      false,
-		LoudnessNormalize:  true,
+		Listen:               "127.0.0.1:7766",
+		DataDir:              dataDir,
+		DatabasePath:         filepath.Join(dataDir, "zizvideo.db"),
+		MediaAllowRoots:      []string{filepath.Join(home, "Movies")},
+		MediaExtensions:      []string{"mp4", "mov", "m4v", "mkv", "webm", "ts", "mts", "avi", "flv", "hevc"},
+		ScanWorkers:          4,
+		UploadDiskFloorBytes: 20 << 30, // 20 GiB
+		ScanDeleteRatio:      0.10,
+		ScanDeleteCount:      50,
+		ScanRetryBackoffMS:   []int{1000, 4000, 16000},
+		ProbeTimeoutSec:      30,
+		CoverQuality:         3,
+		FFmpegBin:            "ffmpeg",
+		FFprobeBin:           "ffprobe",
+		LogLevel:             "info",
+		SessionTTLHours:      336,
+		LockoutThreshold:     5,
+		LockoutWindowMin:     15,
+		UploadMaxFileMB:      8192,
+		AllowRegister:        false,
+		LoudnessNormalize:    true,
 	}
 }
 
@@ -133,6 +138,7 @@ func applyEnv(c *Config) {
 	setStr(&c.AssetsDir, "ZV_ASSETS_DIR")
 	setStr(&c.UploadInboxDir, "ZV_UPLOAD_INBOX_DIR")
 	setInt(&c.ScanWorkers, "ZV_SCAN_WORKERS")
+	setInt64(&c.UploadDiskFloorBytes, "ZV_UPLOAD_DISK_FLOOR_BYTES")
 	setInt(&c.ProbeTimeoutSec, "ZV_PROBE_TIMEOUT_SECONDS")
 	setBool(&c.LoudnessNormalize, "ZV_LOUDNESS_NORMALIZE")
 	setInt(&c.LockoutThreshold, "ZV_LOCKOUT_THRESHOLD")
@@ -163,6 +169,15 @@ func setStr(dst *string, key string) {
 func setInt(dst *int, key string) {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			*dst = n
+		}
+	}
+}
+
+// setInt64 与 setInt 同口径，但用于 int64（例如磁盘余量，可能要几十 GiB）。
+func setInt64(dst *int64, key string) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			*dst = n
 		}
 	}
@@ -221,6 +236,9 @@ func pathWithin(p, base string) bool {
 func (c *Config) Validate() error {
 	if c.Listen == "" {
 		return fmt.Errorf("listen 不能为空")
+	}
+	if c.UploadDiskFloorBytes < 0 {
+		return fmt.Errorf("upload_disk_floor_bytes 不能为负（0 = 不设线）：%d", c.UploadDiskFloorBytes)
 	}
 	if c.ScanWorkers < 1 || c.ScanWorkers > 16 {
 		return fmt.Errorf("scan_workers 必须在 1-16 之间")

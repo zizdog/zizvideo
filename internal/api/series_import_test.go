@@ -1,10 +1,10 @@
 package api_test
 
 import (
+	"github.com/zizdog/zizvideo/internal/domain"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -143,7 +143,7 @@ func TestSeriesDirImportRejectsOutsideAllowRoot(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	libRoot := filepath.Join(e.Root, "剧集")
-	e.newLibrary("剧集库", libRoot)
+	e.newDramaLibrary("剧集库", libRoot)
 	series := e.createSeries("庆余年")
 
 	outside := filepath.Join(e.Base, "outside")
@@ -165,20 +165,40 @@ func TestSeriesDirImportRejectsOutsideAllowRoot(t *testing.T) {
 	}
 }
 
-// 负向对照：允许根内但不在任何媒体库内的目录要如实拒绝（没有库可挂媒体记录）。
-func TestSeriesDirImportRequiresLibrary(t *testing.T) {
+// 剧场**自带库**：目录不在任何媒体库内时，自动为它建一个 drama 库 —— 不再报
+// "该目录不在任何媒体库内：请先在后台建库指向它"（用户 2026-10-11：剧场与短视频的库完全独立）。
+func TestSeriesDirImportAutoCreatesDramaLibrary(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	dir := filepath.Join(e.Root, "无库目录")
 	putFile(t, filepath.Join(dir, "S01E01.mp4"))
 	series := e.createSeries("庆余年")
+
+	if before, err := e.DB.ListLibraries(); err != nil || len(before) != 0 {
+		t.Fatalf("前置条件：此刻不该有任何媒体库（err=%v, n=%d）", err, len(before))
+	}
 	res, _, raw := e.write(http.MethodPost, "/api/v1/admin/series/"+series.ID+"/import-dir/preview",
 		map[string]any{"path": dir})
-	if res.StatusCode != http.StatusConflict {
-		t.Fatalf("无库目录状态 = %d，期望 409: %s", res.StatusCode, raw)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("无库目录应当自动建库并成功，得到 %d: %s", res.StatusCode, raw)
 	}
-	if !strings.Contains(string(raw), "媒体库") {
-		t.Fatalf("拒绝理由要说清「没有媒体库」: %s", raw)
+	libs, err := e.DB.ListLibraries()
+	if err != nil || len(libs) != 1 {
+		t.Fatalf("应当自动建立 1 个剧场库，得到 %d 个（err=%v）", len(libs), err)
+	}
+	if libs[0].Kind != domain.KindDrama {
+		t.Fatalf("自动建的库类型 = %q，期望 %q（剧场库）", libs[0].Kind, domain.KindDrama)
+	}
+	if filepath.Clean(libs[0].RootPath) != filepath.Clean(dir) {
+		t.Fatalf("自动建的库根 = %q，期望 %q", libs[0].RootPath, dir)
+	}
+	// 幂等：同一个目录再来一次不该又建一个库。
+	if res2, _, raw2 := e.write(http.MethodPost, "/api/v1/admin/series/"+series.ID+"/import-dir/preview",
+		map[string]any{"path": dir}); res2.StatusCode != http.StatusOK {
+		t.Fatalf("第二次预览应仍成功，得到 %d: %s", res2.StatusCode, raw2)
+	}
+	if libs2, _ := e.DB.ListLibraries(); len(libs2) != 1 {
+		t.Fatalf("重复预览不该重复建库，现在 %d 个", len(libs2))
 	}
 }
 
@@ -187,7 +207,7 @@ func TestSeriesDirsBatchJobAndRerun(t *testing.T) {
 	e := newEnv(t)
 	e.setupAdmin()
 	libRoot := filepath.Join(e.Root, "剧集")
-	e.newLibrary("剧集库", libRoot)
+	e.newDramaLibrary("剧集库", libRoot)
 	for _, name := range []string{"S01E01.mp4", "S01E02.mp4", "S01E03.mkv"} {
 		putFile(t, filepath.Join(libRoot, "庆余年", name))
 	}

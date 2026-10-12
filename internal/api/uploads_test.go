@@ -114,7 +114,7 @@ func TestUploadToLibraryOnlyRegistersMedia(t *testing.T) {
 	if err := os.MkdirAll(libRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	lib := e.newLibrary("上传库", libRoot)
+	lib := e.newDramaLibrary("上传库", libRoot)
 
 	start := e.uploadStart(t, map[string]any{
 		"library_id": lib.ID,
@@ -147,7 +147,7 @@ func TestUploadToSeriesDerivesDirAndOrdersEpisodes(t *testing.T) {
 	if err := os.MkdirAll(libRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	lib := e.newLibrary("上传库", libRoot)
+	lib := e.newDramaLibrary("上传库", libRoot)
 	series := e.createSeries("庆余年")
 
 	start := e.uploadStart(t, map[string]any{
@@ -370,7 +370,7 @@ func TestUploadSameNamePolicyAndIdempotent(t *testing.T) {
 	if err := os.MkdirAll(libRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	lib := e.newLibrary("上传库", libRoot)
+	lib := e.newDramaLibrary("上传库", libRoot)
 	series := e.createSeries("庆余年")
 
 	body := func(overwrite bool) map[string]any {

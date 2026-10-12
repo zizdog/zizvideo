@@ -85,10 +85,11 @@ func (s *Server) HandleUGCStart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, domain.New("UPLOAD_STATFS_FAILED", "无法读取磁盘剩余空间："+ferr.Error(), 500))
 		return
 	}
-	if free-req.Size < ugcMinFreeBytes {
+	floor := s.Cfg.UploadDiskFloorBytes
+	if floor > 0 && free-req.Size < floor {
 		s.fail(w, r, domain.New("UPLOAD_DISK_FLOOR",
 			fmt.Sprintf("磁盘剩余空间不足（服务器保留 %s 余量，当前可用 %s）",
-				humanBytes(ugcMinFreeBytes), humanBytes(free)), 409))
+				humanBytes(floor), humanBytes(free)), 409))
 		return
 	}
 	path, perr := s.inboxPath(u.ID, name)

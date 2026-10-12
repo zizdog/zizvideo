@@ -208,6 +208,22 @@ func (s *Scanner) run(ctx context.Context, task *domain.ScanTask, lib *domain.Li
 	return res
 }
 
+// otherLibraryRoots 返回"别的库的根"（干净路径），供最深库优先判断。
+func (s *Scanner) otherLibraryRoots(selfID string) []string {
+	libs, err := s.DB.ListLibraries()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(libs))
+	for i := range libs {
+		if libs[i].ID == selfID {
+			continue
+		}
+		out = append(out, filepath.Clean(libs[i].RootPath))
+	}
+	return out
+}
+
 // enumerate collects media candidates, applying ignore rules and the extension
 // whitelist. Symlinks are rejected by default.
 //
@@ -219,6 +235,10 @@ func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEnt
 	interrupted := false
 	unreadable := 0
 	root := lib.RootPath
+	// **最深库优先**：别的库的根（及其子树）归那个库，本库不重复登记。
+	// 起因：剧场自带库后，剧场目录可能落在短视频库的树里；不跳过就会出现"同一批文件既在
+	// 短视频库又在剧场库"（进 feed + 重复登记）。用户 2026-10-11："两边完全独立"。
+	otherRoots := s.otherLibraryRoots(lib.ID)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
@@ -254,6 +274,13 @@ func (s *Scanner) enumerate(ctx context.Context, lib *domain.Library) ([]fileEnt
 		if d.IsDir() {
 			if path != root && !lib.Recursive {
 				return filepath.SkipDir
+			}
+			if path != root {
+				for _, other := range otherRoots {
+					if path == other || strings.HasPrefix(path, other+string(filepath.Separator)) {
+						return filepath.SkipDir // 归更深的那个库
+					}
+				}
 			}
 			return nil
 		}

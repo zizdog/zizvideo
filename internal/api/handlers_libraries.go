@@ -86,6 +86,10 @@ func (s *Server) HandleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// 新建库接管自己的子树：把别的库（更浅的）在它下面的旧记录摘掉，保证一个文件只属于一个库。
+	if _, derr := s.DB.DetachMediaUnderPath(lib.ID, lib.RootPath); derr != nil {
+		s.Log.Warn("新建库后整理旧记录失败", "library_id", lib.ID, "error", derr.Error())
+	}
 	s.audit(r, "library.create", "library:"+lib.ID, true, "")
 	s.AutoScanChanged()
 	respond(w, http.StatusCreated, lib, nil)

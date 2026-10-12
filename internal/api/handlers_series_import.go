@@ -16,8 +16,9 @@ import (
 	"github.com/zizdog/zizvideo/internal/storage"
 )
 
-// 按目录建剧场：只遍历用户选中的目录，集号识别走 internal/detect，
-// 不在任何媒体库内的目录、超限目录一律如实拒绝（A 单剧场 / B 批量）。
+// 按目录建剧场：只遍历用户选中的目录，集号识别走 internal/detect。
+// 目录**不在任何剧场库内时会自动为它建一个 drama 库**（剧场与短视频的库完全独立，用户 2026-10-11）；
+// 允许根之外、超限目录仍然如实拒绝（A 单剧场 / B 批量）。
 
 const (
 	dirImportMaxFiles = 5000 // A：单目录上限
@@ -49,6 +50,56 @@ func (r dirImportReq) walkDepth() int {
 
 func (s *Server) extAllowed(ext string) bool { return s.Cfg.ExtAllowed(ext) }
 
+// libraryNameTaken 名字是否已被占用（LibraryByName 找不到时返回 (nil, nil)）。
+func (s *Server) libraryNameTaken(name string) bool {
+	lib, err := s.DB.LibraryByName(name)
+	return err == nil && lib != nil
+}
+
+// ensureDramaLibrary 返回"这个目录所属的**剧场库**"：
+//   - 已经落在某个 drama 库里 ⇒ 直接用它（同一剧场库下可以有很多剧场）；
+//   - 否则**自动建一个** drama 库、根就是用户选中的这个目录。
+//
+// 为什么这样（用户 2026-10-11）：剧场与短视频的媒体库应当**完全独立**，剧场自带自己的库；
+// 老实现要求"目录必须已在某个媒体库里"，于是"直接建剧场"会报
+// "该目录不在任何媒体库内：请先在后台建库指向它" —— 那是错误的结果。
+// 允许根校验仍在前面拦着（安全边界不变），这里只管"剧场库不存在就建一个"。
+func (s *Server) ensureDramaLibrary(dir string) (*domain.Library, error) {
+	clean := filepath.Clean(dir)
+	if lib := s.libraryForDir(clean); lib != nil && lib.Kind == domain.KindDrama {
+		return lib, nil
+	}
+	base := filepath.Base(clean)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "剧场"
+	}
+	name := base
+	for i := 2; s.libraryNameTaken(name); i++ {
+		if i > 99 {
+			return nil, domain.New("SERIES_LIBRARY_NAME", "自动为剧场建立媒体库失败：同名库太多，请手动改名", 500)
+		}
+		name = fmt.Sprintf("%s (%d)", base, i)
+	}
+	lib := &domain.Library{
+		ID: domain.NewID("lib"), Name: name, Kind: domain.KindDrama,
+		RootPath: clean, Recursive: true, Enabled: true, IgnoreRules: []string{},
+	}
+	if err := s.DB.CreateLibrary(lib); err != nil {
+		return nil, domain.New("SERIES_LIBRARY_CREATE",
+			"自动为剧场建立媒体库失败："+err.Error(), 500)
+	}
+	// 这块子树现在归剧场库：把更浅的库（例如短视频库）在它下面的旧记录摘掉，
+	// 保证"一个文件只属于一个库"（否则同一批文件会既在这里、又在短视频库里）。
+	if n, derr := s.DB.DetachMediaUnderPath(lib.ID, lib.RootPath); derr != nil {
+		return nil, domain.New("SERIES_LIBRARY_DETACH",
+			"为剧场建立媒体库后整理旧记录失败："+derr.Error(), 500)
+	} else if n > 0 {
+		s.Log.Info("剧场库接管子树，已摘掉别的库的旧记录", "library_id", lib.ID, "moved", n)
+	}
+	s.Log.Info("为剧场自动建立媒体库", "library_id", lib.ID, "name", lib.Name, "root", lib.RootPath)
+	return lib, nil
+}
+
 // resolveImportDir 校验"绝对/规范/允许根内/可读"（复用 media.ValidateLibraryPath），
 // 再找它所属的媒体库；不在任何库内就拒绝——媒体记录必须有库可挂。
 // 返回的目录用调用方的拼写（不解析符号链接）：与扫描器按 library.root_path 拼写登记
@@ -61,10 +112,10 @@ func (s *Server) resolveImportDir(raw string) (*domain.Library, string, error) {
 	if _, err := media.ValidateLibraryPath(s.Roots.List(), clean); err != nil {
 		return nil, "", err
 	}
-	lib := s.libraryForDir(clean)
-	if lib == nil {
-		return nil, "", domain.New("SERIES_DIR_NO_LIBRARY",
-			"该目录不在任何媒体库内：请先在后台建库指向它", 409)
+	// 剧场自带库：没有就自动建（不再要求用户先去后台建库）。
+	lib, err := s.ensureDramaLibrary(clean)
+	if err != nil {
+		return nil, "", err
 	}
 	return lib, clean, nil
 }

@@ -102,10 +102,10 @@ var publicAllowlist = map[string]bool{
 	"POST /api/v1/auth/register": true,
 	// 扫码登录：start/image/poll 必须匿名（那时电视还没有任何会话），
 	// 安全性靠二维码里的 128 位 secret（只出现在码里、2 分钟过期、一次性），见 handlers_qrlogin.go。
-	"POST /api/v1/auth/qr/start":       true,
-	"GET /api/v1/auth/qr/image/{id}":   true,
-	"GET /api/v1/auth/qr/poll":         true,
-	"/api/":                            true,
+	"POST /api/v1/auth/qr/start":     true,
+	"GET /api/v1/auth/qr/image/{id}": true,
+	"GET /api/v1/auth/qr/poll":       true,
+	"/api/":                          true,
 }
 
 var contentPathRe = regexp.MustCompile(`/(media|series|feed|me)(/|$)`)

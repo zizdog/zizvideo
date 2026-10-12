@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 
 	"github.com/zizdog/zizvideo/internal/domain"
 )
@@ -183,6 +184,53 @@ func (db *DB) LibraryByName(name string) (*domain.Library, error) {
 		return nil, err
 	}
 	return l, nil
+}
+
+// DetachMediaUnderPath 让**更浅的库**在某棵子树下让位：把这些库在该路径之下（含自身）的
+// 媒体记录软删掉，返回条数。
+//
+// 规则是"**最深库优先**"（不是"最新建的库优先"）：只有那些根**比 path 更浅**的库才让位；
+// 反过来（新建的是父库、已有的是更深的子库）什么都不动 —— 否则会把子库已经收好的记录误删。
+// 用途：为剧场自动建库、或用户新建库时，保证"一个文件只属于一个库"；短视频库先扫过的子树，
+// 在剧场库出现后必须从短视频库里摘掉（否则同一批文件两处都在、短视频那条还会上首页 feed）。
+// 用户 2026-10-11："剧场和短视频完全是独立的"。
+func (db *DB) DetachMediaUnderPath(keepLibraryID, path string) (int64, error) {
+	clean := filepath.Clean(path)
+	libs, err := db.ListLibraries()
+	if err != nil {
+		return 0, err
+	}
+	losing := make([]string, 0, len(libs))
+	ph := make([]string, 0, len(libs)+2)
+	for i := range libs {
+		if libs[i].ID == keepLibraryID {
+			continue
+		}
+		if len(filepath.Clean(libs[i].RootPath)) >= len(clean) {
+			continue // 更深（或同深）的库不让位
+		}
+		losing = append(losing, libs[i].ID)
+		ph = append(ph, "?")
+	}
+	if len(losing) == 0 {
+		return 0, nil
+	}
+	prefix := clean + string(filepath.Separator)
+	now := domain.NowString()
+	args := []any{now, now}
+	for _, id := range losing {
+		args = append(args, id)
+	}
+	args = append(args, clean, len(prefix), prefix)
+	// 用 substr 前缀比较而不是 LIKE：路径里的 % / _ 不能当通配符（路径里真的会有下划线）。
+	res, err := db.Exec(`UPDATE media SET deleted_at = ?, updated_at = ?
+		WHERE deleted_at IS NULL AND library_id IN (`+joinComma(ph)+`)
+		  AND (path = ? OR substr(path, 1, ?) = ?)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // DeleteLibrary soft-deletes a library and all of its media rows.

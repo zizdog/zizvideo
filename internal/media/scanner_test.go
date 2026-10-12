@@ -143,6 +143,58 @@ func (e *scanEnv) media(t *testing.T) []domain.Media {
 	return rows
 }
 
+// 最深库优先：短视频库的树里若**嵌着别的库**（剧场自带库就会这样），本库不登记那棵子树 ——
+// 否则同一批文件会既进短视频库（→ 上首页 feed）又进剧场库（用户 2026-10-11："两边完全独立"）。
+func TestScanSkipsNestedLibrarySubtree(t *testing.T) {
+	env := newScanEnv(t)
+	env.write(t, "散片.mp4", "a")
+	env.write(t, "剧场/S01E01.mp4", "b")
+	nested := filepath.Join(env.root, "剧场")
+	drama := &domain.Library{ID: domain.NewID("lib"), Name: "剧场库", Kind: domain.KindDrama,
+		RootPath: nested, Recursive: true, Enabled: true, IgnoreRules: []string{}}
+	if err := env.db.CreateLibrary(drama); err != nil {
+		t.Fatal(err)
+	}
+
+	if task := env.run(t); task.Status != domain.TaskSuccess {
+		t.Fatalf("短视频库扫描状态 = %s, 期望 success (%s)", task.Status, task.Error)
+	}
+	rows := env.media(t)
+	if len(rows) != 1 || rows[0].Title != "散片" {
+		t.Fatalf("短视频库只该登记散片.mp4（嵌着的剧场子树要跳过），实际 %d 条: %+v", len(rows), rows)
+	}
+	if rows[0].LibraryID != env.lib.ID {
+		t.Fatalf("登记到了错误的库: %s", rows[0].LibraryID)
+	}
+
+	// 剧场库自己的扫描照常登记它那棵子树（两边互不干扰）。
+	task := &domain.ScanTask{ID: domain.NewID("scn"), LibraryID: drama.ID, Kind: "incremental"}
+	if err := env.db.CreateScanTask(task); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := env.db.GetLibrary(drama.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.scan.Run(context.Background(), task, lib)
+	if got, err := env.db.GetScanTask(task.ID); err != nil || got.Status != domain.TaskSuccess {
+		t.Fatalf("剧场库扫描状态 = %v (err=%v), 期望 success", got, err)
+	}
+	rows = env.media(t)
+	if len(rows) != 2 {
+		t.Fatalf("两个库合起来应有 2 条（散片 + 剧场一集），实际 %d 条: %+v", len(rows), rows)
+	}
+	dramaRows := 0
+	for _, m := range rows {
+		if m.LibraryID == drama.ID {
+			dramaRows++
+		}
+	}
+	if dramaRows != 1 {
+		t.Fatalf("剧场库里应有 1 条，实际 %d", dramaRows)
+	}
+}
+
 func TestScanIgnoresJunkAndFilteredExtensions(t *testing.T) {
 	env := newScanEnv(t)
 	env.write(t, "keep.mp4", "a")

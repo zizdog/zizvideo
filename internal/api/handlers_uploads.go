@@ -277,7 +277,7 @@ func (s *Server) resolveUploadTarget(req *uploadStartReq) (*domain.Library, stri
 			return nil, "", "", err
 		}
 		if series.DirPath != "" {
-			lib, dir, rerr := s.libraryDir(series.DirPath)
+			lib, dir, rerr := s.theaterLibraryDir(series.DirPath)
 			if rerr != nil {
 				return nil, "", "", rerr
 			}
@@ -364,7 +364,7 @@ func (s *Server) resolveUploadTarget(req *uploadStartReq) (*domain.Library, stri
 		"缺少上传目标：库 / 剧场 / 新建剧场至少给一个", 400)
 }
 
-// libraryDir 校验一个已存在的目录在允许根内，并找到它所属的媒体库。
+// libraryDir 校验一个已存在的目录在允许根内，并找到（必要时自动建立）它所属的媒体库。
 // 返回调用方的拼写（不解析符号链接），与扫描器登记 media.path 的口径一致：
 // 否则 /tmp 与 /private/tmp 会各登记一份，重复上传就不幂等了。
 func (s *Server) libraryDir(raw string) (*domain.Library, string, error) {
@@ -376,6 +376,21 @@ func (s *Server) libraryDir(raw string) (*domain.Library, string, error) {
 	if lib == nil {
 		return nil, "", domain.New("UPLOAD_DIR_NO_LIBRARY",
 			"该目录不在任何媒体库内：请先在后台建库指向它", 409)
+	}
+	return lib, dir, nil
+}
+
+// theaterLibraryDir 是"上传到**剧场**"专用的解析：目录不在任何剧场（drama）库内时，
+// **自动为它建一个** —— 剧场自带库、与短视频的库完全独立（用户 2026-10-11）。
+// 普通"上传到文件夹"不走这里（那种情形仍要求目录已在某个库内，由界面选库）。
+func (s *Server) theaterLibraryDir(raw string) (*domain.Library, string, error) {
+	if _, err := validateExistingDir(s.Roots.List(), raw); err != nil {
+		return nil, "", err
+	}
+	dir := filepath.Clean(raw)
+	lib, err := s.ensureDramaLibrary(dir)
+	if err != nil {
+		return nil, "", err
 	}
 	return lib, dir, nil
 }
