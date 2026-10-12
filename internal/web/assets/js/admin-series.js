@@ -31,19 +31,6 @@ export function mountSeriesTab(root) {
   const detectNote = el("div", { class: "banner", hidden: true, dataset: { role: "series-detect-note" } });
   const { table, body } = gridOf(["标题", "集数", "简介", "操作"]);
 
-  // ── 未归组（设计第 5 步收尾）：短剧库**库根直接放的散片** = 还没归进任何剧的。
-  //    扫描只把它们留在库里、不建剧，归组是人工动作（用户 2026-10-10 拍板的 Jellyfin 式模型：
-  //    库根一级目录 = 一部剧）。散片可能属于**任意**短剧库，所以列全库并标出来源库。
-  const ungroupNote = banner(); // 横幅放在折叠区**外面**，收起时结果/报错也看得见（同 admin.js 新建媒体库）
-  const ungroupSummary = el("summary", { text: "未归组" });
-  const ungroupGrid = gridOf(["文件", "时长", "来源库", "操作"]);
-  const ungroupBox = el("details", { class: "panel collapsible", dataset: { role: "ungrouped-box" } },
-    ungroupSummary,
-    el("div", { class: "collapsible-body" },
-      el("div", { class: "muted small-note",
-        text: "库根直接放的散片不会自动建剧；选一部剧归入即可（已归入的会自动跳过）。" }),
-      ungroupGrid.table));
-
   const titleInput = input({ placeholder: "剧场标题", required: true });
   const descInput = input({ placeholder: "简介（可选）" });
   const submit = el("button", { class: "btn primary", type: "submit", text: "新建" });
@@ -60,8 +47,6 @@ export function mountSeriesTab(root) {
       btn("新建剧场并上传", () => uploadNewSeries(load)),
       btn("按子目录批量建剧场", () => batchImportSeries(load)),
       btn("一键识别全部", (event) => runDetectAll(event.currentTarget))),
-    ungroupNote,
-    ungroupBox,
     table);
 
   form.addEventListener("submit", async (event) => {
@@ -182,62 +167,6 @@ export function mountSeriesTab(root) {
     return baseName(item.path);
   }
 
-  async function loadUngrouped() {
-    clear(ungroupGrid.body);
-    ungroupGrid.body.append(el("tr", null, el("td", { class: "empty", colspan: "4", text: "加载中…" })));
-    let media = null;
-    let libResult = null;
-    let seriesResult = null;
-    try {
-      const results = await Promise.all([
-        api.mediaList({ kind: "drama", ungrouped: 1, per_page: 50 }),
-        api.libraries(),
-        api.request("GET", "/api/v1/series"),
-      ]);
-      media = results[0];
-      libResult = results[1];
-      seriesResult = results[2];
-    } catch (err) {
-      ungroupSummary.textContent = "未归组";
-      clear(ungroupGrid.body);
-      ungroupGrid.body.append(el("tr", null, el("td", { class: "empty", colspan: "4", text: "加载失败" })));
-      setBanner(ungroupNote, err && err.message ? err.message : "未归组加载失败");
-      return;
-    }
-    libraries = asArray(libResult && libResult.list);
-    allSeries = asArray(seriesResult && seriesResult.list);
-    const list = asArray(media && media.data && media.data.list);
-    const total = media && media.meta && media.meta.total !== undefined ? Number(media.meta.total) : list.length;
-    ungroupSummary.textContent = "未归组（" + total + " 条）";
-    clear(ungroupGrid.body);
-    if (!list.length) {
-      ungroupGrid.body.append(el("tr", null, el("td", { class: "empty", colspan: "4", text: "没有未归组的散片" })));
-      return;
-    }
-    for (const item of list) ungroupGrid.body.append(ungroupRow(item));
-    if (total > list.length) {
-      ungroupGrid.body.append(el("tr", null, el("td", { class: "empty", colspan: "4",
-        text: "共 " + total + " 条，这里只列最新的 " + list.length + " 条" })));
-    }
-  }
-
-  function ungroupRow(item) {
-    const pick = el("select", { class: "input", dataset: { role: "ungrouped-series" } },
-      el("option", { value: "", text: "选择要归入的剧…" }));
-    for (const series of allSeries) {
-      // 只列**同一个库**的剧（跨库归入等于归到自己没在看的地方）；没挂库的老剧场仍然列出来。
-      if (item.library_id && series.library_id && String(series.library_id) !== String(item.library_id)) continue;
-      pick.append(el("option", { value: String(series.id), text: series.title || String(series.id) }));
-    }
-    pick.append(el("option", { value: "new", text: "＋新建一部剧（按所在目录名）" }));
-    const go = btn("归入", () => assignToSeries(item, pick, go));
-    return el("tr", { dataset: { role: "ungrouped-row", id: String(item.id) } },
-      textCell(mediaLabel(item)),
-      textCell(item.duration_ms ? fmtDuration(item.duration_ms) : ""),
-      textCell(item.library_id ? libraryName(item.library_id) : "-"),
-      el("td", null, el("div", { class: "actions" }, pick, go)));
-  }
-
   function seriesTitleOf(id) {
     for (const series of allSeries) {
       if (String(series.id) === String(id)) return series.title || String(id);
@@ -292,7 +221,7 @@ export function mountSeriesTab(root) {
       setBanner(ungroupNote, added > 0
         ? ("已归入《" + seriesTitle + "》")
         : ("已在《" + seriesTitle + "》里，未重复归入"));
-      await loadUngrouped();
+      await load();
       await load();
     } catch (err) {
       // 行还在：按钮恢复可点，报错照抄后端 message（400 的"剧场标题不能为空"这类要看得见）。
@@ -386,6 +315,5 @@ export function mountSeriesTab(root) {
   }
 
   load();
-  loadUngrouped();
   return () => { if (detectTimer) clearInterval(detectTimer); detectTimer = null; };
 }

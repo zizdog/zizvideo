@@ -139,6 +139,9 @@ export const api = {
     request("PUT", "/api/v1/admin/users/" + encodeURIComponent(id) + "/library-groups", { group_ids: groupIds }),
 
   libraries: () => request("GET", "/api/v1/libraries"),
+
+  // 剧场集合（kind=drama）：与媒体库严格互补 —— 剧场管理只看它，媒体库页面看不到它。
+  theaterCollections: () => request("GET", "/api/v1/admin/theater-collections"),
   library: (id) => request("GET", "/api/v1/libraries/" + encodeURIComponent(id)),
   createLibrary: (body) => request("POST", "/api/v1/libraries", body),
   updateLibrary: (id, body) => request("PATCH", "/api/v1/libraries/" + encodeURIComponent(id), body),

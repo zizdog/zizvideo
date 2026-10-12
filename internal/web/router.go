@@ -52,6 +52,7 @@ func Router(s *api.Server) http.Handler {
 
 	mux.HandleFunc("GET /api/v1/libraries", s.RequireAdmin(s.HandleListLibraries))
 	mux.HandleFunc("GET /api/v1/admin/theater-collections", s.RequireAdmin(s.HandleListTheaterCollections))
+	mux.HandleFunc("POST /api/v1/admin/theater-collections", s.RequireAdmin(s.HandleCreateTheaterCollection))
 	mux.HandleFunc("POST /api/v1/libraries", s.RequireAdmin(s.HandleCreateLibrary))
 	mux.HandleFunc("GET /api/v1/libraries/{id}", s.RequireAdmin(s.HandleGetLibrary))
 	mux.HandleFunc("PATCH /api/v1/libraries/{id}", s.RequireAdmin(s.HandlePatchLibrary))

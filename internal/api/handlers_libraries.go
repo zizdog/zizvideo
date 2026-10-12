@@ -31,6 +31,46 @@ func (s *Server) HandleListLibraries(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, map[string]any{"list": out}, nil)
 }
 
+// HandleCreateTheaterCollection 建一个**剧场集合**（kind=drama，强制）。
+// 与 POST /api/v1/libraries（只建短视频库）分开：两套东西不混（用户 2026-10-11）。
+func (s *Server) HandleCreateTheaterCollection(w http.ResponseWriter, r *http.Request) {
+	var req libraryReq
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.RootPath = strings.TrimSpace(req.RootPath)
+	if req.Name == "" || len(req.Name) > 64 {
+		s.fail(w, r, domain.New("VALIDATION_NAME", "剧场集合名称需 1-64 个字符", 400))
+		return
+	}
+	if _, err := media.ValidateLibraryPath(s.Roots.List(), req.RootPath); err != nil {
+		s.audit(r, "theater.create", "path:"+req.RootPath, false, errCode(err))
+		s.fail(w, r, err)
+		return
+	}
+	if dup, derr := s.DB.LibraryByName(req.Name); derr == nil && dup != nil {
+		s.audit(r, "theater.create", "name:"+req.Name, false, "duplicate")
+		s.fail(w, r, domain.New("THEATER_NAME_TAKEN",
+			"已经有一个叫「"+req.Name+"」的剧场集合了，请换个名字", 409))
+		return
+	}
+	lib := &domain.Library{
+		ID: domain.NewID("lib"), Name: req.Name, Kind: domain.KindDrama,
+		RootPath: req.RootPath, Recursive: true, Enabled: true, IgnoreRules: []string{},
+	}
+	if err := s.DB.CreateLibrary(lib); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if _, derr := s.DB.DetachMediaUnderPath(lib.ID, lib.RootPath); derr != nil {
+		s.Log.Warn("剧场集合建好后整理旧记录失败", "library_id", lib.ID, "error", derr.Error())
+	}
+	s.audit(r, "theater.create", "library:"+lib.ID, true, "")
+	respond(w, http.StatusCreated, lib, nil)
+}
+
 // HandleListTheaterCollections 返回**剧场集合**（kind=drama），供「剧场管理」版块使用。
 // 与媒体库列表严格互补：两边各自只看得见自己的东西。
 func (s *Server) HandleListTheaterCollections(w http.ResponseWriter, r *http.Request) {
