@@ -10,14 +10,43 @@ import (
 	"github.com/zizdog/zizvideo/internal/storage"
 )
 
-// HandleListLibraries returns every registered library.
+// HandleListLibraries 只返回**短视频库**。
+//
+// 剧场的存储（kind=drama）是**独立概念**："剧场集合"，只出现在「剧场管理」版块，
+// 不在这份"媒体库"列表里 —— 用户 2026-10-11：剧场的新建/扫描/管理都在剧场管理完成，
+// 与短视频完全独立，媒体库页面不该冒出"短剧库"。
 func (s *Server) HandleListLibraries(w http.ResponseWriter, r *http.Request) {
 	libs, err := s.DB.ListLibraries()
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	respond(w, http.StatusOK, map[string]any{"list": libs}, nil)
+	out := make([]domain.Library, 0, len(libs))
+	for _, l := range libs {
+		if l.Kind == domain.KindDrama {
+			continue
+		}
+		out = append(out, l)
+	}
+	respond(w, http.StatusOK, map[string]any{"list": out}, nil)
+}
+
+// HandleListTheaterCollections 返回**剧场集合**（kind=drama），供「剧场管理」版块使用。
+// 与媒体库列表严格互补：两边各自只看得见自己的东西。
+func (s *Server) HandleListTheaterCollections(w http.ResponseWriter, r *http.Request) {
+	libs, err := s.DB.ListLibraries()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]domain.Library, 0, len(libs))
+	for _, l := range libs {
+		if l.Kind != domain.KindDrama {
+			continue
+		}
+		out = append(out, l)
+	}
+	respond(w, http.StatusOK, map[string]any{"list": out}, nil)
 }
 
 type libraryReq struct {

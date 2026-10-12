@@ -51,6 +51,7 @@ func Router(s *api.Server) http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/libraries/defaults/backfill", s.RequireAdmin(s.HandleBackfillDefaultLibraries))
 
 	mux.HandleFunc("GET /api/v1/libraries", s.RequireAdmin(s.HandleListLibraries))
+	mux.HandleFunc("GET /api/v1/admin/theater-collections", s.RequireAdmin(s.HandleListTheaterCollections))
 	mux.HandleFunc("POST /api/v1/libraries", s.RequireAdmin(s.HandleCreateLibrary))
 	mux.HandleFunc("GET /api/v1/libraries/{id}", s.RequireAdmin(s.HandleGetLibrary))
 	mux.HandleFunc("PATCH /api/v1/libraries/{id}", s.RequireAdmin(s.HandlePatchLibrary))
@@ -191,9 +192,10 @@ func Router(s *api.Server) http.Handler {
 }
 
 // staticHandler serves the frontend. 两条来源：
-//   · 默认：内嵌资源（go:embed）—— 生产行为；
-//   · ZV_ASSETS_DIR 设了且目录里有 index.html：**从磁盘读**（调试用，改 CSS 刷新即生效），
-//     并且不缓存、不打版本 ETag，免得"改了看不到"。
+//
+//	· 默认：内嵌资源（go:embed）—— 生产行为；
+//	· ZV_ASSETS_DIR 设了且目录里有 index.html：**从磁盘读**（调试用，改 CSS 刷新即生效），
+//	  并且不缓存、不打版本 ETag，免得"改了看不到"。
 //
 // 用户 2026-09-24 报障"顶栏还有背景 / 图标位置没改"——代码里其实早就改了，是**前端被缓存**：
 // 内嵌资源没有 Last-Modified，浏览器/WebView 只能按启发式缓存，升级后仍吃旧 CSS。
