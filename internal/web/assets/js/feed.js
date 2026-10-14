@@ -404,7 +404,8 @@ export function mountFeed(view, options = {}) {
     }
     // 剧场才有的「选集」（首页没有剧集概念）。图标栏其余部分完全一致。
     entry.eps = playlist
-      ? el("button", { class: "icon-btn", type: "button", title: "选集", text: "☰" })
+      ? el("button", { class: "icon-btn", type: "button", title: "选集", dataset: { role: "episodes-btn" } },
+        icon("theater"))
       : null;
     if (entry.eps) {
       entry.eps.addEventListener("click", (event) => {
@@ -457,6 +458,15 @@ export function mountFeed(view, options = {}) {
       entry.ops.append(entry.gear);
     }
     layer.append(entry.ops);
+    // 剧场播放页：左上角返回（用户 2026-10-11 要求补一个）。只在网页/手机端挂 ——
+    // 电视端顶部已有工具行（坑 67：画面左上角再塞按钮会压住顶栏），遥控器也有返回键。
+    if (playlist && !tvLayout) {
+      const backHref = playlist.seriesId ? ("#/series/" + encodeURIComponent(playlist.seriesId)) : "#/series";
+      layer.append(el("a", {
+        class: "btn small ov-back", href: backHref, title: "返回剧场",
+        dataset: { role: "player-back" },
+      }, icon("back"), el("span", { text: "返回" })));
+    }
     layer.append(centerPlayPause(entry));
 
     // 左上角"来自 <库名>"（点击切范围）：剧场没有切库，跳过；电视端也不挂（顶部那排 tabs 就是库）。

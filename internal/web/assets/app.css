@@ -295,6 +295,13 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .icon-btn:hover { transform: scale(1.06); }
 .icon-btn.on { color: var(--accent); }
 .icon-btn.on svg { filter: drop-shadow(0 0 6px rgba(255,59,91,.45)); }
+/* 剧场播放页的左上角返回（用户 2026-10-11）：网页/手机端专用，电视端不挂 */
+/* 不用 gap：老电视 WebView（Chrome<84）上 flex gap 会塌，门禁棘轮也只许减少（坑：CSS 兼容基线）。 */
+.ov-back {
+  position: absolute; top: calc(10px + var(--sat, 0px)); left: 10px; z-index: 6;
+  display: inline-flex; align-items: center; text-decoration: none;
+}
+.ov-back svg { width: 20px; height: 20px; margin-right: 6px; }
 .bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
 .bar-fill { display: block; height: 100%; width: 0; background: #fff; }
 /* 进度条：扩大命中区，支持点击/拖动（item 3） */
