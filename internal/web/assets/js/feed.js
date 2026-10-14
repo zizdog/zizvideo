@@ -462,10 +462,20 @@ export function mountFeed(view, options = {}) {
     // 电视端顶部已有工具行（坑 67：画面左上角再塞按钮会压住顶栏），遥控器也有返回键。
     if (playlist && !tvLayout) {
       const backHref = playlist.seriesId ? ("#/series/" + encodeURIComponent(playlist.seriesId)) : "#/series";
-      layer.append(el("a", {
-        class: "btn small ov-back", href: backHref, title: "返回剧场",
+      // 用 <button> 而不是 <a>：不依赖锚点默认跳转，免得被播放器的手势/全局 handler 吃掉
+      const backBtn = el("button", {
+        class: "btn small ov-back", type: "button", title: "返回剧场",
         dataset: { role: "player-back" },
-      }, icon("back"), el("span", { text: "返回" })));
+      }, icon("back"), el("span", { text: "返回" }));
+      // ⚠️ 必须自己处理点击：这层叠在播放器手势层之上，靠 <a> 默认跳转会被吞（用户 2026-10-14 实测：
+      // "加了个返回按钮，却点了没反应"）。stopPropagation 免得又被播放器当成"点画面暂停"。
+      backBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        // 路由会在 hash 变化时清理播放器（mountFeed 返回的 cleanup），这里不用自己收尾
+        if (window.location.hash !== backHref) window.location.hash = backHref;
+      });
+      layer.append(backBtn);
     }
     layer.append(centerPlayPause(entry));
 

@@ -47,13 +47,16 @@ body.playing .header {
 }
 /* 顶栏浮起来后，「来自 X / 选库」落在它下沿 10px（用户 2026-09-24：距顶栏 10px）。 */
 body.playing .ov-corner { top: calc(62px + var(--sat)); }
+/* 顶栏按钮（菜单/搜索）：**样式与播放页的「返回」按钮（.btn）一致** ——
+   同一个深色 pill、同一圈描边、同一套 hover（只把描边点亮）。
+   用户 2026-10-14："三条杠的图标 hover 样式不对，要对齐返回按钮" ⇒ 对齐方向是"菜单键照返回键改"。 */
 .top-btn {
   font: inherit; width: 42px; height: 38px; padding: 0; line-height: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  border: 0; border-radius: 999px; background: transparent; color: #fff;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); color: #fff;
 }
 .top-btn svg { width: 24px; height: 24px; }
-.top-btn:hover { background: var(--panel2); color: #000;}
+.top-btn:hover { border-color: var(--accent); }
 /* 搜索页的输入条 */
 .search-bar { display: flex; gap: 8px; align-items: center; }
 .search-bar .input { flex: 1 1 auto; }
@@ -301,8 +304,9 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
    —— 用户 2026-10-14 实测报障："两个按钮重叠了！"（坑 171 的补充）。
    不用 gap：老电视 WebView（Chrome<84）上 flex gap 会塌，门禁棘轮也只许减少。 */
 .ov-back {
-  position: absolute; top: calc(62px + var(--sat, 0px)); left: 10px; z-index: 13;
+  position: absolute; top: calc(62px + var(--sat, 0px)); left: 10px; z-index: 20;
   display: inline-flex; align-items: center; text-decoration: none;
+  pointer-events: auto;   /* 播放层里默认可能被手势层吃掉点击（用户 2026-10-14："点了没反应"） */
 }
 .ov-back svg { width: 20px; height: 20px; margin-right: 6px; }
 .bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
