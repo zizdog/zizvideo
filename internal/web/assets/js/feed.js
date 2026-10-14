@@ -461,7 +461,10 @@ export function mountFeed(view, options = {}) {
     // 剧场播放页：左上角返回（用户 2026-10-11 要求补一个）。只在网页/手机端挂 ——
     // 电视端顶部已有工具行（坑 67：画面左上角再塞按钮会压住顶栏），遥控器也有返回键。
     if (playlist && !tvLayout) {
-      const backHref = playlist.seriesId ? ("#/series/" + encodeURIComponent(playlist.seriesId)) : "#/series";
+      // ⚠️ 播放器是**叠在剧集页上的浮层**：打开它时 hash **不变**（还是 #/series/<id>）⇒
+      // "返回"必须导航到一个**不同**的 hash，路由才会清理播放器（用户 2026-10-14 实测：
+      // 旧代码判 `hash !== "#/series/<id>"` 才跳，条件永不成立 ⇒ 点了没反应）。
+      const backHref = "#/series";
       // 用 <button> 而不是 <a>：不依赖锚点默认跳转，免得被播放器的手势/全局 handler 吃掉
       const backBtn = el("button", {
         class: "btn small ov-back", type: "button", title: "返回剧场",
