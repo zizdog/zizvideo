@@ -295,10 +295,13 @@ body.pip .ov-corner, body.pip .toast, body.pip .hint { display: none !important;
 .icon-btn:hover { transform: scale(1.06); }
 .icon-btn.on { color: var(--accent); }
 .icon-btn.on svg { filter: drop-shadow(0 0 6px rgba(255,59,91,.45)); }
-/* 剧场播放页的左上角返回（用户 2026-10-11）：网页/手机端专用，电视端不挂 */
-/* 不用 gap：老电视 WebView（Chrome<84）上 flex gap 会塌，门禁棘轮也只许减少（坑：CSS 兼容基线）。 */
+/* 剧场播放页的左上角返回（用户 2026-10-11）：网页/手机端专用，电视端不挂。
+   ⚠️ 播放时顶栏**浮在最上层**（body.playing .header，绝对定位 z-index:12），菜单按钮就在左上角 ⇒
+   返回键必须落在顶栏**下沿**（沿用 body.playing .ov-corner 的 62px 约定），否则与菜单按钮重叠
+   —— 用户 2026-10-14 实测报障："两个按钮重叠了！"（坑 171 的补充）。
+   不用 gap：老电视 WebView（Chrome<84）上 flex gap 会塌，门禁棘轮也只许减少。 */
 .ov-back {
-  position: absolute; top: calc(10px + var(--sat, 0px)); left: 10px; z-index: 6;
+  position: absolute; top: calc(62px + var(--sat, 0px)); left: 10px; z-index: 13;
   display: inline-flex; align-items: center; text-decoration: none;
 }
 .ov-back svg { width: 20px; height: 20px; margin-right: 6px; }
