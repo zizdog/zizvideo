@@ -140,3 +140,9 @@ android/                  安卓客户端（独立 Gradle 工程，另一类"平
 3. 搬目录时要同步改：`Makefile`、`tools/*`（含各校验器里写死的路径）、`docs/*`、`AGENTS.md`，
    并**跑 `make check`**（门禁里有"文档路径必须存在""脚本卫生""上传名不许带目录"等判据兜底）。
 
+## 跨项目沟通（协调桥）
+
+- 开工/收工都跑 `python3 ../ziz-coord/coord.py brief --repo zizvideo`；收到写给自己仓的消息先
+  `ack <id> --by zizvideo`，做完 `done <id> --by zizvideo --note "…"`。
+- 发版前 `reserve --repo zizvideo --version x.y.z`，发布后 `mark-published`；契约见
+  `../ziz-coord/contracts/panel-app-v1.json`（改契约新增 v2，不改 v1）。
