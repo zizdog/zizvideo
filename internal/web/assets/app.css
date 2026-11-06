@@ -101,6 +101,10 @@ body.playing .ov-corner { top: calc(62px + var(--sat)); }
 .row > .field { flex: 1 1 160px; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* 表格里的操作按钮：**不许被窄列挤成"一字一行"**（中文在 min-content 下就是逐字换行 ✗），
+   也不许缩小 —— 用户 2026-11-06 报「用户管理」手机端四个按钮竖成一列字。
+   按钮保持一行；实在放不下就让 .table-scroll 横向滚动（用户明确接受横向滚动）。 */
+.actions .btn { white-space: nowrap; flex: 0 0 auto; }
 .banner { border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
 .muted { color: var(--muted); font-size: 13px; }
 .empty { color: var(--muted); text-align: center; }
